@@ -1,7 +1,21 @@
-# ---- Client (safe to expose, must start with VITE_) ----
-VITE_SUPABASE_URL=https://lmugkdwjijhmjhlqnmyk.supabase.co
-VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
-
-# ---- Server only (NEVER expose, used by /api/send-email) ----
-RESEND_API_KEY=your-resend-api-key
-EMAIL_FROM=NCTS PureLight <noreply@thehealedplace.org>
+{
+  "name": "ncts-purelight",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "lucide-react": "^0.383.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.0"
+  }
+}
