@@ -46,13 +46,13 @@ export async function listBooks() {
   return data;
 }
 
-export async function createBook({ title, author, description, pages, program, video_url, file }) {
+export async function createBook({ title, author, description, pages, program, video_url, course_id, module, file }) {
   let file_path = null;
   if (file) file_path = await uploadFile("books", file);
   const { data: { user } } = await supabase.auth.getUser();
   const { error } = await supabase.from("pl_books").insert({
     title, author, description, pages: Number(pages) || 0, program: program || "all",
-    video_url: video_url || null, file_path, created_by: user.id,
+    video_url: video_url || null, course_id: course_id || null, module: module || null, file_path, created_by: user.id,
   });
   if (error) throw error;
 }
@@ -82,13 +82,15 @@ export async function saveTest(test, questions) {
   if (testId) {
     const { error } = await supabase.from("pl_tests").update({
       title: test.title, description: test.description, book_id: test.book_id || null, program: test.program || "all",
+      course_id: test.course_id || null, module: test.module || null,
     }).eq("id", testId);
     if (error) throw error;
     // simplest reliable sync: clear old questions, insert current set
     await supabase.from("pl_questions").delete().eq("test_id", testId);
   } else {
     const { data, error } = await supabase.from("pl_tests").insert({
-      title: test.title, description: test.description, book_id: test.book_id || null, program: test.program || "all", created_by: user.id,
+      title: test.title, description: test.description, book_id: test.book_id || null, program: test.program || "all",
+      course_id: test.course_id || null, module: test.module || null, created_by: user.id,
     }).select("id").single();
     if (error) throw error;
     testId = data.id;
@@ -210,14 +212,16 @@ export async function saveHomework(hw, questions, file) {
   if (hwId) {
     const { error } = await supabase.from("pl_homework").update({
       title: hw.title, instructions: hw.instructions, due_date: hw.due_date || null,
-      points: Number(hw.points) || 0, program: hw.program || "all", file_path,
+      points: Number(hw.points) || 0, program: hw.program || "all",
+      course_id: hw.course_id || null, module: hw.module || null, file_path,
     }).eq("id", hwId);
     if (error) throw error;
     await supabase.from("pl_homework_questions").delete().eq("homework_id", hwId);
   } else {
     const { data, error } = await supabase.from("pl_homework").insert({
       title: hw.title, instructions: hw.instructions, due_date: hw.due_date || null,
-      points: Number(hw.points) || 0, program: hw.program || "all", file_path, created_by: user.id,
+      points: Number(hw.points) || 0, program: hw.program || "all",
+      course_id: hw.course_id || null, module: hw.module || null, file_path, created_by: user.id,
     }).select("id").single();
     if (error) throw error;
     hwId = data.id;
@@ -265,5 +269,25 @@ export async function gradeHomework(id, { manual, score, max_points, feedback })
 /* ---------------- PROGRAMS ---------------- */
 export async function setStudentProgram(id, program) {
   const { error } = await supabase.from("pl_profiles").update({ program: program || null }).eq("id", id);
+  if (error) throw error;
+}
+
+/* ---------------- COURSES ---------------- */
+export async function listCourses() {
+  const { data, error } = await supabase.from("pl_courses").select("*").order("created_at", { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
+export async function createCourse({ title, description, program }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_courses").insert({
+    title, description: description || "", program: program || "all", created_by: user.id,
+  });
+  if (error) throw error;
+}
+
+export async function deleteCourse(id) {
+  const { error } = await supabase.from("pl_courses").delete().eq("id", id);
   if (error) throw error;
 }
