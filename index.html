@@ -1,12 +1,239 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>NCTS PureLight — School of Excellence</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
-</html>
+-- =====================================================================
+-- NCTS PureLight — database schema
+-- Run this in: Supabase Dashboard -> SQL Editor -> New query -> Run
+-- Project: kingdom-wealth (lmugkdwjijhmjhlqnmyk)
+-- Safe to re-run: every object uses "if not exists" / "drop ... if exists"
+-- =====================================================================
+
+-- ---------- 1. PROFILES (one row per signed-in user) ----------
+create table if not exists pl_profiles (
+  id          uuid primary key references auth.users(id) on delete cascade,
+  full_name   text not null default '',
+  email       text not null default '',
+  role        text not null default 'student' check (role in ('student','instructor')),
+  created_at  timestamptz not null default now()
+);
+
+-- Auto-create a profile whenever someone signs up
+create or replace function pl_handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into pl_profiles (id, full_name, email)
+  values (new.id, coalesce(new.raw_user_meta_data->>'full_name',''), new.email)
+  on conflict (id) do nothing;
+  return new;
+end; $$;
+
+drop trigger if exists pl_on_auth_user_created on auth.users;
+create trigger pl_on_auth_user_created
+  after insert on auth.users
+  for each row execute function pl_handle_new_user();
+
+-- Helper used by security policies
+create or replace function pl_is_instructor()
+returns boolean language sql security definer set search_path = public as $$
+  select exists (select 1 from pl_profiles where id = auth.uid() and role = 'instructor');
+$$;
+
+-- ---------- 2. BOOKS ----------
+create table if not exists pl_books (
+  id          uuid primary key default gen_random_uuid(),
+  title       text not null,
+  author      text not null default '',
+  description text not null default '',
+  pages       int  not null default 0,
+  file_path   text,                       -- path inside the 'purelight' storage bucket
+  created_by  uuid references pl_profiles(id) on delete set null,
+  created_at  timestamptz not null default now()
+);
+
+-- ---------- 3. TESTS ----------
+create table if not exists pl_tests (
+  id          uuid primary key default gen_random_uuid(),
+  book_id     uuid references pl_books(id) on delete set null,
+  title       text not null,
+  description text not null default '',
+  file_path   text,                       -- optional uploaded test PDF
+  created_by  uuid references pl_profiles(id) on delete set null,
+  created_at  timestamptz not null default now()
+);
+
+-- ---------- 4. QUESTIONS ----------
+create table if not exists pl_questions (
+  id             uuid primary key default gen_random_uuid(),
+  test_id        uuid not null references pl_tests(id) on delete cascade,
+  position       int  not null default 0,
+  type           text not null check (type in ('mc','tf','short','essay')),
+  prompt         text not null default '',
+  points         int  not null default 0,
+  options        jsonb not null default '[]'::jsonb,  -- for multiple choice
+  correct_answer text                                 -- mc: option index as text; tf: 'true'/'false'
+);
+
+-- ---------- 5. SUBMISSIONS ----------
+create table if not exists pl_submissions (
+  id           uuid primary key default gen_random_uuid(),
+  test_id      uuid not null references pl_tests(id) on delete cascade,
+  student_id   uuid not null references pl_profiles(id) on delete cascade,
+  answers      jsonb not null default '{}'::jsonb,   -- { question_id: response }
+  manual       jsonb not null default '{}'::jsonb,   -- { question_id: awarded_points }
+  status       text not null default 'submitted' check (status in ('submitted','graded')),
+  score        int,
+  max_score    int,
+  feedback     text not null default '',
+  submitted_at timestamptz not null default now()
+);
+
+-- ---------- 6. MESSAGES (email + announcements) ----------
+create table if not exists pl_messages (
+  id          uuid primary key default gen_random_uuid(),
+  sender_id   uuid references pl_profiles(id) on delete set null,
+  sender_name text not null default '',
+  recipient   text not null default 'all',   -- 'all' or a pl_profiles.id
+  subject     text not null default '',
+  body        text not null default '',
+  created_at  timestamptz not null default now()
+);
+
+-- =====================================================================
+-- ROW LEVEL SECURITY
+-- =====================================================================
+alter table pl_profiles    enable row level security;
+alter table pl_books       enable row level security;
+alter table pl_tests       enable row level security;
+alter table pl_questions   enable row level security;
+alter table pl_submissions enable row level security;
+alter table pl_messages    enable row level security;
+
+-- profiles
+drop policy if exists "pl_profiles_read"   on pl_profiles;
+drop policy if exists "pl_profiles_update" on pl_profiles;
+create policy "pl_profiles_read"   on pl_profiles for select to authenticated using (true);
+create policy "pl_profiles_update" on pl_profiles for update to authenticated using (id = auth.uid());
+
+-- books
+drop policy if exists "pl_books_read"  on pl_books;
+drop policy if exists "pl_books_write" on pl_books;
+create policy "pl_books_read"  on pl_books for select to authenticated using (true);
+create policy "pl_books_write" on pl_books for all to authenticated using (pl_is_instructor()) with check (pl_is_instructor());
+
+-- tests
+drop policy if exists "pl_tests_read"  on pl_tests;
+drop policy if exists "pl_tests_write" on pl_tests;
+create policy "pl_tests_read"  on pl_tests for select to authenticated using (true);
+create policy "pl_tests_write" on pl_tests for all to authenticated using (pl_is_instructor()) with check (pl_is_instructor());
+
+-- questions
+drop policy if exists "pl_questions_read"  on pl_questions;
+drop policy if exists "pl_questions_write" on pl_questions;
+create policy "pl_questions_read"  on pl_questions for select to authenticated using (true);
+create policy "pl_questions_write" on pl_questions for all to authenticated using (pl_is_instructor()) with check (pl_is_instructor());
+
+-- submissions
+drop policy if exists "pl_subs_insert" on pl_submissions;
+drop policy if exists "pl_subs_read"   on pl_submissions;
+drop policy if exists "pl_subs_update" on pl_submissions;
+create policy "pl_subs_insert" on pl_submissions for insert to authenticated with check (student_id = auth.uid());
+create policy "pl_subs_read"   on pl_submissions for select to authenticated using (student_id = auth.uid() or pl_is_instructor());
+create policy "pl_subs_update" on pl_submissions for update to authenticated using (pl_is_instructor()) with check (pl_is_instructor());
+
+-- messages
+drop policy if exists "pl_msg_insert" on pl_messages;
+drop policy if exists "pl_msg_read"   on pl_messages;
+create policy "pl_msg_insert" on pl_messages for insert to authenticated with check (pl_is_instructor());
+create policy "pl_msg_read"   on pl_messages for select to authenticated
+  using (recipient = 'all' or recipient = auth.uid()::text or pl_is_instructor());
+
+-- =====================================================================
+-- STORAGE  (one private bucket: 'purelight', holds books/ and tests/)
+-- =====================================================================
+insert into storage.buckets (id, name, public)
+values ('purelight', 'purelight', false)
+on conflict (id) do nothing;
+
+drop policy if exists "pl_files_read"   on storage.objects;
+drop policy if exists "pl_files_insert" on storage.objects;
+drop policy if exists "pl_files_update" on storage.objects;
+drop policy if exists "pl_files_delete" on storage.objects;
+create policy "pl_files_read"   on storage.objects for select to authenticated using (bucket_id = 'purelight');
+create policy "pl_files_insert" on storage.objects for insert to authenticated with check (bucket_id = 'purelight' and pl_is_instructor());
+create policy "pl_files_update" on storage.objects for update to authenticated using (bucket_id = 'purelight' and pl_is_instructor());
+create policy "pl_files_delete" on storage.objects for delete to authenticated using (bucket_id = 'purelight' and pl_is_instructor());
+
+-- =====================================================================
+-- DONE. Next, after YOU sign up in the app once, promote yourself:
+--   update pl_profiles set role = 'instructor' where email = 'YOUR_EMAIL';
+-- =====================================================================
+-- =====================================================================
+-- NCTS PureLight — Syllabus + Homework add-on
+-- Run this ONCE in kingdom-wealth (SQL Editor) AFTER the main schema.
+-- Safe to re-run.
+-- =====================================================================
+
+-- ---------- SYLLABUS (one row per term) ----------
+create table if not exists pl_syllabi (
+  id uuid primary key default gen_random_uuid(),
+  term text not null unique check (term in ('fall','spring')),
+  title text not null default '',
+  content text not null default '',
+  file_path text,
+  created_by uuid references pl_profiles(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+
+-- ---------- HOMEWORK ----------
+create table if not exists pl_homework (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  instructions text not null default '',
+  due_date date,
+  points int not null default 100,
+  file_path text,
+  created_by uuid references pl_profiles(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists pl_homework_submissions (
+  id uuid primary key default gen_random_uuid(),
+  homework_id uuid not null references pl_homework(id) on delete cascade,
+  student_id uuid not null references pl_profiles(id) on delete cascade,
+  response text not null default '',
+  file_path text,
+  status text not null default 'submitted' check (status in ('submitted','graded')),
+  score int,
+  max_points int,
+  feedback text not null default '',
+  submitted_at timestamptz not null default now()
+);
+
+-- ---------- RLS ----------
+alter table pl_syllabi enable row level security;
+alter table pl_homework enable row level security;
+alter table pl_homework_submissions enable row level security;
+
+drop policy if exists "pl_syllabi_read"  on pl_syllabi;
+drop policy if exists "pl_syllabi_write" on pl_syllabi;
+create policy "pl_syllabi_read"  on pl_syllabi for select to authenticated using (true);
+create policy "pl_syllabi_write" on pl_syllabi for all to authenticated using (pl_is_instructor()) with check (pl_is_instructor());
+
+drop policy if exists "pl_hw_read"  on pl_homework;
+drop policy if exists "pl_hw_write" on pl_homework;
+create policy "pl_hw_read"  on pl_homework for select to authenticated using (true);
+create policy "pl_hw_write" on pl_homework for all to authenticated using (pl_is_instructor()) with check (pl_is_instructor());
+
+drop policy if exists "pl_hwsub_insert" on pl_homework_submissions;
+drop policy if exists "pl_hwsub_read"   on pl_homework_submissions;
+drop policy if exists "pl_hwsub_update" on pl_homework_submissions;
+create policy "pl_hwsub_insert" on pl_homework_submissions for insert to authenticated with check (student_id = auth.uid());
+create policy "pl_hwsub_read"   on pl_homework_submissions for select to authenticated using (student_id = auth.uid() or pl_is_instructor());
+create policy "pl_hwsub_update" on pl_homework_submissions for update to authenticated using (pl_is_instructor()) with check (pl_is_instructor());
+
+-- ---------- STORAGE: let students upload their homework files ----------
+-- (existing policies only allowed instructors to upload; students need this)
+drop policy if exists "pl_files_insert_hw" on storage.objects;
+create policy "pl_files_insert_hw" on storage.objects for insert to authenticated
+  with check (bucket_id = 'purelight' and (storage.foldername(name))[1] = 'homework-submissions');
+
+-- =====================================================================
+-- DONE.
+-- =====================================================================

@@ -1,0 +1,73 @@
+-- =====================================================================
+-- NCTS PureLight — Syllabus + Homework add-on
+-- Run this ONCE in kingdom-wealth (SQL Editor) AFTER the main schema.
+-- Safe to re-run.
+-- =====================================================================
+
+-- ---------- SYLLABUS (one row per term) ----------
+create table if not exists pl_syllabi (
+  id uuid primary key default gen_random_uuid(),
+  term text not null unique check (term in ('fall','spring')),
+  title text not null default '',
+  content text not null default '',
+  file_path text,
+  created_by uuid references pl_profiles(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+
+-- ---------- HOMEWORK ----------
+create table if not exists pl_homework (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  instructions text not null default '',
+  due_date date,
+  points int not null default 100,
+  file_path text,
+  created_by uuid references pl_profiles(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists pl_homework_submissions (
+  id uuid primary key default gen_random_uuid(),
+  homework_id uuid not null references pl_homework(id) on delete cascade,
+  student_id uuid not null references pl_profiles(id) on delete cascade,
+  response text not null default '',
+  file_path text,
+  status text not null default 'submitted' check (status in ('submitted','graded')),
+  score int,
+  max_points int,
+  feedback text not null default '',
+  submitted_at timestamptz not null default now()
+);
+
+-- ---------- RLS ----------
+alter table pl_syllabi enable row level security;
+alter table pl_homework enable row level security;
+alter table pl_homework_submissions enable row level security;
+
+drop policy if exists "pl_syllabi_read"  on pl_syllabi;
+drop policy if exists "pl_syllabi_write" on pl_syllabi;
+create policy "pl_syllabi_read"  on pl_syllabi for select to authenticated using (true);
+create policy "pl_syllabi_write" on pl_syllabi for all to authenticated using (pl_is_instructor()) with check (pl_is_instructor());
+
+drop policy if exists "pl_hw_read"  on pl_homework;
+drop policy if exists "pl_hw_write" on pl_homework;
+create policy "pl_hw_read"  on pl_homework for select to authenticated using (true);
+create policy "pl_hw_write" on pl_homework for all to authenticated using (pl_is_instructor()) with check (pl_is_instructor());
+
+drop policy if exists "pl_hwsub_insert" on pl_homework_submissions;
+drop policy if exists "pl_hwsub_read"   on pl_homework_submissions;
+drop policy if exists "pl_hwsub_update" on pl_homework_submissions;
+create policy "pl_hwsub_insert" on pl_homework_submissions for insert to authenticated with check (student_id = auth.uid());
+create policy "pl_hwsub_read"   on pl_homework_submissions for select to authenticated using (student_id = auth.uid() or pl_is_instructor());
+create policy "pl_hwsub_update" on pl_homework_submissions for update to authenticated using (pl_is_instructor()) with check (pl_is_instructor());
+
+-- ---------- STORAGE: let students upload their homework files ----------
+-- (existing policies only allowed instructors to upload; students need this)
+drop policy if exists "pl_files_insert_hw" on storage.objects;
+create policy "pl_files_insert_hw" on storage.objects for insert to authenticated
+  with check (bucket_id = 'purelight' and (storage.foldername(name))[1] = 'homework-submissions');
+
+-- =====================================================================
+-- DONE.
+-- =====================================================================
