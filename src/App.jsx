@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   BookOpen, FileText, Users, Mail, LayoutDashboard, Plus, Upload, Trash2, Send,
   ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
-  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle,
+  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
@@ -42,6 +42,73 @@ function ProgramSelect({ value, onChange, includeAll = true }) {
       {!includeAll && <option value="">— choose level —</option>}
       {list.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
     </select>
+  );
+}
+
+function CourseFields({ courses, courseId, module, onCourse, onModule }) {
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      <Field label="Course (optional)">
+        <select style={inputStyle} value={courseId || ""} onChange={(e) => onCourse(e.target.value)}>
+          <option value="">— None —</option>
+          {courses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+        </select>
+      </Field>
+      <Field label="Module / Week (optional)">
+        <input style={inputStyle} value={module || ""} onChange={(e) => onModule(e.target.value)} placeholder="e.g. Week 1" />
+      </Field>
+    </div>
+  );
+}
+
+const courseLabel = (courses, id, mod) => {
+  const c = courses.find((x) => x.id === id);
+  if (!c && !mod) return "";
+  return `${c ? c.title : "General"}${mod ? " · " + mod : ""}`;
+};
+
+function groupByCourseModule(items, courses) {
+  const byCourse = new Map();
+  for (const it of items) {
+    const cid = it.course_id || "none";
+    if (!byCourse.has(cid)) byCourse.set(cid, []);
+    byCourse.get(cid).push(it);
+  }
+  const order = [...courses, { id: "none", title: "General" }];
+  const out = [];
+  for (const c of order) {
+    const list = byCourse.get(c.id);
+    if (!list || !list.length) continue;
+    const byMod = new Map();
+    for (const it of list) {
+      const m = it.module && it.module.trim() ? it.module.trim() : "";
+      if (!byMod.has(m)) byMod.set(m, []);
+      byMod.get(m).push(it);
+    }
+    const mods = [...byMod.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+      .map(([module, its]) => ({ module, items: its }));
+    out.push({ course: c, modules: mods });
+  }
+  return out;
+}
+
+function Grouped({ items, courses, children }) {
+  const groups = groupByCourseModule(items, courses);
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g.course.id} style={{ marginBottom: 20 }}>
+          <div className="pl-display" style={{ fontSize: 21, fontWeight: 600, color: C.ink, marginBottom: 10, borderBottom: `2px solid ${C.goldSoft}`, paddingBottom: 5 }}>{g.course.title}</div>
+          {g.modules.map((m, mi) => (
+            <div key={mi} style={{ marginBottom: 14 }}>
+              {m.module && <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", margin: "8px 0" }}>{m.module}</div>}
+              {children(m.items)}
+            </div>
+          ))}
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -177,16 +244,17 @@ function InstructorPortal({ profile, onLogout }) {
   const [syllabi, setSyllabi] = useState([]);
   const [homework, setHomework] = useState([]);
   const [hwSubs, setHwSubs] = useState([]);
+  const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, p, m, sy, hw, hs] = await Promise.all([
+      const [b, t, s, p, m, sy, hw, hs, co] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(),
+        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs);
+      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -199,6 +267,7 @@ function InstructorPortal({ profile, onLogout }) {
 
   const nav = [
     { key: "dash", label: "Dashboard", icon: LayoutDashboard },
+    { key: "courses", label: "Courses", icon: GraduationCap },
     { key: "library", label: "Library", icon: Library },
     { key: "syllabus", label: "Syllabus", icon: ScrollText },
     { key: "tests", label: "Tests", icon: FileText },
@@ -213,10 +282,11 @@ function InstructorPortal({ profile, onLogout }) {
       {loading ? <Spinner /> : (
         <>
           {active === "dash" && <InstructorDash {...{ students, books, tests, subs, profiles, setActive }} />}
-          {active === "library" && <LibraryManager books={books} refresh={refresh} profile={profile} />}
+          {active === "courses" && <CoursesManager courses={courses} refresh={refresh} />}
+          {active === "library" && <LibraryManager books={books} courses={courses} refresh={refresh} profile={profile} />}
           {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
-          {active === "tests" && <TestsManager tests={tests} books={books} refresh={refresh} />}
-          {active === "homework" && <HomeworkManager homework={homework} hwSubs={hwSubs} profiles={profiles} refresh={refresh} />}
+          {active === "tests" && <TestsManager tests={tests} books={books} courses={courses} refresh={refresh} />}
+          {active === "homework" && <HomeworkManager homework={homework} hwSubs={hwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
           {active === "grading" && <Grading subs={subs} tests={tests} profiles={profiles} refresh={refresh} />}
           {active === "students" && <StudentsManager students={students} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
@@ -275,15 +345,15 @@ function InstructorDash({ students, books, tests, subs, profiles, setActive }) {
 }
 
 /* ---------- LIBRARY ---------- */
-function LibraryManager({ books, refresh, profile }) {
+function LibraryManager({ books, courses, refresh, profile }) {
   const [mode, setMode] = useState("list");
-  const [form, setForm] = useState({ title: "", author: profile.full_name, description: "", pages: "", program: "all", video_url: "", file: null });
+  const [form, setForm] = useState({ title: "", author: profile.full_name, description: "", pages: "", program: "all", video_url: "", course_id: "", module: "", file: null });
   const [busy, setBusy] = useState(false);
 
   async function save() {
     if (!form.title.trim()) return;
     setBusy(true);
-    try { await db.createBook(form); await refresh(); setForm({ title: "", author: profile.full_name, description: "", pages: "", program: "all", video_url: "", file: null }); setMode("list"); }
+    try { await db.createBook(form); await refresh(); setForm({ title: "", author: profile.full_name, description: "", pages: "", program: "all", video_url: "", course_id: "", module: "", file: null }); setMode("list"); }
     catch (e) { window.alert(e.message || "Upload failed"); }
     setBusy(false);
   }
@@ -302,6 +372,7 @@ function LibraryManager({ books, refresh, profile }) {
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 90 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <Field label="Program / level"><ProgramSelect value={form.program} onChange={(v) => setForm({ ...form, program: v })} /></Field>
           <Field label="Video link — YouTube, Vimeo, etc. (optional)"><input style={inputStyle} value={form.video_url} onChange={(e) => setForm({ ...form, video_url: e.target.value })} placeholder="https://youtu.be/…" /></Field>
+          <CourseFields courses={courses} courseId={form.course_id} module={form.module} onCourse={(v) => setForm({ ...form, course_id: v })} onModule={(v) => setForm({ ...form, module: v })} />
           <div className="grid grid-cols-2 gap-4">
             <Field label="Pages"><input style={inputStyle} type="number" value={form.pages} onChange={(e) => setForm({ ...form, pages: e.target.value })} /></Field>
             <Field label="PDF or video file (optional)">
@@ -344,14 +415,14 @@ function LibraryManager({ books, refresh, profile }) {
 }
 
 /* ---------- TESTS ---------- */
-function TestsManager({ tests, books, refresh }) {
+function TestsManager({ tests, books, courses, refresh }) {
   const [mode, setMode] = useState("list");
   const [draft, setDraft] = useState(null);
   const [qs, setQs] = useState([]);
   const [busy, setBusy] = useState(false);
 
-  function newTest() { setDraft({ id: null, title: "", description: "", book_id: books[0]?.id || "", program: "all" }); setQs([]); setMode("build"); }
-  function editTest(t) { setDraft({ id: t.id, title: t.title, description: t.description, book_id: t.book_id || "", program: t.program || "all" }); setQs(t.questions.map((q) => ({ ...q }))); setMode("build"); }
+  function newTest() { setDraft({ id: null, title: "", description: "", book_id: books[0]?.id || "", program: "all", course_id: "", module: "" }); setQs([]); setMode("build"); }
+  function editTest(t) { setDraft({ id: t.id, title: t.title, description: t.description, book_id: t.book_id || "", program: t.program || "all", course_id: t.course_id || "", module: t.module || "" }); setQs(t.questions.map((q) => ({ ...q }))); setMode("build"); }
 
   function addQ(type) {
     const base = { id: "tmp" + Date.now() + Math.random(), type, prompt: "", points: type === "essay" ? 20 : type === "short" ? 10 : 5 };
@@ -390,6 +461,7 @@ function TestsManager({ tests, books, refresh }) {
           </div>
           <Field label="Instructions"><input style={inputStyle} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What this test covers" /></Field>
           <Field label="Program / level"><ProgramSelect value={draft.program} onChange={(v) => setDraft({ ...draft, program: v })} /></Field>
+          <CourseFields courses={courses} courseId={draft.course_id} module={draft.module} onCourse={(v) => setDraft({ ...draft, course_id: v })} onModule={(v) => setDraft({ ...draft, module: v })} />
         </Card>
 
         {qs.map((q, i) => (
@@ -699,16 +771,17 @@ function StudentPortal({ profile, onLogout }) {
   const [syllabi, setSyllabi] = useState([]);
   const [homework, setHomework] = useState([]);
   const [hwSubs, setHwSubs] = useState([]);
+  const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, m, sy, hw, hs] = await Promise.all([
+      const [b, t, s, m, sy, hw, hs, co] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(),
+        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs);
+      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -738,10 +811,10 @@ function StudentPortal({ profile, onLogout }) {
       {loading ? <Spinner /> : (
         <>
           {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, tests, setActive }} />}
-          {active === "library" && <StudentLibrary books={visBooks} />}
+          {active === "library" && <StudentLibrary books={visBooks} courses={courses} />}
           {active === "syllabus" && <StudentSyllabus syllabi={syllabi} />}
-          {active === "tests" && <StudentTests available={available} books={books} refresh={refresh} />}
-          {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} refresh={refresh} />}
+          {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
+          {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} refresh={refresh} />}
           {active === "grades" && <StudentGrades mySubs={mySubs} tests={tests} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
         </>
@@ -790,7 +863,7 @@ function StudentDash({ profile, books, available, mySubs, tests, setActive }) {
   );
 }
 
-function StudentLibrary({ books }) {
+function StudentLibrary({ books, courses }) {
   const [busyId, setBusyId] = useState(null);
   async function read(b) {
     if (!b.file_path) { window.alert("No file attached to this book yet."); return; }
@@ -799,30 +872,31 @@ function StudentLibrary({ books }) {
     catch (e) { window.alert(e.message); }
     setBusyId(null);
   }
+  const card = (b) => (
+    <Card key={b.id}>
+      <div className="flex items-center justify-center" style={{ height: 110, borderRadius: 9, background: `linear-gradient(150deg, ${C.ink}, ${C.ink2})`, marginBottom: 14 }}><BookOpen size={34} color={C.goldSoft} /></div>
+      <h3 className="pl-display" style={{ fontSize: 17.5, fontWeight: 600, color: C.ink, margin: 0, lineHeight: 1.2 }}>{b.title}</h3>
+      <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{b.author} · {b.pages} pp</div>
+      <p className="pl-body" style={{ fontSize: 13.5, color: C.text, marginTop: 8, lineHeight: 1.5 }}>{b.description}</p>
+      <div style={{ marginTop: 12 }} className="flex flex-col gap-2">
+        {b.video_url && <Btn small full icon={PlayCircle} onClick={() => window.open(b.video_url, "_blank")}>Watch video</Btn>}
+        {b.file_path && <Btn small full icon={BookOpen} onClick={() => read(b)} disabled={busyId === b.id}>{busyId === b.id ? "Opening…" : "Open file"}</Btn>}
+        {!b.video_url && !b.file_path && <Btn small full kind="ghost" disabled>No media yet</Btn>}
+      </div>
+    </Card>
+  );
   return (
     <>
-      <PageHead title="Library" sub="Read or download your course books." />
-      {books.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No books available yet.</span></Card> :
-        <div className="grid grid-cols-3 gap-4">
-          {books.map((b) => (
-            <Card key={b.id}>
-              <div className="flex items-center justify-center" style={{ height: 110, borderRadius: 9, background: `linear-gradient(150deg, ${C.ink}, ${C.ink2})`, marginBottom: 14 }}><BookOpen size={34} color={C.goldSoft} /></div>
-              <h3 className="pl-display" style={{ fontSize: 17.5, fontWeight: 600, color: C.ink, margin: 0, lineHeight: 1.2 }}>{b.title}</h3>
-              <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{b.author} · {b.pages} pp</div>
-              <p className="pl-body" style={{ fontSize: 13.5, color: C.text, marginTop: 8, lineHeight: 1.5 }}>{b.description}</p>
-              <div style={{ marginTop: 12 }} className="flex flex-col gap-2">
-                {b.video_url && <Btn small full icon={PlayCircle} onClick={() => window.open(b.video_url, "_blank")}>Watch video</Btn>}
-                {b.file_path && <Btn small full icon={BookOpen} onClick={() => read(b)} disabled={busyId === b.id}>{busyId === b.id ? "Opening…" : "Open file"}</Btn>}
-                {!b.video_url && !b.file_path && <Btn small full kind="ghost" disabled>No media yet</Btn>}
-              </div>
-            </Card>
-          ))}
-        </div>}
+      <PageHead title="Library" sub="Lessons and materials, organized by course." />
+      {books.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No lessons available yet.</span></Card> :
+        <Grouped items={books} courses={courses}>
+          {(items) => <div className="grid grid-cols-3 gap-4">{items.map(card)}</div>}
+        </Grouped>}
     </>
   );
 }
 
-function StudentTests({ available, books, refresh }) {
+function StudentTests({ available, books, courses, refresh }) {
   const [taking, setTaking] = useState(null);
   const [answers, setAnswers] = useState({});
   const [busy, setBusy] = useState(false);
@@ -869,19 +943,23 @@ function StudentTests({ available, books, refresh }) {
     <>
       <PageHead title="My Tests" sub="Assessments assigned to you." />
       {available.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No tests available right now.</span></Card> :
-        <div className="flex flex-col gap-3">
-          {available.map((t) => (
-            <Card key={t.id}>
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{t.title}</h3>
-                  <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{books.find((b) => b.id === t.book_id)?.title || "General"} · {t.questions.length} questions · {sumPoints(t.questions)} pts</div>
-                </div>
-                <Btn icon={PencilLine} onClick={() => setTaking(t)}>Begin</Btn>
-              </div>
-            </Card>
-          ))}
-        </div>}
+        <Grouped items={available} courses={courses}>
+          {(items) => (
+            <div className="flex flex-col gap-3">
+              {items.map((t) => (
+                <Card key={t.id}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{t.title}</h3>
+                      <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{books.find((b) => b.id === t.book_id)?.title || "General"} · {t.questions.length} questions · {sumPoints(t.questions)} pts</div>
+                    </div>
+                    <Btn icon={PencilLine} onClick={() => setTaking(t)}>Begin</Btn>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </Grouped>}
     </>
   );
 }
@@ -1014,7 +1092,7 @@ function StudentSyllabus({ syllabi }) {
 }
 
 /* ---------- HOMEWORK (instructor) — builder + grading ---------- */
-function HomeworkManager({ homework, hwSubs, profiles, refresh }) {
+function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
   const [mode, setMode] = useState("list");
   const [draft, setDraft] = useState(null);
   const [qs, setQs] = useState([]);
@@ -1027,8 +1105,8 @@ function HomeworkManager({ homework, hwSubs, profiles, refresh }) {
   const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
   const titleOf = (id) => homework.find((h) => h.id === id)?.title || "Homework";
 
-  function newHw() { setDraft({ id: null, title: "", instructions: "", program: "all", due_date: "", points: 100, file_path: null }); setQs([]); setFile(null); setMode("build"); }
-  function editHw(h) { setDraft({ id: h.id, title: h.title, instructions: h.instructions, program: h.program || "all", due_date: h.due_date || "", points: h.points, file_path: h.file_path }); setQs(h.questions.map((q) => ({ ...q }))); setFile(null); setMode("build"); }
+  function newHw() { setDraft({ id: null, title: "", instructions: "", program: "all", due_date: "", points: 100, file_path: null, course_id: "", module: "" }); setQs([]); setFile(null); setMode("build"); }
+  function editHw(h) { setDraft({ id: h.id, title: h.title, instructions: h.instructions, program: h.program || "all", due_date: h.due_date || "", points: h.points, file_path: h.file_path, course_id: h.course_id || "", module: h.module || "" }); setQs(h.questions.map((q) => ({ ...q }))); setFile(null); setMode("build"); }
 
   function addQ(type) {
     const base = { id: "tmp" + Date.now() + Math.random(), type, prompt: "", points: type === "essay" ? 20 : type === "short" ? 10 : 5 };
@@ -1082,6 +1160,7 @@ function HomeworkManager({ homework, hwSubs, profiles, refresh }) {
             <Field label="Due date (optional)"><input type="date" style={inputStyle} value={draft.due_date} onChange={(e) => setDraft({ ...draft, due_date: e.target.value })} /></Field>
             <Field label="Points (if no questions)"><input type="number" style={inputStyle} value={draft.points} onChange={(e) => setDraft({ ...draft, points: e.target.value })} /></Field>
           </div>
+          <CourseFields courses={courses} courseId={draft.course_id} module={draft.module} onCourse={(v) => setDraft({ ...draft, course_id: v })} onModule={(v) => setDraft({ ...draft, module: v })} />
           <Field label="Attachment (optional PDF for students)">
             <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
               <Upload size={16} color={C.muted} />
@@ -1263,7 +1342,7 @@ function HomeworkManager({ homework, hwSubs, profiles, refresh }) {
 }
 
 /* ---------- HOMEWORK (student) ---------- */
-function StudentHomework({ availableHw, myHwSubs, homework, refresh }) {
+function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) {
   const [doing, setDoing] = useState(null);
   const [answers, setAnswers] = useState({});
   const [response, setResponse] = useState("");
@@ -1328,19 +1407,25 @@ function StudentHomework({ availableHw, myHwSubs, homework, refresh }) {
     <>
       <PageHead title="Homework" sub="Your assignments." />
       <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>To do</h3>
-      <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
+      <div style={{ marginBottom: 24 }}>
         {availableHw.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>You're all caught up.</span></Card>}
-        {availableHw.map((h) => (
-          <Card key={h.id}>
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
-                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""}</div>
-              </div>
-              <Btn icon={PencilLine} onClick={() => start(h)}>Start</Btn>
+        <Grouped items={availableHw} courses={courses}>
+          {(items) => (
+            <div className="flex flex-col gap-3">
+              {items.map((h) => (
+                <Card key={h.id}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
+                      <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""}</div>
+                    </div>
+                    <Btn icon={PencilLine} onClick={() => start(h)}>Start</Btn>
+                  </div>
+                </Card>
+              ))}
             </div>
-          </Card>
-        ))}
+          )}
+        </Grouped>
       </div>
 
       <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Submitted</h3>
@@ -1363,6 +1448,53 @@ function StudentHomework({ availableHw, myHwSubs, homework, refresh }) {
                 <p className="pl-body" style={{ fontSize: 14, lineHeight: 1.55, margin: 0 }}>{s.feedback}</p>
               </div>
             )}
+          </Card>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/* ---------- COURSES (instructor) ---------- */
+function CoursesManager({ courses, refresh }) {
+  const [form, setForm] = useState({ title: "", description: "", program: "all" });
+  const [busy, setBusy] = useState(false);
+  const [show, setShow] = useState(false);
+
+  async function create() {
+    if (!form.title.trim()) return;
+    setBusy(true);
+    try { await db.createCourse(form); await refresh(); setForm({ title: "", description: "", program: "all" }); setShow(false); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this course? Its lessons/tests/homework remain, but lose the course label.")) return;
+    try { await db.deleteCourse(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  return (
+    <>
+      <PageHead title="Courses" sub="Group lessons, tests, and homework into courses and weeks." action={<Btn icon={Plus} onClick={() => setShow(true)}>New course</Btn>} />
+      {show && (
+        <Card style={{ marginBottom: 18, maxWidth: 640 }}>
+          <Field label="Course title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Systematic Theology I" /></Field>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 80 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+          <Field label="Program / level"><ProgramSelect value={form.program} onChange={(v) => setForm({ ...form, program: v })} /></Field>
+          <div className="flex gap-2"><Btn icon={Check} onClick={create} disabled={busy}>{busy ? "Saving…" : "Create course"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
+        </Card>
+      )}
+      <div className="flex flex-col gap-3">
+        {courses.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No courses yet. Create one, then choose it when you add a lesson, test, or homework.</span></Card>}
+        {courses.map((c) => (
+          <Card key={c.id}>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.title}</h3>
+                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(c.program)}{c.description ? ` · ${c.description}` : ""}</div>
+              </div>
+              <button onClick={() => remove(c.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+            </div>
           </Card>
         ))}
       </div>
