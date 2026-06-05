@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   BookOpen, FileText, Users, Mail, LayoutDashboard, Plus, Upload, Trash2, Send,
   ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
-  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink,
+  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
@@ -277,13 +277,13 @@ function InstructorDash({ students, books, tests, subs, profiles, setActive }) {
 /* ---------- LIBRARY ---------- */
 function LibraryManager({ books, refresh, profile }) {
   const [mode, setMode] = useState("list");
-  const [form, setForm] = useState({ title: "", author: profile.full_name, description: "", pages: "", program: "all", file: null });
+  const [form, setForm] = useState({ title: "", author: profile.full_name, description: "", pages: "", program: "all", video_url: "", file: null });
   const [busy, setBusy] = useState(false);
 
   async function save() {
     if (!form.title.trim()) return;
     setBusy(true);
-    try { await db.createBook(form); await refresh(); setForm({ title: "", author: profile.full_name, description: "", pages: "", program: "all", file: null }); setMode("list"); }
+    try { await db.createBook(form); await refresh(); setForm({ title: "", author: profile.full_name, description: "", pages: "", program: "all", video_url: "", file: null }); setMode("list"); }
     catch (e) { window.alert(e.message || "Upload failed"); }
     setBusy(false);
   }
@@ -301,13 +301,14 @@ function LibraryManager({ books, refresh, profile }) {
           <Field label="Author"><input style={inputStyle} value={form.author} onChange={(e) => setForm({ ...form, author: e.target.value })} /></Field>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 90 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <Field label="Program / level"><ProgramSelect value={form.program} onChange={(v) => setForm({ ...form, program: v })} /></Field>
+          <Field label="Video link — YouTube, Vimeo, etc. (optional)"><input style={inputStyle} value={form.video_url} onChange={(e) => setForm({ ...form, video_url: e.target.value })} placeholder="https://youtu.be/…" /></Field>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Pages"><input style={inputStyle} type="number" value={form.pages} onChange={(e) => setForm({ ...form, pages: e.target.value })} /></Field>
-            <Field label="PDF file">
+            <Field label="PDF or video file (optional)">
               <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
                 <Upload size={16} color={C.muted} />
                 <span className="pl-body" style={{ fontSize: 14, color: form.file ? C.text : C.muted }}>{form.file ? form.file.name : "Choose a file…"}</span>
-                <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => setForm({ ...form, file: e.target.files[0] })} />
+                <input type="file" accept="application/pdf,video/*" style={{ display: "none" }} onChange={(e) => setForm({ ...form, file: e.target.files[0] })} />
               </label>
             </Field>
           </div>
@@ -332,7 +333,7 @@ function LibraryManager({ books, refresh, profile }) {
               <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{b.author} • {b.pages} pp • {programLabel(b.program)}</div>
               <p className="pl-body" style={{ fontSize: 13.5, color: C.text, marginTop: 8, lineHeight: 1.5 }}>{b.description}</p>
               <div className="flex justify-between items-center" style={{ marginTop: 14 }}>
-                <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>{b.file_path ? "PDF attached" : "No file"}</span>
+                <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>{b.video_url ? "Video link" : b.file_path ? "File attached" : "No media"}</span>
                 <button onClick={() => remove(b.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
               </div>
             </Card>
@@ -809,7 +810,11 @@ function StudentLibrary({ books }) {
               <h3 className="pl-display" style={{ fontSize: 17.5, fontWeight: 600, color: C.ink, margin: 0, lineHeight: 1.2 }}>{b.title}</h3>
               <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{b.author} · {b.pages} pp</div>
               <p className="pl-body" style={{ fontSize: 13.5, color: C.text, marginTop: 8, lineHeight: 1.5 }}>{b.description}</p>
-              <div style={{ marginTop: 12 }}><Btn small full icon={BookOpen} onClick={() => read(b)} disabled={busyId === b.id}>{busyId === b.id ? "Opening…" : b.file_path ? "Read PDF" : "No file"}</Btn></div>
+              <div style={{ marginTop: 12 }} className="flex flex-col gap-2">
+                {b.video_url && <Btn small full icon={PlayCircle} onClick={() => window.open(b.video_url, "_blank")}>Watch video</Btn>}
+                {b.file_path && <Btn small full icon={BookOpen} onClick={() => read(b)} disabled={busyId === b.id}>{busyId === b.id ? "Opening…" : "Open file"}</Btn>}
+                {!b.video_url && !b.file_path && <Btn small full kind="ghost" disabled>No media yet</Btn>}
+              </div>
             </Card>
           ))}
         </div>}
