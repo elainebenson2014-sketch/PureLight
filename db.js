@@ -1,44 +1,233 @@
-// Vercel serverless function: POST /api/send-email
-// Sends email through Resend. RESEND_API_KEY stays server-side only.
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+import { supabase } from "./supabaseClient";
+
+const BUCKET = "purelight";
+
+/* ---------------- AUTH / PROFILE ---------------- */
+export async function getProfile() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data, error } = await supabase.from("pl_profiles").select("*").eq("id", user.id).single();
+  if (error) throw error;
+  return data;
+}
+
+export async function listProfiles() {
+  const { data, error } = await supabase.from("pl_profiles").select("*").order("full_name");
+  if (error) throw error;
+  return data;
+}
+
+export async function listStudents() {
+  const { data, error } = await supabase.from("pl_profiles").select("*").eq("role", "student").order("full_name");
+  if (error) throw error;
+  return data;
+}
+
+/* ---------------- FILES ---------------- */
+export async function uploadFile(folder, file) {
+  const safe = file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+  const path = `${folder}/${Date.now()}-${safe}`;
+  const { error } = await supabase.storage.from(BUCKET).upload(path, file, { upsert: false });
+  if (error) throw error;
+  return path;
+}
+
+export async function signedUrl(path) {
+  if (!path) return null;
+  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(path, 60 * 60);
+  if (error) throw error;
+  return data.signedUrl;
+}
+
+/* ---------------- BOOKS ---------------- */
+export async function listBooks() {
+  const { data, error } = await supabase.from("pl_books").select("*").order("created_at", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function createBook({ title, author, description, pages, file }) {
+  let file_path = null;
+  if (file) file_path = await uploadFile("books", file);
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_books").insert({
+    title, author, description, pages: Number(pages) || 0, file_path, created_by: user.id,
+  });
+  if (error) throw error;
+}
+
+export async function deleteBook(id) {
+  const { error } = await supabase.from("pl_books").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ---------------- TESTS + QUESTIONS ---------------- */
+export async function listTests() {
+  const { data, error } = await supabase
+    .from("pl_tests")
+    .select("*, pl_questions(*)")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map((t) => ({
+    ...t,
+    questions: (t.pl_questions || []).sort((a, b) => a.position - b.position),
+  }));
+}
+
+export async function saveTest(test, questions) {
+  const { data: { user } } = await supabase.auth.getUser();
+  let testId = test.id;
+
+  if (testId) {
+    const { error } = await supabase.from("pl_tests").update({
+      title: test.title, description: test.description, book_id: test.book_id || null,
+    }).eq("id", testId);
+    if (error) throw error;
+    // simplest reliable sync: clear old questions, insert current set
+    await supabase.from("pl_questions").delete().eq("test_id", testId);
+  } else {
+    const { data, error } = await supabase.from("pl_tests").insert({
+      title: test.title, description: test.description, book_id: test.book_id || null, created_by: user.id,
+    }).select("id").single();
+    if (error) throw error;
+    testId = data.id;
   }
 
-  let body = req.body;
-  if (typeof body === "string") {
-    try { body = JSON.parse(body); } catch { body = {}; }
+  const rows = questions.map((q, i) => ({
+    test_id: testId,
+    position: i,
+    type: q.type,
+    prompt: q.prompt,
+    points: Number(q.points) || 0,
+    options: q.options || [],
+    correct_answer: q.correct_answer ?? null,
+  }));
+  if (rows.length) {
+    const { error } = await supabase.from("pl_questions").insert(rows);
+    if (error) throw error;
   }
-  const { to, subject, html, text } = body || {};
+  return testId;
+}
 
-  if (!to || (Array.isArray(to) && to.length === 0) || !subject) {
-    return res.status(400).json({ error: "Missing 'to' or 'subject'." });
-  }
+export async function deleteTest(id) {
+  const { error } = await supabase.from("pl_tests").delete().eq("id", id);
+  if (error) throw error;
+}
 
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: "RESEND_API_KEY is not configured." });
-  }
-  const from = process.env.EMAIL_FROM || "NCTS PureLight <onboarding@resend.dev>";
+/* ---------------- SUBMISSIONS ---------------- */
+export async function listSubmissions() {
+  const { data, error } = await supabase
+    .from("pl_submissions")
+    .select("*")
+    .order("submitted_at", { ascending: false });
+  if (error) throw error;
+  return data;
+}
 
+export async function createSubmission({ test_id, answers, max_score }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_submissions").insert({
+    test_id, student_id: user.id, answers, max_score,
+  });
+  if (error) throw error;
+}
+
+export async function gradeSubmission(id, { manual, score, max_score, feedback }) {
+  const { error } = await supabase.from("pl_submissions").update({
+    manual, score, max_score, feedback, status: "graded",
+  }).eq("id", id);
+  if (error) throw error;
+}
+
+/* ---------------- MESSAGES ---------------- */
+export async function listMessages() {
+  const { data, error } = await supabase
+    .from("pl_messages")
+    .select("*")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function sendMessage({ recipient, subject, body, sender_name }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_messages").insert({
+    sender_id: user.id, sender_name, recipient, subject, body,
+  });
+  if (error) throw error;
+}
+
+/* Fire the real email through the Vercel function. Never throws — UI continues
+   even if email delivery isn't configured yet. */
+export async function sendEmail({ to, subject, html }) {
   try {
-    const r = await fetch("https://api.resend.com/emails", {
+    const r = await fetch("/api/send-email", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from,
-        to: Array.isArray(to) ? to : [to],
-        subject,
-        html: html || `<p>${text || ""}</p>`,
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to, subject, html }),
     });
-    const data = await r.json();
-    if (!r.ok) return res.status(r.status).json({ error: data });
-    return res.status(200).json({ ok: true, id: data.id });
+    return await r.json();
   } catch (e) {
-    return res.status(500).json({ error: String(e) });
+    return { error: String(e) };
   }
+}
+
+/* ---------------- SYLLABI ---------------- */
+export async function listSyllabi() {
+  const { data, error } = await supabase.from("pl_syllabi").select("*");
+  if (error) throw error;
+  return data;
+}
+
+export async function saveSyllabus({ term, title, content, file }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const patch = { term, title, content, created_by: user.id, updated_at: new Date().toISOString() };
+  if (file) patch.file_path = await uploadFile("syllabi", file);
+  const { error } = await supabase.from("pl_syllabi").upsert(patch, { onConflict: "term" });
+  if (error) throw error;
+}
+
+/* ---------------- HOMEWORK ---------------- */
+export async function listHomework() {
+  const { data, error } = await supabase.from("pl_homework").select("*").order("created_at", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function createHomework({ title, instructions, due_date, points, file }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  let file_path = null;
+  if (file) file_path = await uploadFile("homework", file);
+  const { error } = await supabase.from("pl_homework").insert({
+    title, instructions, due_date: due_date || null, points: Number(points) || 100, file_path, created_by: user.id,
+  });
+  if (error) throw error;
+}
+
+export async function deleteHomework(id) {
+  const { error } = await supabase.from("pl_homework").delete().eq("id", id);
+  if (error) throw error;
+}
+
+export async function listHomeworkSubmissions() {
+  const { data, error } = await supabase.from("pl_homework_submissions").select("*").order("submitted_at", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function submitHomework({ homework_id, response, file, max_points }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  let file_path = null;
+  if (file) file_path = await uploadFile("homework-submissions", file);
+  const { error } = await supabase.from("pl_homework_submissions").insert({
+    homework_id, student_id: user.id, response, file_path, max_points,
+  });
+  if (error) throw error;
+}
+
+export async function gradeHomework(id, { score, max_points, feedback }) {
+  const { error } = await supabase.from("pl_homework_submissions").update({
+    score, max_points, feedback, status: "graded",
+  }).eq("id", id);
+  if (error) throw error;
 }
