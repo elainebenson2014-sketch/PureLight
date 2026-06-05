@@ -46,12 +46,13 @@ export async function listBooks() {
   return data;
 }
 
-export async function createBook({ title, author, description, pages, program, file }) {
+export async function createBook({ title, author, description, pages, program, video_url, file }) {
   let file_path = null;
   if (file) file_path = await uploadFile("books", file);
   const { data: { user } } = await supabase.auth.getUser();
   const { error } = await supabase.from("pl_books").insert({
-    title, author, description, pages: Number(pages) || 0, program: program || "all", file_path, created_by: user.id,
+    title, author, description, pages: Number(pages) || 0, program: program || "all",
+    video_url: video_url || null, file_path, created_by: user.id,
   });
   if (error) throw error;
 }
