@@ -307,3 +307,25 @@ export async function setAttendance(student_id, date, status) {
   );
   if (error) throw error;
 }
+
+/* ---------------- CERTIFICATES ---------------- */
+export async function listCertificates() {
+  const { data, error } = await supabase.from("pl_certificates").select("*").order("issued_on", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function issueCertificate({ student_id, title, course_id, program, note }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const serial = "NCTS-" + new Date().getFullYear() + "-" + Math.random().toString(36).slice(2, 8).toUpperCase();
+  const { error } = await supabase.from("pl_certificates").insert({
+    student_id, title, course_id: course_id || null, program: program || null,
+    serial, note: note || "", issued_by: user.id,
+  });
+  if (error) throw error;
+}
+
+export async function deleteCertificate(id) {
+  const { error } = await supabase.from("pl_certificates").delete().eq("id", id);
+  if (error) throw error;
+}
