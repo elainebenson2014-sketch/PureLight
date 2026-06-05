@@ -291,3 +291,19 @@ export async function deleteCourse(id) {
   const { error } = await supabase.from("pl_courses").delete().eq("id", id);
   if (error) throw error;
 }
+
+/* ---------------- ATTENDANCE ---------------- */
+export async function listAttendance() {
+  const { data, error } = await supabase.from("pl_attendance").select("*").order("date", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function setAttendance(student_id, date, status) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_attendance").upsert(
+    { student_id, date, status, recorded_by: user.id },
+    { onConflict: "student_id,date" }
+  );
+  if (error) throw error;
+}
