@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   BookOpen, FileText, Users, Mail, LayoutDashboard, Plus, Upload, Trash2, Send,
   ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
-  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap,
+  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
@@ -246,16 +246,17 @@ function InstructorPortal({ profile, onLogout }) {
   const [hwSubs, setHwSubs] = useState([]);
   const [courses, setCourses] = useState([]);
   const [attendance, setAttendance] = useState([]);
+  const [certificates, setCertificates] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, p, m, sy, hw, hs, co, at] = await Promise.all([
+      const [b, t, s, p, m, sy, hw, hs, co, at, ce] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(),
+        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at);
+      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -276,6 +277,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "attendance", label: "Attendance", icon: CalendarDays },
     { key: "grading", label: "Grading", icon: ClipboardCheck },
     { key: "students", label: "Students", icon: Users },
+    { key: "certificates", label: "Certificates", icon: Medal },
     { key: "messages", label: "Messages", icon: Mail },
   ];
 
@@ -292,6 +294,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "attendance" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} refresh={refresh} />}
           {active === "grading" && <Grading subs={subs} tests={tests} profiles={profiles} refresh={refresh} />}
           {active === "students" && <StudentsManager students={students} refresh={refresh} />}
+          {active === "certificates" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
         </>
       )}
@@ -776,16 +779,17 @@ function StudentPortal({ profile, onLogout }) {
   const [hwSubs, setHwSubs] = useState([]);
   const [courses, setCourses] = useState([]);
   const [attendance, setAttendance] = useState([]);
+  const [certificates, setCertificates] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, m, sy, hw, hs, co, at] = await Promise.all([
+      const [b, t, s, m, sy, hw, hs, co, at, ce] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(),
+        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at);
+      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -807,6 +811,7 @@ function StudentPortal({ profile, onLogout }) {
     { key: "tests", label: "My Tests", icon: FileText },
     { key: "homework", label: "Homework", icon: NotebookPen },
     { key: "grades", label: "Grades", icon: Award },
+    { key: "certificates", label: "Certificates", icon: Medal },
     { key: "inbox", label: "Inbox", icon: Mail },
   ];
 
@@ -820,6 +825,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} refresh={refresh} />}
           {active === "grades" && <StudentGrades mySubs={mySubs} tests={tests} />}
+          {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
         </>
       )}
@@ -1614,6 +1620,155 @@ function AttendanceManager({ students, attendance, subs, hwSubs, refresh }) {
             </table>
           </div>}
       </Card>
+    </>
+  );
+}
+
+/* ---------- CERTIFICATES ---------- */
+function openCertificate(cert, studentName) {
+  const dateStr = new Date(cert.issued_on).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  const safe = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${safe(cert.title)} — Certificate</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    @page { size: landscape; margin: 0; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:'Source Serif 4',Georgia,serif; color:#15213d; background:#e9e3d4; display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; }
+    .cert { width:1000px; max-width:96vw; aspect-ratio:1.414/1; background:#f6f1e7; position:relative; padding:60px 70px; box-shadow:0 24px 70px rgba(0,0,0,.20); }
+    .frame { position:absolute; inset:20px; border:2px solid #bd9a44; pointer-events:none; }
+    .frame:before { content:''; position:absolute; inset:7px; border:1px solid #d9c184; }
+    .inner { position:relative; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+    .kicker { letter-spacing:.34em; text-transform:uppercase; font-size:12.5px; color:#bd9a44; font-weight:600; }
+    .school { font-family:'Fraunces',serif; font-size:32px; font-weight:600; margin:8px 0 0; letter-spacing:.01em; }
+    .rule { width:64px; height:2px; background:#bd9a44; margin:18px 0 22px; }
+    .pres { font-size:15px; color:#5b6478; font-style:italic; }
+    .name { font-family:'Fraunces',serif; font-size:44px; font-weight:600; margin:10px 0 16px; padding:0 28px 10px; border-bottom:2px solid #bd9a44; }
+    .body { font-size:16.5px; max-width:640px; line-height:1.65; color:#2a3147; }
+    .body b { color:#15213d; }
+    .row { display:flex; gap:90px; margin-top:46px; }
+    .sigline { width:210px; border-top:1.5px solid #15213d; padding-top:7px; font-size:12.5px; color:#5b6478; letter-spacing:.04em; }
+    .serial { position:absolute; bottom:2px; right:4px; font-size:10.5px; color:#9aa2b3; letter-spacing:.06em; }
+    .print { position:fixed; top:16px; right:16px; background:#15213d; color:#f6f1e7; border:none; padding:10px 18px; border-radius:8px; font-family:'Source Serif 4',serif; font-size:14px; cursor:pointer; box-shadow:0 6px 18px rgba(0,0,0,.2); }
+    @media print { .print { display:none; } body { background:#fff; padding:0; } .cert { box-shadow:none; } }
+  </style></head>
+  <body>
+    <button class="print" onclick="window.print()">Print / Save as PDF</button>
+    <div class="cert"><div class="frame"></div>
+      <div class="inner">
+        <div class="kicker">Certificate of Completion</div>
+        <div class="school">NCTS PureLight</div>
+        <div class="rule"></div>
+        <div class="pres">This certificate is proudly presented to</div>
+        <div class="name">${safe(studentName)}</div>
+        <div class="body">in recognition of the faithful and successful completion of <b>${safe(cert.title)}</b>${cert.note ? `, ${safe(cert.note)}` : ""}, awarded this ${dateStr}.</div>
+        <div class="row">
+          <div><div class="sigline">Instructor signature</div></div>
+          <div><div class="sigline">Date — ${dateStr}</div></div>
+        </div>
+        <div class="serial">Serial ${safe(cert.serial)}</div>
+      </div>
+    </div>
+  </body></html>`;
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); }
+  else window.alert("Please allow pop-ups to view the certificate.");
+}
+
+function CertificatesManager({ students, courses, certificates, refresh }) {
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({ student_id: "", course_id: "", title: "", note: "" });
+  const nameOf = (id) => students.find((s) => s.id === id)?.full_name || "Student";
+
+  function pickCourse(cid) {
+    const c = courses.find((x) => x.id === cid);
+    setForm((f) => ({ ...f, course_id: cid, title: c ? c.title : f.title }));
+  }
+  async function issue() {
+    if (!form.student_id) { window.alert("Choose a student."); return; }
+    if (!form.title.trim()) { window.alert("Enter a certificate title."); return; }
+    setBusy(true);
+    try {
+      await db.issueCertificate({ student_id: form.student_id, title: form.title.trim(), course_id: form.course_id || null, note: form.note.trim() });
+      await refresh();
+      setForm({ student_id: "", course_id: "", title: "", note: "" });
+      setShow(false);
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this certificate? The student will no longer see it.")) return;
+    try { await db.deleteCertificate(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  return (
+    <>
+      <PageHead title="Certificates" sub="Award and reprint certificates of completion." action={<Btn icon={Plus} onClick={() => setShow(true)}>Issue certificate</Btn>} />
+      {show && (
+        <Card style={{ marginBottom: 18, maxWidth: 660 }}>
+          <Field label="Student">
+            <select style={inputStyle} value={form.student_id} onChange={(e) => setForm({ ...form, student_id: e.target.value })}>
+              <option value="">— choose student —</option>
+              {students.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+            </select>
+          </Field>
+          <Field label="Course (optional — fills in the title)">
+            <select style={inputStyle} value={form.course_id} onChange={(e) => pickCourse(e.target.value)}>
+              <option value="">— none —</option>
+              {courses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+            </select>
+          </Field>
+          <Field label="Certificate title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Systematic Theology I  •  or  •  the Master's Program" /></Field>
+          <Field label="Note (optional)"><input style={inputStyle} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="e.g. with high honors" /></Field>
+          <div className="flex gap-2"><Btn icon={Check} onClick={issue} disabled={busy}>{busy ? "Issuing…" : "Issue certificate"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
+        </Card>
+      )}
+      <div className="flex flex-col gap-3">
+        {certificates.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No certificates issued yet.</span></Card>}
+        {certificates.map((c) => (
+          <Card key={c.id}>
+            <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center" style={{ width: 42, height: 42, borderRadius: 10, background: C.paper2, border: `1px solid ${C.goldSoft}` }}><Medal size={20} color={C.gold} /></div>
+                <div>
+                  <div className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink }}>{c.title}</div>
+                  <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{nameOf(c.student_id)} · {fdate(c.issued_on)} · {c.serial}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Btn small icon={ExternalLink} onClick={() => openCertificate(c, nameOf(c.student_id))}>Preview</Btn>
+                <button onClick={() => remove(c.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function StudentCertificates({ certificates, profile }) {
+  return (
+    <>
+      <PageHead title="Certificates" sub="Your awards. Open one to print or save as a PDF." />
+      {certificates.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>You haven't earned any certificates yet. Keep going!</span></Card> :
+        <div className="grid grid-cols-2 gap-4">
+          {certificates.map((c) => (
+            <Card key={c.id}>
+              <div className="flex items-center gap-3" style={{ marginBottom: 12 }}>
+                <div className="flex items-center justify-center" style={{ width: 46, height: 46, borderRadius: 11, background: `linear-gradient(150deg, ${C.ink}, ${C.ink2})` }}><Medal size={22} color={C.goldSoft} /></div>
+                <div>
+                  <div className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, lineHeight: 1.2 }}>{c.title}</div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>Awarded {fdate(c.issued_on)}</div>
+                </div>
+              </div>
+              {c.note && <p className="pl-body" style={{ fontSize: 13.5, color: C.text, fontStyle: "italic", margin: "0 0 12px" }}>{c.note}</p>}
+              <Btn full icon={ExternalLink} onClick={() => openCertificate(c, profile.full_name)}>View / Print</Btn>
+            </Card>
+          ))}
+        </div>}
     </>
   );
 }
