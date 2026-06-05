@@ -245,16 +245,17 @@ function InstructorPortal({ profile, onLogout }) {
   const [homework, setHomework] = useState([]);
   const [hwSubs, setHwSubs] = useState([]);
   const [courses, setCourses] = useState([]);
+  const [attendance, setAttendance] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, p, m, sy, hw, hs, co] = await Promise.all([
+      const [b, t, s, p, m, sy, hw, hs, co, at] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(),
+        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co);
+      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -272,6 +273,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "syllabus", label: "Syllabus", icon: ScrollText },
     { key: "tests", label: "Tests", icon: FileText },
     { key: "homework", label: "Homework", icon: NotebookPen },
+    { key: "attendance", label: "Attendance", icon: CalendarDays },
     { key: "grading", label: "Grading", icon: ClipboardCheck },
     { key: "students", label: "Students", icon: Users },
     { key: "messages", label: "Messages", icon: Mail },
@@ -287,6 +289,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
           {active === "tests" && <TestsManager tests={tests} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <HomeworkManager homework={homework} hwSubs={hwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
+          {active === "attendance" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} refresh={refresh} />}
           {active === "grading" && <Grading subs={subs} tests={tests} profiles={profiles} refresh={refresh} />}
           {active === "students" && <StudentsManager students={students} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
@@ -772,16 +775,17 @@ function StudentPortal({ profile, onLogout }) {
   const [homework, setHomework] = useState([]);
   const [hwSubs, setHwSubs] = useState([]);
   const [courses, setCourses] = useState([]);
+  const [attendance, setAttendance] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, m, sy, hw, hs, co] = await Promise.all([
+      const [b, t, s, m, sy, hw, hs, co, at] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(),
+        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co);
+      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -810,7 +814,7 @@ function StudentPortal({ profile, onLogout }) {
     <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ tests: available.length, homework: availableHw.length }}>
       {loading ? <Spinner /> : (
         <>
-          {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, tests, setActive }} />}
+          {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, tests, attendance, setActive }} />}
           {active === "library" && <StudentLibrary books={visBooks} courses={courses} />}
           {active === "syllabus" && <StudentSyllabus syllabi={syllabi} />}
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
@@ -823,16 +827,19 @@ function StudentPortal({ profile, onLogout }) {
   );
 }
 
-function StudentDash({ profile, books, available, mySubs, tests, setActive }) {
+function StudentDash({ profile, books, available, mySubs, tests, attendance, setActive }) {
   const graded = mySubs.filter((s) => s.status === "graded" && s.max_score);
   const avg = graded.length ? Math.round(graded.reduce((a, s) => a + (s.score / s.max_score) * 100, 0) / graded.length) : null;
+  const att = attendance || [];
+  const attPct = att.length ? Math.round((att.filter((a) => a.status !== "absent").length / att.length) * 100) : null;
   return (
     <>
       <PageHead title={`Welcome, ${(profile.full_name || "Student").split(" ")[0]}`} sub="Your studies at a glance." />
-      <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 24 }}>
-        <Stat icon={BookOpen} label="Books available" value={books.length} />
+      <div className="grid grid-cols-4 gap-4" style={{ marginBottom: 24 }}>
+        <Stat icon={BookOpen} label="Lessons available" value={books.length} />
         <Stat icon={FileText} label="Tests to take" value={available.length} tone={C.gold} />
         <Stat icon={Award} label="Average grade" value={avg !== null ? avg + "%" : "—"} tone={C.green} />
+        <Stat icon={CalendarDays} label="Attendance" value={attPct !== null ? attPct + "%" : "—"} tone={C.ink} />
       </div>
       <div className="grid grid-cols-2 gap-4">
         <Card>
@@ -1498,6 +1505,115 @@ function CoursesManager({ courses, refresh }) {
           </Card>
         ))}
       </div>
+    </>
+  );
+}
+
+/* ---------- ATTENDANCE & PROGRESS (instructor) ---------- */
+const todayStr = () => {
+  const d = new Date();
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+};
+
+function AttendanceManager({ students, attendance, subs, hwSubs, refresh }) {
+  const [date, setDate] = useState(todayStr());
+  const [savingId, setSavingId] = useState(null);
+
+  async function mark(sid, status) {
+    setSavingId(sid);
+    try { await db.setAttendance(sid, date, status); await refresh(); }
+    catch (e) { window.alert(e.message); }
+    setSavingId(null);
+  }
+  const statusOf = (sid) => attendance.find((a) => a.student_id === sid && a.date === date)?.status || null;
+
+  const STATUSES = [
+    { key: "present", label: "Present", color: C.green },
+    { key: "absent", label: "Absent", color: C.rose },
+    { key: "excused", label: "Excused", color: C.gold },
+  ];
+  const dayMarked = students.filter((s) => statusOf(s.id)).length;
+
+  function progress(sid) {
+    const myAtt = attendance.filter((a) => a.student_id === sid);
+    const attended = myAtt.filter((a) => a.status !== "absent").length;
+    const attPct = myAtt.length ? Math.round((attended / myAtt.length) * 100) : null;
+    const ts = subs.filter((s) => s.student_id === sid && s.status === "graded" && s.max_score);
+    const tAvg = ts.length ? Math.round(ts.reduce((a, s) => a + (s.score / s.max_score) * 100, 0) / ts.length) : null;
+    const hs = hwSubs.filter((s) => s.student_id === sid && s.status === "graded" && s.max_points);
+    const hAvg = hs.length ? Math.round(hs.reduce((a, s) => a + (s.score / s.max_points) * 100, 0) / hs.length) : null;
+    return { attCount: myAtt.length, attPct, tCount: ts.length, tAvg, hCount: hs.length, hAvg };
+  }
+
+  return (
+    <>
+      <PageHead title="Attendance & Progress" sub="Mark attendance by date and track each student's progress." />
+
+      <Card style={{ marginBottom: 20 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+          <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>Take attendance</h3>
+          <div className="flex items-center gap-2">
+            <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{dayMarked}/{students.length} marked</span>
+            <input type="date" style={{ ...inputStyle, width: "auto" }} value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+        </div>
+        {students.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No students yet.</span> :
+          <div className="flex flex-col gap-2">
+            {students.map((s) => {
+              const cur = statusOf(s.id);
+              return (
+                <div key={s.id} className="flex items-center justify-between" style={{ padding: "8px 0", borderBottom: `1px solid ${C.line}`, flexWrap: "wrap", gap: 8 }}>
+                  <div className="flex items-center gap-3">
+                    <Initials name={s.full_name} size={34} />
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15 }}>{s.full_name}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    {STATUSES.map((st) => (
+                      <button key={st.key} disabled={savingId === s.id} onClick={() => mark(s.id, st.key)} className="pl-press pl-body"
+                        style={{ padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontSize: 13.5, fontWeight: 600,
+                          border: `1px solid ${cur === st.key ? st.color : C.line}`,
+                          background: cur === st.key ? st.color : "#fff",
+                          color: cur === st.key ? "#fff" : C.muted, opacity: savingId === s.id ? 0.5 : 1 }}>
+                        {st.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>}
+      </Card>
+
+      <Card>
+        <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: "0 0 14px" }}>Student progress</h3>
+        {students.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No students yet.</span> :
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+              <thead>
+                <tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
+                  <th style={{ padding: "6px 8px" }}>Student</th>
+                  <th style={{ padding: "6px 8px" }}>Attendance</th>
+                  <th style={{ padding: "6px 8px" }}>Tests</th>
+                  <th style={{ padding: "6px 8px" }}>Homework</th>
+                </tr>
+              </thead>
+              <tbody>
+                {students.map((s) => {
+                  const p = progress(s.id);
+                  return (
+                    <tr key={s.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                      <td style={{ padding: "10px 8px", fontWeight: 600, color: C.ink }}>{s.full_name}</td>
+                      <td style={{ padding: "10px 8px" }}>{p.attPct !== null ? `${p.attPct}% · ${p.attCount} days` : "—"}</td>
+                      <td style={{ padding: "10px 8px" }}>{p.tCount ? `${p.tCount} done · ${p.tAvg}% avg` : "—"}</td>
+                      <td style={{ padding: "10px 8px" }}>{p.hCount ? `${p.hCount} done · ${p.hAvg}% avg` : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>}
+      </Card>
     </>
   );
 }
