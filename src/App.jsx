@@ -2,15 +2,16 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   BookOpen, FileText, Users, Mail, LayoutDashboard, Plus, Upload, Trash2, Send,
   ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
-  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal,
+  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal, Receipt,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
 import {
-  C, FONTS, QTYPE, inputStyle, Btn, Card, Field, PageHead, Stat, Shell, Spinner, Initials,
+  C, FONTS, QTYPE, inputStyle, Btn, Card, Field, PageHead, Stat, Shell, Spinner, Initials, BRAND,
 } from "./ui.jsx";
 
 const sumPoints = (questions) => (questions || []).reduce((a, q) => a + (Number(q.points) || 0), 0);
+const money = (n) => "$" + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fdate = (d) => (d ? String(d).slice(0, 10) : "");
 
 function autoScore(test, sub) {
@@ -197,12 +198,16 @@ function Auth() {
       background: `radial-gradient(1200px 600px at 50% -10%, ${C.ink2} 0%, ${C.ink} 55%, #0d1528 100%)` }}>
       <div className="pl-fade w-full" style={{ maxWidth: 430 }}>
         <div className="text-center" style={{ marginBottom: 24 }}>
-          <div className="inline-flex items-center justify-center" style={{ width: 64, height: 64, borderRadius: "50%",
-            background: `radial-gradient(circle at 35% 30%, ${C.goldSoft}, ${C.gold})`, boxShadow: `0 0 40px ${C.gold}55`, marginBottom: 16 }}>
-            <Sparkles size={30} color="#1a1407" />
-          </div>
-          <div className="pl-display" style={{ color: "#fff", fontSize: 34, fontWeight: 600 }}>NCTS PureLight</div>
-          <div className="pl-body" style={{ color: C.goldSoft, fontSize: 14, letterSpacing: ".22em", textTransform: "uppercase", marginTop: 4 }}>School of Excellence</div>
+          {BRAND.logoUrl ? (
+            <img src={BRAND.logoUrl} alt={BRAND.name} style={{ width: 84, height: 84, borderRadius: "50%", objectFit: "cover", background: "#fff", boxShadow: `0 0 40px ${C.gold}55`, marginBottom: 16 }} />
+          ) : (
+            <div className="inline-flex items-center justify-center" style={{ width: 64, height: 64, borderRadius: "50%",
+              background: `radial-gradient(circle at 35% 30%, ${C.goldSoft}, ${C.gold})`, boxShadow: `0 0 40px ${C.gold}55`, marginBottom: 16 }}>
+              <Sparkles size={30} color="#1a1407" />
+            </div>
+          )}
+          <div className="pl-display" style={{ color: "#fff", fontSize: 34, fontWeight: 600 }}>{BRAND.name}</div>
+          <div className="pl-body" style={{ color: C.goldSoft, fontSize: 14, letterSpacing: ".22em", textTransform: "uppercase", marginTop: 4 }}>{BRAND.tagline}</div>
         </div>
 
         <Card style={{ padding: 26 }}>
@@ -247,16 +252,17 @@ function InstructorPortal({ profile, onLogout }) {
   const [courses, setCourses] = useState([]);
   const [attendance, setAttendance] = useState([]);
   const [certificates, setCertificates] = useState([]);
+  const [ledger, setLedger] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, p, m, sy, hw, hs, co, at, ce] = await Promise.all([
+      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(),
+        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce);
+      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -277,6 +283,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "attendance", label: "Attendance", icon: CalendarDays },
     { key: "grading", label: "Grading", icon: ClipboardCheck },
     { key: "students", label: "Students", icon: Users },
+    { key: "billing", label: "Billing", icon: Receipt },
     { key: "certificates", label: "Certificates", icon: Medal },
     { key: "messages", label: "Messages", icon: Mail },
   ];
@@ -294,6 +301,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "attendance" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} refresh={refresh} />}
           {active === "grading" && <Grading subs={subs} tests={tests} profiles={profiles} refresh={refresh} />}
           {active === "students" && <StudentsManager students={students} refresh={refresh} />}
+          {active === "billing" && <BillingManager students={students} ledger={ledger} refresh={refresh} />}
           {active === "certificates" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
         </>
@@ -666,8 +674,8 @@ function StudentsManager({ students, refresh }) {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     const res = await db.sendEmail({
       to: email.trim(),
-      subject: "You're invited to NCTS PureLight",
-      html: `<p>Grace and peace,</p><p>You have been invited to enroll at <b>NCTS PureLight</b>. Create your student account here:</p><p><a href="${origin}">${origin}</a></p><p>Choose "Create Account" and sign in to begin.</p>`,
+      subject: `You're invited to ${BRAND.name}`,
+      html: `<p>Grace and peace,</p><p>You have been invited to enroll at <b>${BRAND.name}</b>. Create your student account here:</p><p><a href="${origin}">${origin}</a></p><p>Choose "Create Account" and sign in to begin.</p>`,
     });
     setNote(res.error ? { ok: false, text: "Email not sent — check Resend setup." } : { ok: true, text: "Invitation sent." });
     setEmail(""); setBusy(false);
@@ -717,7 +725,7 @@ function MessagesView({ messages, students, profile, canSend, refresh }) {
     try {
       await db.sendMessage({ recipient: form.recipient, subject: form.subject, body: form.body, sender_name: profile.full_name });
       const emails = form.recipient === "all" ? students.map((s) => s.email).filter(Boolean) : [students.find((s) => s.id === form.recipient)?.email].filter(Boolean);
-      if (emails.length) await db.sendEmail({ to: emails, subject: form.subject, html: `<p>${(form.body || "").replace(/\n/g, "<br/>")}</p><hr/><p style="color:#777">Sent from NCTS PureLight</p>` });
+      if (emails.length) await db.sendEmail({ to: emails, subject: form.subject, html: `<p>${(form.body || "").replace(/\n/g, "<br/>")}</p><hr/><p style="color:#777">Sent from ${BRAND.name}</p>` });
       await refresh();
       setForm({ recipient: "all", subject: "", body: "" }); setCompose(false);
     } catch (e) { window.alert(e.message); }
@@ -780,16 +788,17 @@ function StudentPortal({ profile, onLogout }) {
   const [courses, setCourses] = useState([]);
   const [attendance, setAttendance] = useState([]);
   const [certificates, setCertificates] = useState([]);
+  const [ledger, setLedger] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, m, sy, hw, hs, co, at, ce] = await Promise.all([
+      const [b, t, s, m, sy, hw, hs, co, at, ce, lg] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(),
+        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce);
+      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -812,6 +821,7 @@ function StudentPortal({ profile, onLogout }) {
     { key: "homework", label: "Homework", icon: NotebookPen },
     { key: "grades", label: "Grades", icon: Award },
     { key: "certificates", label: "Certificates", icon: Medal },
+    { key: "tuition", label: "Tuition", icon: Receipt },
     { key: "inbox", label: "Inbox", icon: Mail },
   ];
 
@@ -826,6 +836,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} refresh={refresh} />}
           {active === "grades" && <StudentGrades mySubs={mySubs} tests={tests} />}
           {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
+          {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
         </>
       )}
@@ -1657,8 +1668,9 @@ function openCertificate(cert, studentName) {
     <button class="print" onclick="window.print()">Print / Save as PDF</button>
     <div class="cert"><div class="frame"></div>
       <div class="inner">
+        ${BRAND.logoUrl ? `<img src="${BRAND.logoUrl}" alt="" style="height:66px;width:auto;margin-bottom:12px;border-radius:50%;object-fit:cover;" />` : ""}
         <div class="kicker">Certificate of Completion</div>
-        <div class="school">NCTS PureLight</div>
+        <div class="school">${safe(BRAND.name)}</div>
         <div class="rule"></div>
         <div class="pres">This certificate is proudly presented to</div>
         <div class="name">${safe(studentName)}</div>
@@ -1769,6 +1781,236 @@ function StudentCertificates({ certificates, profile }) {
             </Card>
           ))}
         </div>}
+    </>
+  );
+}
+
+/* ---------- CSV PARSER (handles quoted fields) ---------- */
+function parseCSV(text) {
+  const rows = []; let i = 0, field = "", row = [], inQ = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+      else field += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ",") { row.push(field); field = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        row.push(field); field = "";
+        if (row.length > 1 || (row[0] || "").trim() !== "") rows.push(row);
+        row = [];
+      } else field += c;
+    }
+    i++;
+  }
+  if (field !== "" || row.length) { row.push(field); if (row.length > 1 || (row[0] || "").trim() !== "") rows.push(row); }
+  return rows;
+}
+
+/* ---------- BILLING (instructor) ---------- */
+function BillingManager({ students, ledger, refresh }) {
+  const [selected, setSelected] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [csvNote, setCsvNote] = useState(null);
+  const [charge, setCharge] = useState({ description: "", amount: "", date: todayStr() });
+  const [pay, setPay] = useState({ amount: "", date: todayStr(), method: "Wave", note: "" });
+
+  const entriesFor = (id) => ledger.filter((e) => e.student_id === id);
+  const totals = (id) => {
+    const es = entriesFor(id);
+    const charged = es.filter((e) => e.kind === "charge").reduce((a, e) => a + Number(e.amount || 0), 0);
+    const paid = es.filter((e) => e.kind === "payment").reduce((a, e) => a + Number(e.amount || 0), 0);
+    return { charged, paid, balance: charged - paid };
+  };
+  const nameOf = (id) => students.find((s) => s.id === id)?.full_name || "Student";
+
+  async function addCharge() {
+    if (!charge.amount) return;
+    setBusy(true);
+    try { await db.addLedgerEntry({ student_id: selected, kind: "charge", description: charge.description, amount: charge.amount, date: charge.date }); await refresh(); setCharge({ description: "", amount: "", date: todayStr() }); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function addPayment() {
+    if (!pay.amount) return;
+    setBusy(true);
+    try { await db.addLedgerEntry({ student_id: selected, kind: "payment", description: pay.note || "Payment", amount: pay.amount, date: pay.date, method: pay.method }); await refresh(); setPay({ amount: "", date: todayStr(), method: pay.method, note: "" }); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this entry?")) return;
+    try { await db.deleteLedgerEntry(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function onCsv(file) {
+    if (!file) return;
+    setCsvNote("Reading file…");
+    try {
+      const text = await file.text();
+      const rows = parseCSV(text);
+      if (rows.length < 2) { setCsvNote("That file has no rows under the header."); return; }
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const col = (n) => header.indexOf(n);
+      const iE = col("student_email"), iT = col("type"), iD = col("description"), iA = col("amount"), iDt = col("date"), iM = col("method");
+      if (iE < 0 || iA < 0) { setCsvNote("CSV needs at least 'student_email' and 'amount' columns."); return; }
+      const byEmail = {}; students.forEach((s) => { byEmail[(s.email || "").trim().toLowerCase()] = s.id; });
+      const entries = []; let skipped = 0;
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r]; if (!row || row.every((c) => !(c || "").trim())) continue;
+        const sid = byEmail[(row[iE] || "").trim().toLowerCase()];
+        const amount = parseFloat((row[iA] || "").replace(/[^0-9.\-]/g, ""));
+        const kind = (iT >= 0 && (row[iT] || "").trim().toLowerCase().startsWith("pay")) ? "payment" : "charge";
+        if (!sid || !amount || isNaN(amount)) { skipped++; continue; }
+        entries.push({ student_id: sid, kind, description: iD >= 0 ? (row[iD] || "").trim() : "", amount: Math.abs(amount), date: (iDt >= 0 && (row[iDt] || "").trim()) ? row[iDt].trim() : null, method: iM >= 0 ? (row[iM] || "").trim() : "" });
+      }
+      if (entries.length) await db.bulkAddLedger(entries);
+      await refresh();
+      setCsvNote(`Imported ${entries.length} ${entries.length === 1 ? "entry" : "entries"}${skipped ? `, skipped ${skipped} (unknown email or bad amount)` : ""}.`);
+    } catch (e) { setCsvNote("Couldn't read that file: " + e.message); }
+  }
+
+  if (selected) {
+    const t = totals(selected);
+    const es = [...entriesFor(selected)].sort((a, b) => (a.date < b.date ? -1 : 1));
+    return (
+      <>
+        <PageHead title={nameOf(selected)} sub="Account ledger" action={<Btn kind="ghost" onClick={() => setSelected(null)}>← All students</Btn>} />
+        <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 18 }}>
+          <Stat icon={Receipt} label="Charged" value={money(t.charged)} />
+          <Stat icon={Check} label="Paid" value={money(t.paid)} tone={C.green} />
+          <Stat icon={Receipt} label="Balance due" value={money(t.balance)} tone={t.balance > 0 ? C.rose : C.green} />
+        </div>
+        <div className="grid grid-cols-2 gap-4" style={{ marginBottom: 18 }}>
+          <Card>
+            <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Add a charge</h3>
+            <Field label="Description"><input style={inputStyle} value={charge.description} onChange={(e) => setCharge({ ...charge, description: e.target.value })} placeholder="e.g. Fall tuition" /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Amount"><input style={inputStyle} value={charge.amount} onChange={(e) => setCharge({ ...charge, amount: e.target.value })} placeholder="300" inputMode="decimal" /></Field>
+              <Field label="Date"><input type="date" style={inputStyle} value={charge.date} onChange={(e) => setCharge({ ...charge, date: e.target.value })} /></Field>
+            </div>
+            <Btn small icon={Plus} onClick={addCharge} disabled={busy}>Add charge</Btn>
+          </Card>
+          <Card>
+            <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Record a payment</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Amount"><input style={inputStyle} value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} placeholder="100" inputMode="decimal" /></Field>
+              <Field label="Date"><input type="date" style={inputStyle} value={pay.date} onChange={(e) => setPay({ ...pay, date: e.target.value })} /></Field>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Method"><input style={inputStyle} value={pay.method} onChange={(e) => setPay({ ...pay, method: e.target.value })} placeholder="Wave" /></Field>
+              <Field label="Note (optional)"><input style={inputStyle} value={pay.note} onChange={(e) => setPay({ ...pay, note: e.target.value })} /></Field>
+            </div>
+            <Btn small icon={Plus} onClick={addPayment} disabled={busy}>Record payment</Btn>
+          </Card>
+        </div>
+        <Card>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Statement</h3>
+          {es.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No entries yet.</span> :
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+                <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5 }}>
+                  <th style={{ padding: "6px 8px" }}>Date</th><th style={{ padding: "6px 8px" }}>Description</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Charge</th><th style={{ padding: "6px 8px", textAlign: "right" }}>Payment</th><th></th>
+                </tr></thead>
+                <tbody>
+                  {es.map((e) => (
+                    <tr key={e.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                      <td style={{ padding: "8px" }}>{fdate(e.date)}</td>
+                      <td style={{ padding: "8px" }}>{e.description || (e.kind === "payment" ? "Payment" : "Charge")}{e.method ? ` · ${e.method}` : ""}</td>
+                      <td style={{ padding: "8px", textAlign: "right", color: C.ink }}>{e.kind === "charge" ? money(e.amount) : ""}</td>
+                      <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{e.kind === "payment" ? money(e.amount) : ""}</td>
+                      <td style={{ padding: "8px", textAlign: "right" }}><button onClick={() => remove(e.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>}
+        </Card>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Billing" sub="Charges, payments, and balances. Add entries by hand or import a CSV." />
+      <Card style={{ marginBottom: 18 }}>
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 6px" }}>Import from CSV</h3>
+        <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, margin: "0 0 10px", lineHeight: 1.5 }}>
+          Columns: <b>student_email</b>, <b>type</b> (charge or payment), <b>description</b>, <b>amount</b>, <b>date</b> (YYYY-MM-DD), <b>method</b>. Only <b>student_email</b> and <b>amount</b> are required; rows with an unknown email are skipped.
+        </p>
+        <input type="file" accept=".csv,text/csv" onChange={(e) => onCsv(e.target.files?.[0])} className="pl-body" style={{ fontSize: 13 }} />
+        {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
+      </Card>
+      {students.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card> :
+        <Card>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+              <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
+                <th style={{ padding: "6px 8px" }}>Student</th>
+                <th style={{ padding: "6px 8px", textAlign: "right" }}>Charged</th>
+                <th style={{ padding: "6px 8px", textAlign: "right" }}>Paid</th>
+                <th style={{ padding: "6px 8px", textAlign: "right" }}>Balance</th><th></th>
+              </tr></thead>
+              <tbody>
+                {students.map((s) => {
+                  const t = totals(s.id);
+                  return (
+                    <tr key={s.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                      <td style={{ padding: "10px 8px", fontWeight: 600, color: C.ink }}>{s.full_name}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "right" }}>{money(t.charged)}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "right", color: C.green }}>{money(t.paid)}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "right", fontWeight: 700, color: t.balance > 0 ? C.rose : C.green }}>{money(t.balance)}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "right" }}><Btn small kind="ghost" onClick={() => setSelected(s.id)}>Manage</Btn></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>}
+    </>
+  );
+}
+
+/* ---------- TUITION (student) ---------- */
+function StudentTuition({ ledger }) {
+  const charged = ledger.filter((e) => e.kind === "charge").reduce((a, e) => a + Number(e.amount || 0), 0);
+  const paid = ledger.filter((e) => e.kind === "payment").reduce((a, e) => a + Number(e.amount || 0), 0);
+  const balance = charged - paid;
+  const es = [...ledger].sort((a, b) => (a.date < b.date ? -1 : 1));
+  return (
+    <>
+      <PageHead title="Tuition" sub="Your charges, payments, and balance." />
+      <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
+        <Stat icon={Receipt} label="Total charged" value={money(charged)} />
+        <Stat icon={Check} label="Total paid" value={money(paid)} tone={C.green} />
+        <Stat icon={Receipt} label="Balance due" value={money(balance)} tone={balance > 0 ? C.rose : C.green} />
+      </div>
+      <Card>
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Statement</h3>
+        {es.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No charges or payments on record yet.</span> :
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+              <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5 }}>
+                <th style={{ padding: "6px 8px" }}>Date</th><th style={{ padding: "6px 8px" }}>Description</th>
+                <th style={{ padding: "6px 8px", textAlign: "right" }}>Charge</th><th style={{ padding: "6px 8px", textAlign: "right" }}>Payment</th>
+              </tr></thead>
+              <tbody>
+                {es.map((e) => (
+                  <tr key={e.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                    <td style={{ padding: "8px" }}>{fdate(e.date)}</td>
+                    <td style={{ padding: "8px" }}>{e.description || (e.kind === "payment" ? "Payment" : "Charge")}{e.method ? ` · ${e.method}` : ""}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: C.ink }}>{e.kind === "charge" ? money(e.amount) : ""}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{e.kind === "payment" ? money(e.amount) : ""}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>}
+        {balance > 0 && <p className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 12 }}>Please contact the school office to make a payment on your balance.</p>}
+      </Card>
     </>
   );
 }
