@@ -1,9 +1,27 @@
 import React from "react";
 import { Sparkles, LogOut } from "lucide-react";
 
+// ── White-label branding ─────────────────────────────────────────────
+// Each school sets these as environment variables in its OWN Vercel
+// project. If a value isn't set, it falls back to the NCTS default — so
+// the original NCTS site is never affected.
+const ENV = (typeof import.meta !== "undefined" && import.meta.env) || {};
+export const BRAND = {
+  name:    ENV.VITE_SCHOOL_NAME    || "NCTS PureLight",
+  short:   ENV.VITE_SCHOOL_SHORT   || "NCTS",
+  tagline: ENV.VITE_SCHOOL_TAGLINE || "School of Excellence",
+  logoUrl: ENV.VITE_LOGO_URL       || "",
+};
+
 export const C = {
-  ink: "#15213d", ink2: "#23315a", paper: "#f6f1e7", paper2: "#efe7d5",
-  card: "#fffdf8", gold: "#bd9a44", goldSoft: "#e7d9a8", line: "#e4d9c2",
+  ink:      ENV.VITE_BRAND_INK       || "#15213d",
+  ink2:     ENV.VITE_BRAND_INK2      || "#23315a",
+  paper:    ENV.VITE_BRAND_PAPER     || "#f6f1e7",
+  paper2:   "#efe7d5",
+  card:     "#fffdf8",
+  gold:     ENV.VITE_BRAND_GOLD      || "#bd9a44",
+  goldSoft: ENV.VITE_BRAND_GOLD_SOFT || "#e7d9a8",
+  line:     "#e4d9c2",
   text: "#2c2a24", muted: "#7a7264", green: "#4d7c5a", greenSoft: "#dcebe0",
   rose: "#a8534f", roseSoft: "#f1ddd9",
 };
@@ -132,12 +150,16 @@ export function Shell({ user, onLogout, nav, active, setActive, children, badge 
       <aside style={{ width: 248, background: C.ink, color: "#fff", padding: "22px 16px",
         display: "flex", flexDirection: "column", position: "sticky", top: 0, height: "100vh" }}>
         <div className="flex items-center gap-2" style={{ padding: "0 8px 18px", borderBottom: "1px solid #ffffff1a", marginBottom: 14 }}>
-          <div className="inline-flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: "50%", background: `radial-gradient(circle at 35% 30%, ${C.goldSoft}, ${C.gold})` }}>
-            <Sparkles size={18} color="#1a1407" />
-          </div>
+          {BRAND.logoUrl ? (
+            <img src={BRAND.logoUrl} alt={BRAND.name} style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", background: "#fff", flexShrink: 0 }} />
+          ) : (
+            <div className="inline-flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: "50%", background: `radial-gradient(circle at 35% 30%, ${C.goldSoft}, ${C.gold})`, flexShrink: 0 }}>
+              <Sparkles size={18} color="#1a1407" />
+            </div>
+          )}
           <div>
-            <div className="pl-display" style={{ fontSize: 18, fontWeight: 600, lineHeight: 1 }}>PureLight</div>
-            <div className="pl-body" style={{ fontSize: 10, letterSpacing: ".18em", color: C.goldSoft, textTransform: "uppercase" }}>NCTS</div>
+            <div className="pl-display" style={{ fontSize: 18, fontWeight: 600, lineHeight: 1.05 }}>{BRAND.name}</div>
+            {BRAND.short && <div className="pl-body" style={{ fontSize: 10, letterSpacing: ".18em", color: C.goldSoft, textTransform: "uppercase" }}>{BRAND.short}</div>}
           </div>
         </div>
 
