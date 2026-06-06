@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   BookOpen, FileText, Users, Mail, LayoutDashboard, Plus, Upload, Trash2, Send,
   ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
-  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal, Receipt,
+  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal, Receipt, BarChart3,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
@@ -12,6 +12,41 @@ import {
 
 const sumPoints = (questions) => (questions || []).reduce((a, q) => a + (Number(q.points) || 0), 0);
 const money = (n) => "$" + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/* ---- Grade scale + GPA (standard 4.0) ---- */
+function gradeInfo(pct) {
+  const p = Number(pct);
+  if (isNaN(p)) return { letter: "—", points: null };
+  if (p >= 93) return { letter: "A", points: 4.0 };
+  if (p >= 90) return { letter: "A-", points: 3.7 };
+  if (p >= 87) return { letter: "B+", points: 3.3 };
+  if (p >= 83) return { letter: "B", points: 3.0 };
+  if (p >= 80) return { letter: "B-", points: 2.7 };
+  if (p >= 77) return { letter: "C+", points: 2.3 };
+  if (p >= 73) return { letter: "C", points: 2.0 };
+  if (p >= 70) return { letter: "C-", points: 1.7 };
+  if (p >= 67) return { letter: "D+", points: 1.3 };
+  if (p >= 63) return { letter: "D", points: 1.0 };
+  if (p >= 60) return { letter: "D-", points: 0.7 };
+  return { letter: "F", points: 0.0 };
+}
+
+function gradedItems(studentId, subs, tests, hwSubs, homework, courses) {
+  const cTitle = (cid) => courses.find((c) => c.id === cid)?.title || "General";
+  const items = [];
+  (subs || []).filter((s) => s.student_id === studentId && s.status === "graded" && s.max_score)
+    .forEach((s) => { const t = (tests || []).find((x) => x.id === s.test_id); items.push({ kind: "Test", title: t?.title || "Test", course: cTitle(t?.course_id), score: s.score, max: s.max_score, pct: (s.score / s.max_score) * 100 }); });
+  (hwSubs || []).filter((s) => s.student_id === studentId && s.status === "graded" && s.max_points)
+    .forEach((s) => { const h = (homework || []).find((x) => x.id === s.homework_id); items.push({ kind: "Homework", title: h?.title || "Homework", course: cTitle(h?.course_id), score: s.score, max: s.max_points, pct: (s.score / s.max_points) * 100 }); });
+  return items;
+}
+
+function summarize(items) {
+  if (!items.length) return { count: 0, avgPct: null, gpa: null, letter: "—" };
+  const avgPct = items.reduce((a, i) => a + i.pct, 0) / items.length;
+  const gpa = items.reduce((a, i) => a + gradeInfo(i.pct).points, 0) / items.length;
+  return { count: items.length, avgPct, gpa, letter: gradeInfo(avgPct).letter };
+}
 const fdate = (d) => (d ? String(d).slice(0, 10) : "");
 
 function autoScore(test, sub) {
@@ -282,6 +317,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "homework", label: "Homework", icon: NotebookPen },
     { key: "attendance", label: "Attendance", icon: CalendarDays },
     { key: "grading", label: "Grading", icon: ClipboardCheck },
+    { key: "reports", label: "Reports", icon: BarChart3 },
     { key: "students", label: "Students", icon: Users },
     { key: "billing", label: "Billing", icon: Receipt },
     { key: "certificates", label: "Certificates", icon: Medal },
@@ -300,6 +336,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "homework" && <HomeworkManager homework={homework} hwSubs={hwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
           {active === "attendance" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} refresh={refresh} />}
           {active === "grading" && <Grading subs={subs} tests={tests} profiles={profiles} refresh={refresh} />}
+          {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses} />}
           {active === "students" && <StudentsManager students={students} refresh={refresh} />}
           {active === "billing" && <BillingManager students={students} ledger={ledger} refresh={refresh} />}
           {active === "certificates" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
@@ -834,7 +871,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "syllabus" && <StudentSyllabus syllabi={syllabi} />}
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} refresh={refresh} />}
-          {active === "grades" && <StudentGrades mySubs={mySubs} tests={tests} />}
+          {active === "grades" && <StudentGrades mySubs={mySubs} tests={tests} myHwSubs={myHwSubs} homework={homework} courses={courses} profile={profile} />}
           {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
           {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
@@ -988,10 +1025,19 @@ function StudentTests({ available, books, courses, refresh }) {
   );
 }
 
-function StudentGrades({ mySubs, tests }) {
+function StudentGrades({ mySubs, tests, myHwSubs, homework, courses, profile }) {
+  const items = gradedItems(profile.id, mySubs, tests, myHwSubs, homework, courses);
+  const sum = summarize(items);
   return (
     <>
-      <PageHead title="Grades" sub="Your results and instructor feedback." />
+      <PageHead title="Grades" sub="Your results, GPA, and instructor feedback." action={items.length ? <Btn icon={ExternalLink} onClick={() => openTranscript(profile.full_name, items, sum)}>Print transcript</Btn> : null} />
+      {items.length > 0 && (
+        <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
+          <Stat icon={Award} label="Average" value={Math.round(sum.avgPct) + "%"} />
+          <Stat icon={Award} label="Letter grade" value={sum.letter} tone={C.gold} />
+          <Stat icon={GraduationCap} label="GPA (4.0)" value={sum.gpa.toFixed(2)} tone={C.green} />
+        </div>
+      )}
       {mySubs.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No submissions yet.</span></Card> :
         <div className="flex flex-col gap-3">
           {mySubs.map((s) => {
@@ -2013,4 +2059,95 @@ function StudentTuition({ ledger }) {
       </Card>
     </>
   );
+}
+
+/* ---------- GRADE REPORT (instructor) ---------- */
+function GradeReport({ students, subs, tests, hwSubs, homework, courses }) {
+  return (
+    <>
+      <PageHead title="Reports" sub="Each student's grades, average, and GPA. Print a transcript for anyone." />
+      {students.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card> :
+        <Card>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+              <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
+                <th style={{ padding: "6px 8px" }}>Student</th>
+                <th style={{ padding: "6px 8px", textAlign: "center" }}>Graded</th>
+                <th style={{ padding: "6px 8px", textAlign: "center" }}>Average</th>
+                <th style={{ padding: "6px 8px", textAlign: "center" }}>Letter</th>
+                <th style={{ padding: "6px 8px", textAlign: "center" }}>GPA</th>
+                <th></th>
+              </tr></thead>
+              <tbody>
+                {students.map((s) => {
+                  const items = gradedItems(s.id, subs, tests, hwSubs, homework, courses);
+                  const sum = summarize(items);
+                  return (
+                    <tr key={s.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                      <td style={{ padding: "10px 8px", fontWeight: 600, color: C.ink }}>{s.full_name}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "center" }}>{sum.count || "—"}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "center" }}>{sum.avgPct !== null ? Math.round(sum.avgPct) + "%" : "—"}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, color: C.gold }}>{sum.letter}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, color: C.ink }}>{sum.gpa !== null ? sum.gpa.toFixed(2) : "—"}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "right" }}>
+                        {sum.count ? <Btn small icon={ExternalLink} onClick={() => openTranscript(s.full_name, items, sum)}>Transcript</Btn> : <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>No grades</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>}
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 12 }}>GPA uses a standard 4.0 scale, averaged across all graded tests and homework.</p>
+    </>
+  );
+}
+
+function openTranscript(studentName, items, summary) {
+  const safe = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  const dateStr = new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  const groups = {};
+  items.forEach((it) => { (groups[it.course] = groups[it.course] || []).push(it); });
+  const body = Object.keys(groups).map((course) => {
+    const rs = groups[course].map((it) => `<tr><td>${safe(it.title)}</td><td>${safe(it.kind)}</td><td class="r">${it.score}/${it.max}</td><td class="r">${Math.round(it.pct)}%</td><td class="r b">${gradeInfo(it.pct).letter}</td></tr>`).join("");
+    return `<tr class="course"><td colspan="5">${safe(course)}</td></tr>${rs}`;
+  }).join("");
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Transcript — ${safe(studentName)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    @page { size: portrait; margin: 0.6in; }
+    * { box-sizing: border-box; }
+    body { font-family:'Source Serif 4',Georgia,serif; color:#15213d; margin:0; padding:28px; }
+    .head { border-bottom:3px solid #bd9a44; padding-bottom:12px; margin-bottom:18px; }
+    .kick { letter-spacing:.28em; text-transform:uppercase; font-size:11px; color:#9a7b2e; font-weight:600; }
+    .school { font-family:'Fraunces',serif; font-size:26px; font-weight:600; margin:2px 0 0; }
+    .doc { font-family:'Fraunces',serif; font-size:15px; color:#5b6478; margin-top:2px; }
+    .meta { display:flex; justify-content:space-between; font-size:14px; margin:14px 0 18px; }
+    .meta b { font-family:'Fraunces',serif; }
+    table { width:100%; border-collapse:collapse; font-size:13.5px; }
+    th { text-align:left; color:#7a7264; font-size:11px; text-transform:uppercase; letter-spacing:.05em; border-bottom:1px solid #d9c184; padding:6px 8px; }
+    td { padding:7px 8px; border-bottom:1px solid #eee3cc; }
+    td.r, th.r { text-align:right; } td.b { font-weight:700; }
+    tr.course td { background:#f6f1e7; font-weight:700; font-family:'Fraunces',serif; color:#15213d; border-bottom:1px solid #d9c184; }
+    .sum { margin-top:22px; display:flex; gap:34px; align-items:flex-end; border-top:2px solid #15213d; padding-top:14px; }
+    .sum .n { font-family:'Fraunces',serif; font-size:30px; font-weight:600; }
+    .sum .l { font-size:12px; color:#7a7264; text-transform:uppercase; letter-spacing:.06em; }
+    .print { position:fixed; top:14px; right:14px; background:#15213d; color:#f6f1e7; border:none; padding:9px 16px; border-radius:8px; font-family:'Source Serif 4',serif; font-size:13px; cursor:pointer; }
+    @media print { .print { display:none; } body { padding:0; } }
+  </style></head><body>
+    <button class="print" onclick="window.print()">Print / Save as PDF</button>
+    <div class="head"><div class="kick">${safe(BRAND.name)}</div><div class="school">Academic Transcript</div><div class="doc">Grade Report</div></div>
+    <div class="meta"><div>Student: <b>${safe(studentName)}</b></div><div>Issued: <b>${dateStr}</b></div></div>
+    <table><thead><tr><th>Item</th><th>Type</th><th class="r">Score</th><th class="r">%</th><th class="r">Grade</th></tr></thead><tbody>${body}</tbody></table>
+    <div class="sum">
+      <div><div class="n">${summary.count}</div><div class="l">Graded items</div></div>
+      <div><div class="n">${Math.round(summary.avgPct)}%</div><div class="l">Average</div></div>
+      <div><div class="n">${gradeInfo(summary.avgPct).letter}</div><div class="l">Letter grade</div></div>
+      <div><div class="n">${summary.gpa.toFixed(2)}</div><div class="l">GPA (4.0 scale)</div></div>
+    </div>
+  </body></html>`;
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); } else window.alert("Please allow pop-ups to view the transcript.");
 }
