@@ -163,7 +163,7 @@ export function Shell({ user, onLogout, nav, active, setActive, children, badge 
           </div>
         </div>
 
-        <nav className="flex flex-col gap-1" style={{ flex: 1 }}>
+        <nav className="flex flex-col gap-1" style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
           {nav.map((n) => (
             <button key={n.key} onClick={() => setActive(n.key)}
               className="pl-body pl-press flex items-center gap-3 transition" style={{ textAlign: "left",
