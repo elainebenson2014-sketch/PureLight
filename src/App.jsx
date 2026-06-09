@@ -191,7 +191,7 @@ export default function App() {
             <div style={{ marginTop: 12 }}><Btn onClick={logout}>Sign out</Btn></div>
           </Card>
         </div>
-      ) : (profile.role === "instructor" || profile.role === "admin") ? (
+      ) : (profile.role === "instructor" || profile.role === "admin" || profile.role === "assistant") ? (
         <InstructorPortal profile={profile} onLogout={logout} />
       ) : (
         <StudentPortal profile={profile} onLogout={logout} />
@@ -288,16 +288,17 @@ function InstructorPortal({ profile, onLogout }) {
   const [attendance, setAttendance] = useState([]);
   const [certificates, setCertificates] = useState([]);
   const [ledger, setLedger] = useState([]);
+  const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg] = await Promise.all([
+      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(),
+        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listInstructorCourses(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg);
+      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setAssignments(ic);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -323,9 +324,18 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "certificates", label: "Certificates", icon: Medal },
     { key: "messages", label: "Messages", icon: Mail },
   ];
-  // Administration sees everything; Instructors get the teaching subset.
-  const adminOnly = ["students", "billing", "certificates"];
-  const nav = profile.role === "admin" ? fullNav : fullNav.filter((n) => !adminOnly.includes(n.key));
+  // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
+  let nav = fullNav;
+  if (profile.role === "instructor") nav = fullNav.filter((n) => !["students", "billing", "certificates"].includes(n.key));
+  else if (profile.role === "assistant") nav = fullNav.filter((n) => !["billing", "certificates"].includes(n.key));
+
+  // For an Instructor, grading is limited to the courses they're assigned.
+  const myCourseSet = profile.role === "instructor"
+    ? new Set(assignments.filter((a) => a.instructor_id === profile.id).map((a) => a.course_id))
+    : null;
+  const gradeSubs = myCourseSet ? subs.filter((s) => myCourseSet.has((tests.find((t) => t.id === s.test_id) || {}).course_id)) : subs;
+  const scopedHomework = myCourseSet ? homework.filter((h) => myCourseSet.has(h.course_id)) : homework;
+  const scopedHwSubs = myCourseSet ? hwSubs.filter((s) => myCourseSet.has((homework.find((h) => h.id === s.homework_id) || {}).course_id)) : hwSubs;
 
   return (
     <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ grading: pending, homework: pendingHw }}>
@@ -336,11 +346,11 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "library" && <LibraryManager books={books} courses={courses} refresh={refresh} profile={profile} />}
           {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
           {active === "tests" && <TestsManager tests={tests} books={books} courses={courses} refresh={refresh} />}
-          {active === "homework" && <HomeworkManager homework={homework} hwSubs={hwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
+          {active === "homework" && <HomeworkManager homework={scopedHomework} hwSubs={scopedHwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
           {active === "attendance" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} refresh={refresh} />}
-          {active === "grading" && <Grading subs={subs} tests={tests} profiles={profiles} refresh={refresh} />}
+          {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} />}
           {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses} />}
-          {active === "students" && profile.role === "admin" && <StudentsManager profiles={profiles} meId={profile.id} refresh={refresh} />}
+          {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
           {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} refresh={refresh} />}
           {active === "certificates" && profile.role === "admin" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
@@ -698,8 +708,8 @@ function Grading({ subs, tests, profiles, refresh }) {
   );
 }
 
-/* ---------- STUDENTS ---------- */
-function StudentsManager({ profiles, meId, refresh }) {
+/* ---------- PEOPLE ---------- */
+function StudentsManager({ profiles, meId, courses, assignments, canSetRole, refresh }) {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);
@@ -709,6 +719,13 @@ function StudentsManager({ profiles, meId, refresh }) {
   }
   async function changeRole(id, role) {
     try { await db.setRole(id, role); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function toggleCourse(instructorId, courseId, isOn) {
+    try {
+      if (isOn) await db.unassignCourse(instructorId, courseId);
+      else await db.assignCourse(instructorId, courseId);
+      await refresh();
+    } catch (e) { window.alert(e.message); }
   }
 
   async function invite() {
@@ -724,44 +741,80 @@ function StudentsManager({ profiles, meId, refresh }) {
     setEmail(""); setBusy(false);
   }
 
-  const ROLES = [{ key: "student", label: "Student" }, { key: "instructor", label: "Instructor" }, { key: "admin", label: "Administration" }];
+  const ROLES = [
+    { key: "student", label: "Student" },
+    { key: "instructor", label: "Instructor" },
+    { key: "assistant", label: "Assistant" },
+    { key: "admin", label: "Administration" },
+  ];
+  const roleLabel = (r) => ROLES.find((x) => x.key === r)?.label || r;
   const people = [...(profiles || [])].sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
+  const assignedSet = (instructorId) => new Set((assignments || []).filter((a) => a.instructor_id === instructorId).map((a) => a.course_id));
 
   return (
     <>
-      <PageHead title="People" sub="Invite students, and set each person's role and level." />
+      <PageHead title="People" sub="Invite students, set roles and levels, and assign instructors to courses." />
       <Card style={{ marginBottom: 18 }}>
         <div className="flex items-end gap-3">
           <div style={{ flex: 1 }}><Field label="Invite a student by email"><input style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="student@example.com" /></Field></div>
           <div style={{ marginBottom: 14 }}><Btn icon={Send} onClick={invite} disabled={busy}>{busy ? "Sending…" : "Send invite"}</Btn></div>
         </div>
         {note && <div className="pl-body" style={{ fontSize: 13, color: note.ok ? C.green : C.rose }}>{note.text}</div>}
-        <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, margin: "6px 0 0" }}>To add an instructor: have them create an account, then set their role to <b>Instructor</b> below.</p>
+        {canSetRole && <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, margin: "6px 0 0" }}>To add an instructor: have them create an account, then set their role to <b>Instructor</b> and check the courses they should grade.</p>}
       </Card>
       <div className="flex flex-col gap-2">
         {people.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No people yet.</span></Card>}
-        {people.map((s) => (
-          <Card key={s.id} style={{ padding: 16 }}>
-            <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
-              <Initials name={s.full_name} size={40} />
-              <div style={{ flex: 1, minWidth: 150 }}>
-                <div className="pl-body" style={{ fontWeight: 600, fontSize: 15 }}>{s.full_name || "(no name)"}{s.id === meId ? " · you" : ""}</div>
-                <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{s.email}</div>
+        {people.map((s) => {
+          const aset = s.role === "instructor" ? assignedSet(s.id) : null;
+          return (
+            <Card key={s.id} style={{ padding: 16 }}>
+              <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+                <Initials name={s.full_name} size={40} />
+                <div style={{ flex: 1, minWidth: 150 }}>
+                  <div className="pl-body" style={{ fontWeight: 600, fontSize: 15 }}>{s.full_name || "(no name)"}{s.id === meId ? " · you" : ""}</div>
+                  <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{s.email}</div>
+                </div>
+                {canSetRole ? (
+                  <select value={s.role} disabled={s.id === meId} onChange={(e) => changeRole(s.id, e.target.value)}
+                    title={s.id === meId ? "You can't change your own role" : "Set role"}
+                    style={{ ...inputStyle, width: 150, padding: "7px 10px", opacity: s.id === meId ? 0.6 : 1, cursor: s.id === meId ? "not-allowed" : "pointer" }}>
+                    {ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+                  </select>
+                ) : (
+                  <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: C.ink, background: C.paper2, padding: "6px 12px", borderRadius: 20 }}>{roleLabel(s.role)}</span>
+                )}
+                {s.role === "student" && (
+                  <select value={s.program || ""} onChange={(e) => setProg(s.id, e.target.value)} style={{ ...inputStyle, width: 150, padding: "7px 10px" }}>
+                    <option value="">— level —</option>
+                    {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+                  </select>
+                )}
               </div>
-              <select value={s.role} disabled={s.id === meId} onChange={(e) => changeRole(s.id, e.target.value)}
-                title={s.id === meId ? "You can't change your own role" : "Set role"}
-                style={{ ...inputStyle, width: 150, padding: "7px 10px", opacity: s.id === meId ? 0.6 : 1, cursor: s.id === meId ? "not-allowed" : "pointer" }}>
-                {ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
-              </select>
-              {s.role === "student" && (
-                <select value={s.program || ""} onChange={(e) => setProg(s.id, e.target.value)} style={{ ...inputStyle, width: 150, padding: "7px 10px" }}>
-                  <option value="">— level —</option>
-                  {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
-                </select>
+              {s.role === "instructor" && (
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
+                  <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>Courses this instructor grades</div>
+                  {(!courses || courses.length === 0) ? (
+                    <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>No courses yet — create courses first.</span>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {courses.map((c) => {
+                        const on = aset.has(c.id);
+                        return (
+                          <button key={c.id} onClick={() => toggleCourse(s.id, c.id, on)} className="pl-body pl-press"
+                            style={{ padding: "6px 12px", borderRadius: 20, cursor: "pointer", fontSize: 13, fontWeight: 600,
+                              border: `1px solid ${on ? C.ink : C.line}`, background: on ? C.ink : "#fff", color: on ? "#fff" : C.muted }}>
+                            {on ? "✓ " : ""}{c.title}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>They only grade tests and homework from the selected courses.</p>
+                </div>
               )}
-            </div>
-          </Card>
-        ))}
+            </Card>
+          );
+        })}
       </div>
     </>
   );
