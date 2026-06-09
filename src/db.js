@@ -358,3 +358,9 @@ export async function deleteLedgerEntry(id) {
   const { error } = await supabase.from("pl_ledger").delete().eq("id", id);
   if (error) throw error;
 }
+
+/* ---------------- ROLES ---------------- */
+export async function setRole(id, role) {
+  const { error } = await supabase.from("pl_profiles").update({ role }).eq("id", id);
+  if (error) throw error;
+}
