@@ -85,6 +85,7 @@ export async function saveTest(test, questions) {
       course_id: test.course_id || null, module: test.module || null,
     }).eq("id", testId);
     if (error) throw error;
+    // simplest reliable sync: clear old questions, insert current set
     await supabase.from("pl_questions").delete().eq("test_id", testId);
   } else {
     const { data, error } = await supabase.from("pl_tests").insert({
@@ -159,6 +160,8 @@ export async function sendMessage({ recipient, subject, body, sender_name }) {
   if (error) throw error;
 }
 
+/* Fire the real email through the Vercel function. Never throws — UI continues
+   even if email delivery isn't configured yet. */
 export async function sendEmail({ to, subject, html }) {
   try {
     const r = await fetch("/api/send-email", {
@@ -362,5 +365,25 @@ export async function deleteLedgerEntry(id) {
 /* ---------------- ROLES ---------------- */
 export async function setRole(id, role) {
   const { error } = await supabase.from("pl_profiles").update({ role }).eq("id", id);
+  if (error) throw error;
+}
+
+/* ---------------- INSTRUCTOR <-> COURSE ASSIGNMENTS ---------------- */
+export async function listInstructorCourses() {
+  const { data, error } = await supabase.from("pl_instructor_courses").select("*");
+  if (error) throw error;
+  return data;
+}
+
+export async function assignCourse(instructor_id, course_id) {
+  const { error } = await supabase.from("pl_instructor_courses").upsert(
+    { instructor_id, course_id }, { onConflict: "instructor_id,course_id" }
+  );
+  if (error) throw error;
+}
+
+export async function unassignCourse(instructor_id, course_id) {
+  const { error } = await supabase.from("pl_instructor_courses").delete()
+    .eq("instructor_id", instructor_id).eq("course_id", course_id);
   if (error) throw error;
 }
