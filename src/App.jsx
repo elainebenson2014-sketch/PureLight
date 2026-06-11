@@ -1270,6 +1270,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
   const [score, setScore] = useState("");
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
+  const [csvNote, setCsvNote] = useState(null);
   const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
   const titleOf = (id) => homework.find((h) => h.id === id)?.title || "Homework";
 
@@ -1291,6 +1292,44 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
     try { await db.saveHomework(draft, qs, file); await refresh(); setMode("list"); }
     catch (e) { window.alert(e.message); }
     setBusy(false);
+  }
+  async function importCsv(file) {
+    if (!file) return;
+    setCsvNote("Reading file\u2026");
+    try {
+      const text = await file.text();
+      const rows = parseCSV(text);
+      if (rows.length < 2) { setCsvNote("That file has no rows under the header."); return; }
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const col = (n) => header.indexOf(n);
+      const iCourse = col("course_code"), iTitle = col("assignment_title"), iDue = col("due_date"), iType = col("type"), iPts = col("points"), iQ = col("question");
+      if (iCourse < 0 || iTitle < 0 || iQ < 0) { setCsvNote("CSV needs course_code, assignment_title, and question columns."); return; }
+      const groups = new Map(); const order = [];
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r]; if (!row || row.every((c) => !(c || "").trim())) continue;
+        const code = (row[iCourse] || "").trim(), title = (row[iTitle] || "").trim(), q = (row[iQ] || "").trim();
+        if (!code || !title || !q) continue;
+        const key = code + "||" + title;
+        if (!groups.has(key)) { groups.set(key, { code, title, due: iDue >= 0 ? (row[iDue] || "").trim() : "", questions: [] }); order.push(key); }
+        let type = iType >= 0 ? (row[iType] || "").trim().toLowerCase() : "short";
+        if (!QTYPE[type]) type = "short";
+        const pts = iPts >= 0 && (row[iPts] || "").trim() !== "" ? Number(row[iPts]) : 1;
+        groups.get(key).questions.push({ type, prompt: q, points: pts });
+      }
+      const codeMap = new Map();
+      (courses || []).forEach((c) => { if (c.code) codeMap.set(c.code.trim().toLowerCase(), c); });
+      let made = 0; const skipped = [];
+      setCsvNote(`Importing ${order.length} assignment${order.length === 1 ? "" : "s"}\u2026`);
+      for (const key of order) {
+        const g = groups.get(key); const c = codeMap.get(g.code.toLowerCase());
+        if (!c) { skipped.push(g.code); continue; }
+        await db.saveHomework({ id: null, title: g.title, instructions: "", due_date: g.due || "", points: 0, program: c.program || "all", course_id: c.id, module: "" }, g.questions, null);
+        made++;
+      }
+      await refresh();
+      const uniq = [...new Set(skipped)];
+      setCsvNote(`Created ${made} assignment${made === 1 ? "" : "s"}.${uniq.length ? ` Skipped (course code not found \u2014 import courses first): ${uniq.join(", ")}.` : ""}`);
+    } catch (e) { setCsvNote("Couldn't import: " + e.message); }
   }
   async function removeHw(id) {
     if (!window.confirm("Delete this assignment?")) return;
@@ -1454,6 +1493,14 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
   return (
     <>
       <PageHead title="Homework" sub="Assignments and submissions." action={<Btn icon={Plus} onClick={newHw}>New assignment</Btn>} />
+      <Card style={{ marginBottom: 18 }}>
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 6px" }}>Import homework from CSV</h3>
+        <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, margin: "0 0 10px", lineHeight: 1.5 }}>
+          One row per question. Columns: <b>course_code</b>, <b>assignment_title</b>, <b>due_date</b>, <b>type</b> (short / tf / essay), <b>points</b>, <b>question</b>. Rows sharing a course code and title become one assignment. Import your courses first so the codes resolve.
+        </p>
+        <input type="file" accept=".csv,text/csv" onChange={(e) => importCsv(e.target.files?.[0])} className="pl-body" style={{ fontSize: 13 }} />
+        {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
+      </Card>
       <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Assignments</h3>
       <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
         {homework.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No assignments yet.</span></Card>}
