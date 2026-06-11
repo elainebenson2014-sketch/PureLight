@@ -279,11 +279,27 @@ export async function listCourses() {
   return data;
 }
 
-export async function createCourse({ title, description, program }) {
+export async function createCourse({ title, description, program, code, credit_hours }) {
   const { data: { user } } = await supabase.auth.getUser();
+  const ch = (credit_hours !== undefined && credit_hours !== null && credit_hours !== "") ? Number(credit_hours) : null;
   const { error } = await supabase.from("pl_courses").insert({
-    title, description: description || "", program: program || "all", created_by: user.id,
+    title, description: description || "", program: program || "all",
+    code: code || null, credit_hours: ch, created_by: user.id,
   });
+  if (error) throw error;
+}
+
+export async function bulkAddCourses(rows) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const recs = rows.map((r) => ({
+    code: r.code || null,
+    title: r.title,
+    description: r.description || "",
+    program: r.program || "all",
+    credit_hours: (r.credit_hours !== undefined && r.credit_hours !== null && r.credit_hours !== "") ? Number(r.credit_hours) : null,
+    created_by: user.id,
+  }));
+  const { error } = await supabase.from("pl_courses").insert(recs);
   if (error) throw error;
 }
 
