@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback } from "react";
 import {
   BookOpen, FileText, Users, Mail, LayoutDashboard, Plus, Upload, Trash2, Send,
@@ -438,7 +437,7 @@ function LibraryManager({ books, courses, refresh, profile }) {
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 90 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <Field label="Program / level"><ProgramSelect value={form.program} onChange={(v) => setForm({ ...form, program: v })} /></Field>
           <Field label="Video link — YouTube, Vimeo, etc. (optional)"><input style={inputStyle} value={form.video_url} onChange={(e) => setForm({ ...form, video_url: e.target.value })} placeholder="https://youtu.be/…" /></Field>
-          <CourseFields courses={courses} courseId={form.course_id} module={form.module} onCourse={(v) => setForm({ ...form, course_id: v })} onModule={(v) => setForm({ ...form, module: v })} />
+          <CourseFields courses={courses} courseId={form.course_id} module={form.module} onCourse={(v) => { const c = courses.find((x) => x.id === v); setForm({ ...form, course_id: v, program: c && c.program ? c.program : form.program }); }} onModule={(v) => setForm({ ...form, module: v })} />
           <div className="grid grid-cols-2 gap-4">
             <Field label="Pages"><input style={inputStyle} type="number" value={form.pages} onChange={(e) => setForm({ ...form, pages: e.target.value })} /></Field>
             <Field label="PDF or video file (optional)">
@@ -527,7 +526,7 @@ function TestsManager({ tests, books, courses, refresh }) {
           </div>
           <Field label="Instructions"><input style={inputStyle} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What this test covers" /></Field>
           <Field label="Program / level"><ProgramSelect value={draft.program} onChange={(v) => setDraft({ ...draft, program: v })} /></Field>
-          <CourseFields courses={courses} courseId={draft.course_id} module={draft.module} onCourse={(v) => setDraft({ ...draft, course_id: v })} onModule={(v) => setDraft({ ...draft, module: v })} />
+          <CourseFields courses={courses} courseId={draft.course_id} module={draft.module} onCourse={(v) => { const c = courses.find((x) => x.id === v); setDraft({ ...draft, course_id: v, program: c && c.program ? c.program : draft.program }); }} onModule={(v) => setDraft({ ...draft, module: v })} />
         </Card>
 
         {qs.map((q, i) => (
@@ -924,6 +923,7 @@ function StudentPortal({ profile, onLogout }) {
 
   const nav = [
     { key: "dash", label: "Dashboard", icon: LayoutDashboard },
+    { key: "courses", label: "My Courses", icon: GraduationCap },
     { key: "library", label: "Library", icon: Library },
     { key: "syllabus", label: "Syllabus", icon: ScrollText },
     { key: "tests", label: "My Tests", icon: FileText },
@@ -939,6 +939,7 @@ function StudentPortal({ profile, onLogout }) {
       {loading ? <Spinner /> : (
         <>
           {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, tests, attendance, setActive }} />}
+          {active === "courses" && <StudentCourses courses={courses} profile={profile} />}
           {active === "library" && <StudentLibrary books={visBooks} courses={courses} />}
           {active === "syllabus" && <StudentSyllabus syllabi={syllabi} />}
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
@@ -992,6 +993,31 @@ function StudentDash({ profile, books, available, mySubs, tests, attendance, set
             ))}
         </Card>
       </div>
+    </>
+  );
+}
+
+function StudentCourses({ courses, profile }) {
+  const mine = (courses || [])
+    .filter((c) => c.program === profile.program || c.program === "all")
+    .sort((a, b) => (a.code || a.title || "").localeCompare(b.code || b.title || ""));
+  return (
+    <>
+      <PageHead title="My Courses" sub="The courses in your program." />
+      {mine.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No courses are listed for your program yet. Check back soon.</span></Card>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {mine.map((c) => (
+            <Card key={c.id}>
+              <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} \u2014 ` : ""}{c.title}</h3>
+              <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>
+                {c.credit_hours ? `${c.credit_hours} credit hours` : ""}{c.credit_hours && c.description ? " \u00B7 " : ""}{c.description || ""}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
     </>
   );
 }
@@ -1302,7 +1328,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
             <Field label="Due date (optional)"><input type="date" style={inputStyle} value={draft.due_date} onChange={(e) => setDraft({ ...draft, due_date: e.target.value })} /></Field>
             <Field label="Points (if no questions)"><input type="number" style={inputStyle} value={draft.points} onChange={(e) => setDraft({ ...draft, points: e.target.value })} /></Field>
           </div>
-          <CourseFields courses={courses} courseId={draft.course_id} module={draft.module} onCourse={(v) => setDraft({ ...draft, course_id: v })} onModule={(v) => setDraft({ ...draft, module: v })} />
+          <CourseFields courses={courses} courseId={draft.course_id} module={draft.module} onCourse={(v) => { const c = courses.find((x) => x.id === v); setDraft({ ...draft, course_id: v, program: c && c.program ? c.program : draft.program }); }} onModule={(v) => setDraft({ ...draft, module: v })} />
           <Field label="Attachment (optional PDF for students)">
             <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
               <Upload size={16} color={C.muted} />
