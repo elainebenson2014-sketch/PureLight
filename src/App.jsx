@@ -290,16 +290,17 @@ function InstructorPortal({ profile, onLogout }) {
   const [certificates, setCertificates] = useState([]);
   const [ledger, setLedger] = useState([]);
   const [assignments, setAssignments] = useState([]);
+  const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic] = await Promise.all([
+      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listInstructorCourses(),
+        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listInstructorCourses(), db.listSessions(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setAssignments(ic);
+      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setAssignments(ic); setSessions(se);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -317,6 +318,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "syllabus", label: "Syllabus", icon: ScrollText },
     { key: "tests", label: "Tests", icon: FileText },
     { key: "homework", label: "Homework", icon: NotebookPen },
+    { key: "classes", label: "Live Classes", icon: PlayCircle },
     { key: "attendance", label: "Attendance", icon: CalendarDays },
     { key: "grading", label: "Grading", icon: ClipboardCheck },
     { key: "reports", label: "Reports", icon: BarChart3 },
@@ -348,6 +350,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
           {active === "tests" && <TestsManager tests={tests} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <HomeworkManager homework={scopedHomework} hwSubs={scopedHwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
+          {active === "classes" && <ScheduleManager sessions={sessions} courses={courses} students={students} profile={profile} refresh={refresh} />}
           {active === "attendance" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} refresh={refresh} />}
           {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} />}
           {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses} />}
@@ -897,16 +900,17 @@ function StudentPortal({ profile, onLogout }) {
   const [attendance, setAttendance] = useState([]);
   const [certificates, setCertificates] = useState([]);
   const [ledger, setLedger] = useState([]);
+  const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, m, sy, hw, hs, co, at, ce, lg] = await Promise.all([
+      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(),
+        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listSessions(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg);
+      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setSessions(se);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -924,6 +928,7 @@ function StudentPortal({ profile, onLogout }) {
   const nav = [
     { key: "dash", label: "Dashboard", icon: LayoutDashboard },
     { key: "courses", label: "My Courses", icon: GraduationCap },
+    { key: "schedule", label: "Schedule", icon: CalendarDays },
     { key: "library", label: "Library", icon: Library },
     { key: "syllabus", label: "Syllabus", icon: ScrollText },
     { key: "tests", label: "My Tests", icon: FileText },
@@ -940,6 +945,7 @@ function StudentPortal({ profile, onLogout }) {
         <>
           {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, tests, attendance, setActive }} />}
           {active === "courses" && <StudentCourses courses={courses} profile={profile} />}
+          {active === "schedule" && <StudentSchedule sessions={sessions} homework={visHw} tests={visTests} courses={courses} profile={profile} />}
           {active === "library" && <StudentLibrary books={visBooks} courses={courses} />}
           {active === "syllabus" && <StudentSyllabus syllabi={syllabi} />}
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
@@ -993,6 +999,156 @@ function StudentDash({ profile, books, available, mySubs, tests, attendance, set
             ))}
         </Card>
       </div>
+    </>
+  );
+}
+
+function toLocalInput(iso) {
+  const d = new Date(iso); const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function fwhen(iso, withTime = true) {
+  const o = withTime
+    ? { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
+    : { weekday: "short", month: "short", day: "numeric" };
+  return new Date(iso).toLocaleString([], o);
+}
+function JoinLink({ url }) {
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="pl-press pl-body"
+      style={{ textDecoration: "none", background: C.gold, color: "#1a1407", border: `1px solid ${C.gold}`, borderRadius: 9, padding: "7px 12px", fontSize: 13, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+      <PlayCircle size={15} /> Join
+    </a>
+  );
+}
+function SessionRow({ s, courses, onEdit, onDelete, onRemind, manage }) {
+  const c = (courses || []).find((x) => x.id === s.course_id);
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{s.title}</h3>
+          <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{fwhen(s.starts_at)}{s.duration_min ? ` \u00B7 ${s.duration_min} min` : ""}{c ? ` \u00B7 ${c.code ? c.code + " " : ""}${c.title}` : ""}</div>
+          {s.notes && <div className="pl-body" style={{ fontSize: 13, color: C.text, marginTop: 6, whiteSpace: "pre-wrap" }}>{s.notes}</div>}
+        </div>
+        <div className="flex items-center gap-2">
+          {s.zoom_url && <JoinLink url={s.zoom_url} />}
+          {manage && onRemind && <Btn small kind="ghost" icon={Send} onClick={onRemind}>Remind</Btn>}
+          {manage && <Btn small kind="ghost" icon={PencilLine} onClick={onEdit}>Edit</Btn>}
+          {manage && <button onClick={onDelete} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/* ---------- LIVE CLASSES (instructor) ---------- */
+function ScheduleManager({ sessions, courses, students, profile, refresh }) {
+  const blank = { id: null, title: "", course_id: "", starts_at: "", duration_min: 60, zoom_url: "", notes: "" };
+  const [form, setForm] = useState(blank);
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+
+  function edit(s) {
+    setForm({ id: s.id, title: s.title, course_id: s.course_id || "", starts_at: s.starts_at ? toLocalInput(s.starts_at) : "", duration_min: s.duration_min || 60, zoom_url: s.zoom_url || "", notes: s.notes || "" });
+    setShow(true);
+  }
+  async function remind(s) {
+    const recips = (students || []).filter((st) => (s.program === "all" || st.program === s.program) && st.email).map((st) => st.email);
+    if (recips.length === 0) { window.alert("No students with an email in this class's program yet."); return; }
+    if (!window.confirm(`Email a reminder to ${recips.length} student${recips.length === 1 ? "" : "s"}?`)) return;
+    setNote("Sending reminder\u2026");
+    const join = s.zoom_url ? `<p><a href="${s.zoom_url}">Join the class on Zoom</a></p>` : "";
+    const html = `<p>This is a reminder for your upcoming class:</p><p><b>${s.title}</b><br/>${fwhen(s.starts_at)}${s.duration_min ? ` \u00B7 ${s.duration_min} min` : ""}</p>${join}${s.notes ? `<p>${s.notes}</p>` : ""}<p style="color:#888">\u2014 NCTS PureLight</p>`;
+    const r = await db.sendEmail({ to: profile.email, bcc: recips, subject: `Class reminder: ${s.title}`, html });
+    setNote(r && !r.error ? `Reminder sent to ${recips.length} student${recips.length === 1 ? "" : "s"}.` : "Couldn't send \u2014 check your email settings.");
+  }
+  async function save() {
+    if (!form.title.trim() || !form.starts_at) { window.alert("Add a title and a date/time."); return; }
+    setBusy(true);
+    try {
+      const c = courses.find((x) => x.id === form.course_id);
+      await db.saveSession({ ...form, starts_at: new Date(form.starts_at).toISOString(), program: c ? c.program : "all" });
+      await refresh(); setShow(false); setForm(blank);
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this class session?")) return;
+    try { await db.deleteSession(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  const cut = Date.now() - 2 * 3600e3;
+  const upcoming = (sessions || []).filter((s) => new Date(s.starts_at).getTime() >= cut).sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at));
+  const past = (sessions || []).filter((s) => new Date(s.starts_at).getTime() < cut).sort((a, b) => new Date(b.starts_at) - new Date(a.starts_at));
+
+  return (
+    <>
+      <PageHead title="Live Classes" sub="Schedule Zoom sessions; students see them on their Schedule." action={<Btn icon={Plus} onClick={() => { setForm(blank); setShow(true); }}>New class</Btn>} />
+      {show && (
+        <Card style={{ marginBottom: 18, maxWidth: 640 }}>
+          <Field label="Title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Genesis \u2014 Week 3 Lecture" /></Field>
+          <Field label="Course (optional)"><select style={inputStyle} value={form.course_id} onChange={(e) => setForm({ ...form, course_id: e.target.value })}><option value="">\u2014 None \u2014</option>{courses.map((c) => <option key={c.id} value={c.id}>{c.code ? `${c.code} \u2014 ` : ""}{c.title}</option>)}</select></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Date & time"><input type="datetime-local" style={inputStyle} value={form.starts_at} onChange={(e) => setForm({ ...form, starts_at: e.target.value })} /></Field>
+            <Field label="Length (min)"><input type="number" style={inputStyle} value={form.duration_min} onChange={(e) => setForm({ ...form, duration_min: e.target.value })} /></Field>
+          </div>
+          <Field label="Zoom link"><input style={inputStyle} value={form.zoom_url} onChange={(e) => setForm({ ...form, zoom_url: e.target.value })} placeholder="https://zoom.us/j/\u2026" /></Field>
+          <Field label="Notes (optional)"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
+          <div className="flex gap-2"><Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving\u2026" : "Save class"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
+        </Card>
+      )}
+      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Upcoming</h3>
+      {note && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginBottom: 10 }}>{note}</div>}
+      <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
+        {upcoming.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No upcoming classes. Tap \u201CNew class\u201D to schedule one.</span></Card>}
+        {upcoming.map((s) => <SessionRow key={s.id} s={s} courses={courses} onEdit={() => edit(s)} onDelete={() => remove(s.id)} onRemind={() => remind(s)} manage />)}
+      </div>
+      {past.length > 0 && (
+        <>
+          <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Past</h3>
+          <div className="flex flex-col gap-3">{past.slice(0, 15).map((s) => <SessionRow key={s.id} s={s} courses={courses} onEdit={() => edit(s)} onDelete={() => remove(s.id)} manage />)}</div>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ---------- SCHEDULE (student) ---------- */
+function StudentSchedule({ sessions, homework, tests, courses, profile }) {
+  const prog = profile.program;
+  const cut = Date.now() - 24 * 3600e3;
+  const items = [];
+  (sessions || []).filter((s) => s.program === prog || s.program === "all").forEach((s) => items.push({ kind: "class", when: s.starts_at, data: s }));
+  (homework || []).forEach((h) => { if (h.due_date) items.push({ kind: "hw", when: h.due_date, data: h }); });
+  (tests || []).forEach((t) => { if (t.due_date) items.push({ kind: "test", when: t.due_date, data: t }); });
+  const upcoming = items.filter((i) => new Date(i.when).getTime() >= cut).sort((a, b) => new Date(a.when) - new Date(b.when));
+
+  return (
+    <>
+      <PageHead title="Schedule" sub="Your upcoming live classes and due dates." />
+      {upcoming.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>Nothing scheduled right now. Check back soon.</span></Card>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {upcoming.map((i) => {
+            if (i.kind === "class") return <SessionRow key={"c" + i.data.id} s={i.data} courses={courses} />;
+            const c = (courses || []).find((x) => x.id === i.data.course_id);
+            const tag = i.kind === "hw" ? "Homework due" : "Test due";
+            return (
+              <Card key={i.kind + i.data.id}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink, margin: 0 }}>{i.data.title}</h3>
+                    <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{tag} \u00B7 {fwhen(i.when, false)}{c ? ` \u00B7 ${c.code ? c.code + " " : ""}${c.title}` : ""}</div>
+                  </div>
+                  <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, letterSpacing: 0.5 }}>{i.kind === "hw" ? "HW" : "TEST"}</span>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
     </>
   );
 }
