@@ -9,7 +9,7 @@ export default async function handler(req, res) {
   if (typeof body === "string") {
     try { body = JSON.parse(body); } catch { body = {}; }
   }
-  const { to, subject, html, text } = body || {};
+  const { to, bcc, subject, html, text } = body || {};
 
   if (!to || (Array.isArray(to) && to.length === 0) || !subject) {
     return res.status(400).json({ error: "Missing 'to' or 'subject'." });
@@ -22,18 +22,20 @@ export default async function handler(req, res) {
   const from = process.env.EMAIL_FROM || "NCTS PureLight <onboarding@resend.dev>";
 
   try {
+    const payload = {
+      from,
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      html: html || `<p>${text || ""}</p>`,
+    };
+    if (bcc && (Array.isArray(bcc) ? bcc.length : true)) payload.bcc = Array.isArray(bcc) ? bcc : [bcc];
     const r = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        from,
-        to: Array.isArray(to) ? to : [to],
-        subject,
-        html: html || `<p>${text || ""}</p>`,
-      }),
+      body: JSON.stringify(payload),
     });
     const data = await r.json();
     if (!r.ok) return res.status(r.status).json({ error: data });
