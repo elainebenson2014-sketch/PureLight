@@ -162,12 +162,12 @@ export async function sendMessage({ recipient, subject, body, sender_name }) {
 
 /* Fire the real email through the Vercel function. Never throws — UI continues
    even if email delivery isn't configured yet. */
-export async function sendEmail({ to, subject, html }) {
+export async function sendEmail({ to, bcc, subject, html }) {
   try {
     const r = await fetch("/api/send-email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to, subject, html }),
+      body: JSON.stringify({ to, bcc, subject, html }),
     });
     return await r.json();
   } catch (e) {
@@ -195,7 +195,8 @@ export async function listHomework() {
   const { data, error } = await supabase
     .from("pl_homework")
     .select("*, pl_homework_questions(*)")
-    .order("created_at", { ascending: false });
+    .order("due_date", { ascending: true, nullsFirst: false })
+    .order("title", { ascending: true });
   if (error) throw error;
   return (data || []).map((h) => ({
     ...h,
@@ -247,6 +248,31 @@ export async function listHomeworkSubmissions() {
   const { data, error } = await supabase.from("pl_homework_submissions").select("*").order("submitted_at", { ascending: false });
   if (error) throw error;
   return data;
+}
+
+export async function listSessions() {
+  const { data, error } = await supabase.from("pl_sessions").select("*").order("starts_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+export async function saveSession(s) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const rec = {
+    title: s.title, course_id: s.course_id || null, program: s.program || "all",
+    starts_at: s.starts_at, duration_min: Number(s.duration_min) || 60,
+    zoom_url: s.zoom_url || null, notes: s.notes || null,
+  };
+  if (s.id) {
+    const { error } = await supabase.from("pl_sessions").update(rec).eq("id", s.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("pl_sessions").insert({ ...rec, created_by: user.id });
+    if (error) throw error;
+  }
+}
+export async function deleteSession(id) {
+  const { error } = await supabase.from("pl_sessions").delete().eq("id", id);
+  if (error) throw error;
 }
 
 export async function submitHomework({ homework_id, answers, response, file, max_points }) {
