@@ -942,6 +942,7 @@ function StudentPortal({ profile, onLogout }) {
     { key: "tests", label: "My Tests", icon: FileText },
     { key: "homework", label: "Homework", icon: NotebookPen },
     { key: "grades", label: "Grades", icon: Award },
+    { key: "progress", label: "Progress", icon: Medal },
     { key: "certificates", label: "Certificates", icon: Medal },
     { key: "tuition", label: "Tuition", icon: Receipt },
     { key: "inbox", label: "Inbox", icon: Mail },
@@ -959,6 +960,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} refresh={refresh} />}
           {active === "grades" && <StudentGrades mySubs={mySubs} tests={tests} myHwSubs={myHwSubs} homework={homework} courses={courses} profile={profile} />}
+          {active === "progress" && <DegreeProgress profile={profile} courses={courses} tests={tests} homework={homework} mySubs={mySubs} myHwSubs={myHwSubs} />}
           {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
           {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
@@ -1283,6 +1285,75 @@ function StudentTests({ available, books, courses, refresh }) {
             </div>
           )}
         </Grouped>}
+    </>
+  );
+}
+
+function DegreeProgress({ profile, courses, tests, homework, mySubs, myHwSubs }) {
+  const prog = profile?.program;
+  const progCourses = (courses || []).filter((c) => c.program === prog).slice().sort((a, b) => (a.code || a.title || "").localeCompare(b.code || b.title || ""));
+
+  function stat(c) {
+    const cts = tests.filter((t) => t.course_id === c.id);
+    const chw = homework.filter((h) => h.course_id === c.id);
+    let earned = 0, possible = 0, any = false;
+    cts.forEach((t) => { const s = mySubs.find((x) => x.test_id === t.id); if (s) { any = true; if (s.status === "graded") { earned += Number(s.score) || 0; possible += (s.max_score ?? sumPoints(t.questions)) || 0; } } });
+    chw.forEach((h) => { const s = myHwSubs.find((x) => x.homework_id === h.id); if (s) { any = true; if (s.status === "graded") { earned += Number(s.score) || 0; possible += (s.max_points ?? sumPoints(h.questions) ?? Number(h.points)) || 0; } } });
+    const grade = possible ? Math.round((earned / possible) * 100) : null;
+    let status = "Not started";
+    if (grade != null && grade >= 70) status = "Completed";
+    else if (any) status = "In progress";
+    return { grade, status, credits: Number(c.credit_hours) || 0 };
+  }
+
+  const rows = progCourses.map((c) => ({ c, ...stat(c) }));
+  const totalCredits = rows.reduce((a, r) => a + r.credits, 0);
+  const earnedCredits = rows.filter((r) => r.status === "Completed").reduce((a, r) => a + r.credits, 0);
+  const doneCount = rows.filter((r) => r.status === "Completed").length;
+  const pct = totalCredits ? Math.round((earnedCredits / totalCredits) * 100) : 0;
+  const completed = rows.filter((r) => r.status === "Completed" && r.grade != null);
+  const gpa = completed.length ? (completed.reduce((a, r) => a + gradeInfo(r.grade).points, 0) / completed.length).toFixed(2) : null;
+
+  const badge = (status) => {
+    const col = status === "Completed" ? C.green : status === "In progress" ? C.gold : C.muted;
+    return <span style={{ fontSize: 12, fontWeight: 700, color: col, background: col + "1A", padding: "3px 11px", borderRadius: 20, whiteSpace: "nowrap" }}>{status}</span>;
+  };
+
+  if (!prog) return (<><PageHead title="Degree Progress" /><Card><span className="pl-body" style={{ color: C.muted }}>You haven't been assigned to a program yet. Please contact the school office.</span></Card></>);
+
+  return (
+    <>
+      <PageHead title="Degree Progress" sub={`Your journey toward the ${programLabel(prog)} program.`} />
+      <Card style={{ marginBottom: 18 }}>
+        <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginBottom: 6 }}>{pct}% of credits earned</div>
+        <div style={{ height: 14, background: (C.line || "#E7E3D6"), borderRadius: 8, overflow: "hidden", marginBottom: 18 }}>
+          <div style={{ width: pct + "%", height: "100%", background: C.gold, borderRadius: 8 }} />
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 28 }}>
+          <div><div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.ink }}>{earnedCredits}<span style={{ fontSize: 15, color: C.muted }}> / {totalCredits}</span></div><div className="pl-body" style={{ fontSize: 12, color: C.muted }}>Credits earned</div></div>
+          <div><div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.ink }}>{doneCount}<span style={{ fontSize: 15, color: C.muted }}> / {rows.length}</span></div><div className="pl-body" style={{ fontSize: 12, color: C.muted }}>Courses completed</div></div>
+          <div><div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.ink }}>{gpa ?? "—"}</div><div className="pl-body" style={{ fontSize: 12, color: C.muted }}>GPA so far</div></div>
+        </div>
+      </Card>
+
+      {rows.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No courses are listed for your program yet.</span></Card>
+      ) : (
+        <Card style={{ padding: 0, overflow: "hidden" }}>
+          {rows.map((r, i) => (
+            <div key={r.c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "13px 16px", borderTop: i ? `1px solid ${C.line || "#EEF0F4"}` : "none" }}>
+              <div style={{ minWidth: 0 }}>
+                <div className="pl-body" style={{ fontWeight: 600, color: C.ink }}>{r.c.code ? r.c.code + " — " : ""}{r.c.title}</div>
+                <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{r.credits ? r.credits + " credit" + (r.credits === 1 ? "" : "s") : "—"}{r.grade != null ? ` · ${r.grade}%` : ""}</div>
+              </div>
+              {badge(r.status)}
+            </div>
+          ))}
+        </Card>
+      )}
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 12 }}>
+        Status reflects your graded work so far — a course shows <span style={{ color: C.green }}>Completed</span> once your average reaches a passing grade. Your registrar's transcript is the official record.
+      </p>
     </>
   );
 }
