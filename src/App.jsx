@@ -633,7 +633,7 @@ function Grading({ subs, tests, profiles, refresh }) {
 
     return (
       <>
-        <PageHead title="Grade Submission" sub={`${nameOf(sub.student_id)} · ${test.title}`} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setOpenId(null)}>Back</Btn>} />
+        <PageHead title="Grade Submission" sub={`${nameOf(sub.student_id)} · ${test.title}`} action={<div className="flex gap-2"><Btn kind="ghost" icon={ExternalLink} onClick={() => openSubmission(sub, test, nameOf(sub.student_id))}>View / Print</Btn><Btn kind="ghost" icon={ArrowLeft} onClick={() => setOpenId(null)}>Back</Btn></div>} />
         {test.questions.map((q, i) => {
           const ans = sub.answers?.[q.id];
           const isAuto = q.type === "mc" || q.type === "tf";
@@ -688,7 +688,10 @@ function Grading({ subs, tests, profiles, refresh }) {
                 <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
                 <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{tests.find((t) => t.id === s.test_id)?.title || "Test"} · submitted {fdate(s.submitted_at)}</div>
               </div>
-              <Btn icon={ClipboardCheck} onClick={() => open(s)}>Grade</Btn>
+              <div className="flex items-center gap-2">
+                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, tests.find((t) => t.id === s.test_id), nameOf(s.student_id))}>View</Btn>
+                <Btn icon={ClipboardCheck} onClick={() => open(s)}>Grade</Btn>
+              </div>
             </div>
           </Card>
         ))}
@@ -703,7 +706,10 @@ function Grading({ subs, tests, profiles, refresh }) {
                 <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
                 <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{tests.find((t) => t.id === s.test_id)?.title || "Test"}</div>
               </div>
-              <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.score}/{s.max_score}</span>
+              <div className="flex items-center gap-3">
+                <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.score}/{s.max_score}</span>
+                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, tests.find((t) => t.id === s.test_id), nameOf(s.student_id))}>View / Print</Btn>
+              </div>
             </div>
           </Card>
         ))}
@@ -1317,6 +1323,9 @@ function StudentGrades({ mySubs, tests, myHwSubs, homework, courses, profile }) 
                     <p className="pl-body" style={{ fontSize: 14, lineHeight: 1.55, margin: 0 }}>{s.feedback}</p>
                   </div>
                 )}
+                <div style={{ marginTop: 12 }}>
+                  <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, test, profile.full_name)}>View / Print</Btn>
+                </div>
               </Card>
             );
           })}
@@ -1593,7 +1602,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
     const total = hasQs ? auto + manualTotal : (Number(score) || 0);
     return (
       <>
-        <PageHead title="Grade Homework" sub={`${nameOf(sub.student_id)} · ${titleOf(sub.homework_id)}`} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
+        <PageHead title="Grade Homework" sub={`${nameOf(sub.student_id)} · ${titleOf(sub.homework_id)}`} action={<div className="flex gap-2"><Btn kind="ghost" icon={ExternalLink} onClick={() => openSubmission(sub, hw, nameOf(sub.student_id))}>View / Print</Btn><Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn></div>} />
         {hasQs && hw.questions.map((q, i) => {
           const ans = sub.answers?.[q.id];
           const isAuto = q.type === "mc" || q.type === "tf";
@@ -1687,7 +1696,10 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
                 <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
                 <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{titleOf(s.homework_id)} · submitted {fdate(s.submitted_at)}</div>
               </div>
-              <Btn icon={ClipboardCheck} onClick={() => openGrade(s)}>Grade</Btn>
+              <div className="flex items-center gap-2">
+                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), nameOf(s.student_id))}>View</Btn>
+                <Btn icon={ClipboardCheck} onClick={() => openGrade(s)}>Grade</Btn>
+              </div>
             </div>
           </Card>
         ))}
@@ -1703,7 +1715,10 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
                 <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
                 <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{titleOf(s.homework_id)}</div>
               </div>
-              <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.score}/{s.max_points}</span>
+              <div className="flex items-center gap-3">
+                <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.score}/{s.max_points}</span>
+                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), nameOf(s.student_id))}>View / Print</Btn>
+              </div>
             </div>
           </Card>
         ))}
@@ -2019,6 +2034,84 @@ function AttendanceManager({ students, attendance, subs, hwSubs, refresh }) {
       </Card>
     </>
   );
+}
+
+/* ---------- SUBMISSION REPORT (view / print) ---------- */
+function openSubmission(sub, assessment, studentName) {
+  const safe = (s) => String(s ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  const qs = (assessment && assessment.questions) || [];
+  const max = sub.max_score ?? sub.max_points ?? sumPoints(qs);
+  const graded = sub.status === "graded";
+  const pct = graded && max ? Math.round((sub.score / max) * 100) : null;
+  const dateStr = sub.submitted_at ? new Date(sub.submitted_at).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : "";
+  const qHtml = qs.map((q, i) => {
+    const ans = sub.answers?.[q.id];
+    let answer = "", correct = "", badge = "";
+    if (q.type === "mc") {
+      answer = safe(q.options?.[Number(ans)] ?? "\u2014");
+      correct = safe(q.options?.[Number(q.correct_answer)] ?? "");
+      const ok = String(ans) === String(q.correct_answer);
+      badge = `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
+    } else if (q.type === "tf") {
+      answer = safe(ans ?? "\u2014");
+      correct = safe(q.correct_answer);
+      const ok = ans === q.correct_answer;
+      badge = `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
+    } else {
+      answer = safe(ans || "(no response)");
+      const aw = sub.manual?.[q.id];
+      badge = `<span class="b man">${aw != null && aw !== "" ? aw : "\u2014"}/${q.points} pts</span>`;
+    }
+    return `<div class="q"><div class="qh"><span class="qn">Q${i + 1} \u00b7 ${safe(QTYPE[q.type] || q.type)} \u00b7 ${q.points} pts</span>${badge}</div>
+      <div class="pr">${safe(q.prompt)}</div>
+      <div class="an"><span class="lab">Answer</span> ${answer}</div>
+      ${correct ? `<div class="co"><span class="lab">Correct</span> ${correct}</div>` : ""}</div>`;
+  }).join("");
+  const respHtml = sub.response ? `<div class="q"><div class="pr">Written response</div><div class="an">${safe(sub.response)}</div></div>` : "";
+  const fileHtml = sub.file_path ? `<div class="note">A file was uploaded with this submission (open it in the app).</div>` : "";
+  const fbHtml = sub.feedback ? `<div class="fb"><div class="fbh">Instructor feedback</div>${safe(sub.feedback)}</div>` : "";
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${safe(studentName)} \u2014 ${safe(assessment?.title || "Submission")}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    @page { size: portrait; margin: 14mm; }
+    * { box-sizing: border-box; }
+    body { font-family:'Source Serif 4',Georgia,serif; color:#1e2742; margin:0; padding:28px; max-width:820px; }
+    .top { border-bottom:2px solid #bd9a44; padding-bottom:14px; margin-bottom:20px; overflow:hidden; }
+    .kick { letter-spacing:.22em; text-transform:uppercase; font-size:11px; color:#bd9a44; font-weight:600; }
+    .school { font-family:'Fraunces',serif; font-size:15px; color:#15213d; margin-top:2px; }
+    h1 { font-family:'Fraunces',serif; font-size:26px; color:#15213d; margin:10px 0 4px; }
+    .meta { font-size:13px; color:#5b6478; }
+    .score { float:right; text-align:right; }
+    .score .big { font-family:'Fraunces',serif; font-size:30px; color:#2e7d52; font-weight:600; }
+    .score .sm { font-size:12px; color:#5b6478; }
+    .q { border:1px solid #e2e5ec; border-radius:9px; padding:12px 14px; margin-bottom:11px; }
+    .qh { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:6px; }
+    .qn { font-size:10.5px; letter-spacing:.05em; text-transform:uppercase; color:#9a7b30; font-weight:600; }
+    .pr { font-weight:600; color:#15213d; margin-bottom:7px; }
+    .an,.co { font-size:14px; margin-top:3px; }
+    .lab { display:inline-block; min-width:62px; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#9aa2b3; }
+    .co { color:#2e7d52; }
+    .b { font-size:11.5px; font-weight:600; padding:2px 9px; border-radius:20px; white-space:nowrap; }
+    .b.ok { background:#e7f3ec; color:#2e7d52; } .b.no { background:#fbeaea; color:#b3261e; } .b.man { background:#f3eede; color:#9a7b30; }
+    .fb { margin-top:16px; padding:12px 14px; background:#f7f4ec; border-left:3px solid #bd9a44; border-radius:8px; font-size:14px; }
+    .fbh { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#9a7b30; font-weight:600; margin-bottom:4px; }
+    .note { font-size:12.5px; color:#5b6478; font-style:italic; margin-bottom:11px; }
+    .print { position:fixed; top:14px; right:14px; background:#15213d; color:#f6f1e7; border:none; padding:9px 16px; border-radius:8px; font-family:'Source Serif 4',serif; font-size:13px; cursor:pointer; }
+    @media print { .print { display:none; } body { padding:0; } }
+  </style></head><body>
+  <button class="print" onclick="window.print()">Print / Save as PDF</button>
+  <div class="top">
+    ${graded ? `<div class="score"><div class="big">${pct}%</div><div class="sm">${sub.score} / ${max}</div></div>` : `<div class="score"><div class="sm" style="color:#9a7b30;font-weight:600">Not yet graded</div></div>`}
+    <div class="kick">Submission Report</div>
+    <div class="school">${safe(BRAND.name)}</div>
+    <h1>${safe(assessment?.title || "Submission")}</h1>
+    <div class="meta">${safe(studentName)}${dateStr ? ` \u00b7 submitted ${dateStr}` : ""}</div>
+  </div>
+  ${qHtml}${respHtml}${fileHtml}${fbHtml}
+  </body></html>`;
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); } else { window.alert("Please allow pop-ups to view the submission."); }
 }
 
 /* ---------- CERTIFICATES ---------- */
