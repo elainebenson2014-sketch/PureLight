@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   BookOpen, FileText, Users, Mail, LayoutDashboard, Plus, Upload, Trash2, Send,
   ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
-  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal, Receipt, BarChart3,
+  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal, Receipt, BarChart3, LayoutGrid,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
@@ -322,6 +322,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "attendance", label: "Attendance", icon: CalendarDays },
     { key: "grading", label: "Grading", icon: ClipboardCheck },
     { key: "reports", label: "Reports", icon: BarChart3 },
+    { key: "gradebook", label: "Gradebook", icon: LayoutGrid },
     { key: "students", label: "People", icon: Users },
     { key: "billing", label: "Billing", icon: Receipt },
     { key: "certificates", label: "Certificates", icon: Medal },
@@ -354,6 +355,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "attendance" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} refresh={refresh} />}
           {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} />}
           {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses} />}
+          {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses} />}
           {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
           {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} refresh={refresh} />}
           {active === "certificates" && profile.role === "admin" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
@@ -2495,6 +2497,118 @@ function StudentTuition({ ledger }) {
 }
 
 /* ---------- GRADE REPORT (instructor) ---------- */
+function Gradebook({ students, subs, tests, hwSubs, homework, courses }) {
+  const withCode = (courses || []).slice().sort((a, b) => (a.code || a.title || "").localeCompare(b.code || b.title || ""));
+  const [courseId, setCourseId] = useState(withCode[0]?.id || "");
+  const course = courses.find((c) => c.id === courseId);
+
+  const cols = course ? [
+    ...tests.filter((t) => t.course_id === courseId).map((t) => ({ id: t.id, kind: "test", title: t.title, max: sumPoints(t.questions), obj: t })),
+    ...homework.filter((h) => h.course_id === courseId).map((h) => ({ id: h.id, kind: "hw", title: h.title, max: sumPoints(h.questions) || Number(h.points) || 0, obj: h })),
+  ] : [];
+  const roster = course ? (students || []).filter((s) => course.program === "all" || s.program === course.program).slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")) : [];
+
+  function getSub(stuId, col) {
+    return col.kind === "test"
+      ? subs.find((x) => x.student_id === stuId && x.test_id === col.id)
+      : hwSubs.find((x) => x.student_id === stuId && x.homework_id === col.id);
+  }
+  const subMax = (sub, col) => sub?.max_score ?? sub?.max_points ?? col.max;
+  function overall(stuId) {
+    let earned = 0, possible = 0;
+    cols.forEach((col) => { const s = getSub(stuId, col); if (s && s.status === "graded") { earned += Number(s.score) || 0; possible += subMax(s, col) || 0; } });
+    return possible ? Math.round((earned / possible) * 100) : null;
+  }
+  const gradeColor = (p) => p == null ? C.muted : p >= 80 ? C.green : p >= 60 ? C.gold : C.rose;
+
+  function exportCsv() {
+    const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+    const header = ["Student", ...cols.map((c) => c.title), "Overall %"];
+    const lines = roster.map((stu) => {
+      const cells = cols.map((col) => { const s = getSub(stu.id, col); if (!s) return ""; if (s.status !== "graded") return "submitted"; const m = subMax(s, col); return m ? Math.round((s.score / m) * 100) + "%" : s.score; });
+      const ov = overall(stu.id);
+      return [stu.full_name, ...cells, ov == null ? "" : ov + "%"];
+    });
+    const csv = [header, ...lines].map((r) => r.map(esc).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `${(course.code || course.title || "course")}-gradebook.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const th = { padding: "9px 12px", textAlign: "left", fontSize: 12.5, fontWeight: 700, color: C.ink, borderBottom: `2px solid ${C.line || "#E2E5EC"}`, whiteSpace: "nowrap", background: C.paper || "#F7F4EC" };
+  const td = { padding: "8px 12px", fontSize: 13.5, borderBottom: `1px solid ${C.line || "#EEF0F4"}`, whiteSpace: "nowrap" };
+
+  return (
+    <>
+      <PageHead title="Gradebook" sub="Every grade for a course on one screen." action={course && cols.length > 0 ? <Btn icon={ExternalLink} onClick={exportCsv}>Export CSV</Btn> : null} />
+      <Card style={{ marginBottom: 18, maxWidth: 520 }}>
+        <Field label="Course">
+          <select style={inputStyle} value={courseId} onChange={(e) => setCourseId(e.target.value)}>
+            <option value="">— Choose a course —</option>
+            {withCode.map((c) => <option key={c.id} value={c.id}>{c.code ? `${c.code} — ` : ""}{c.title}</option>)}
+          </select>
+        </Field>
+      </Card>
+
+      {!course ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>Choose a course to see its gradebook.</span></Card>
+      ) : cols.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No tests or homework are tagged to this course yet.</span></Card>
+      ) : roster.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No students are enrolled in this program yet.</span></Card>
+      ) : (
+        <Card style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 520 }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, position: "sticky", left: 0, zIndex: 1 }}>Student</th>
+                  {cols.map((c) => <th key={c.kind + c.id} style={th}>{c.title}<div style={{ fontWeight: 400, fontSize: 11, color: C.muted }}>{c.kind === "test" ? "Test" : "Homework"} · {c.max} pts</div></th>)}
+                  <th style={{ ...th, textAlign: "center" }}>Overall</th>
+                </tr>
+              </thead>
+              <tbody>
+                {roster.map((stu) => {
+                  const ov = overall(stu.id);
+                  return (
+                    <tr key={stu.id}>
+                      <td style={{ ...td, fontWeight: 600, color: C.ink, position: "sticky", left: 0, background: "#fff" }}>{stu.full_name}</td>
+                      {cols.map((col) => {
+                        const s = getSub(stu.id, col);
+                        let content, color = C.ink;
+                        if (!s) { content = "—"; color = C.muted; }
+                        else if (s.status !== "graded") { content = "•"; color = C.gold; }
+                        else { const m = subMax(s, col); const p = m ? Math.round((s.score / m) * 100) : null; content = p == null ? s.score : p + "%"; color = gradeColor(p); }
+                        return <td key={col.kind + col.id} style={{ ...td, color, cursor: s ? "pointer" : "default", fontWeight: s && s.status === "graded" ? 600 : 400 }} onClick={s ? () => openSubmission(s, col.obj, stu.full_name) : undefined} title={s ? "View / print submission" : ""}>{content}</td>;
+                      })}
+                      <td style={{ ...td, textAlign: "center", fontWeight: 700, color: gradeColor(ov) }}>{ov == null ? "—" : ov + "%"}</td>
+                    </tr>
+                  );
+                })}
+                <tr>
+                  <td style={{ ...td, fontWeight: 700, color: C.muted, position: "sticky", left: 0, background: "#fff" }}>Class average</td>
+                  {cols.map((col) => {
+                    let e = 0, p = 0;
+                    roster.forEach((stu) => { const s = getSub(stu.id, col); if (s && s.status === "graded") { const m = subMax(s, col); e += Number(s.score) || 0; p += m || 0; } });
+                    const avg = p ? Math.round((e / p) * 100) : null;
+                    return <td key={"avg" + col.id} style={{ ...td, fontWeight: 700, color: gradeColor(avg) }}>{avg == null ? "—" : avg + "%"}</td>;
+                  })}
+                  <td style={td} />
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 12 }}>
+        Tap any grade to view or print that submission. <span style={{ color: C.gold }}>•</span> = submitted, awaiting grading. — = not submitted.
+      </p>
+    </>
+  );
+}
+
 function GradeReport({ students, subs, tests, hwSubs, homework, courses }) {
   return (
     <>
