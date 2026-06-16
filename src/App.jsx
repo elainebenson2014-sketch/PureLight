@@ -667,7 +667,7 @@ function Grading({ subs, tests, profiles, refresh }) {
         <Card>
           <Field label="Feedback to student"><textarea style={{ ...inputStyle, minHeight: 80 }} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Comments, encouragement, next steps…" /></Field>
           <div className="flex items-center justify-between">
-            <div className="pl-display" style={{ fontSize: 24, fontWeight: 600, color: C.ink }}>{total} <span style={{ color: C.muted, fontSize: 18 }}>/ {max}</span> <span className="pl-body" style={{ fontSize: 15, color: C.gold, marginLeft: 8 }}>{max ? Math.round((total / max) * 100) : 0}%</span></div>
+            <div className="pl-display" style={{ fontSize: 24, fontWeight: 600, color: C.green }}>{max ? Math.round((total / max) * 100) : 0}<span style={{ color: C.muted, fontSize: 18 }}> / 100</span> <span className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginLeft: 8 }}>({total} / {max} pts awarded)</span></div>
             <Btn icon={Award} kind="gold" onClick={finalize} disabled={busy}>{busy ? "Saving…" : "Finalize & release grade"}</Btn>
           </div>
         </Card>
@@ -709,7 +709,7 @@ function Grading({ subs, tests, profiles, refresh }) {
                 <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{tests.find((t) => t.id === s.test_id)?.title || "Test"}</div>
               </div>
               <div className="flex items-center gap-3">
-                <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.score}/{s.max_score}</span>
+                <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_score ? Math.round((s.score / s.max_score) * 100) : 0}%</span>
                 <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, tests.find((t) => t.id === s.test_id), nameOf(s.student_id))}>View / Print</Btn>
               </div>
             </div>
@@ -1386,7 +1386,7 @@ function StudentGrades({ mySubs, tests, myHwSubs, homework, courses, profile }) 
                   {isGraded ? (
                     <div className="text-right">
                       <div className="pl-display" style={{ fontSize: 24, fontWeight: 600, color: C.green }}>{s.max_score ? Math.round((s.score / s.max_score) * 100) : 0}%</div>
-                      <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{s.score} / {s.max_score}</div>
+                      <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{s.max_score ? Math.round((s.score / s.max_score) * 100) : 0} / 100</div>
                     </div>
                   ) : <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: C.gold, background: C.goldSoft, padding: "5px 12px", borderRadius: 20 }}>Awaiting grade</span>}
                 </div>
@@ -1711,7 +1711,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
           <Field label="Feedback"><textarea style={{ ...inputStyle, minHeight: 80 }} value={feedback} onChange={(e) => setFeedback(e.target.value)} /></Field>
           <div className="flex items-center justify-between">
             {hasQs ? (
-              <div className="pl-display" style={{ fontSize: 24, fontWeight: 600, color: C.ink }}>{total} <span style={{ color: C.muted, fontSize: 18 }}>/ {max}</span> <span className="pl-body" style={{ fontSize: 15, color: C.gold, marginLeft: 8 }}>{max ? Math.round((total / max) * 100) : 0}%</span></div>
+              <div className="pl-display" style={{ fontSize: 24, fontWeight: 600, color: C.green }}>{max ? Math.round((total / max) * 100) : 0}<span style={{ color: C.muted, fontSize: 18 }}> / 100</span> <span className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginLeft: 8 }}>({total} / {max} pts awarded)</span></div>
             ) : (
               <div className="flex items-center gap-2">
                 <span className="pl-body" style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>Score:</span>
@@ -1789,7 +1789,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
                 <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{titleOf(s.homework_id)}</div>
               </div>
               <div className="flex items-center gap-3">
-                <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.score}/{s.max_points}</span>
+                <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_points ? Math.round((s.score / s.max_points) * 100) : 0}%</span>
                 <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), nameOf(s.student_id))}>View / Print</Btn>
               </div>
             </div>
@@ -1898,7 +1898,7 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
                 <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>Submitted {fdate(s.submitted_at)}</div>
               </div>
               {s.status === "graded"
-                ? <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.score}/{s.max_points}</span>
+                ? <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_points ? Math.round((s.score / s.max_points) * 100) : 0}%</span>
                 : <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: C.gold, background: C.goldSoft, padding: "5px 12px", borderRadius: 20 }}>Awaiting grade</span>}
             </div>
             {s.status === "graded" && s.feedback && (
@@ -2175,7 +2175,7 @@ function openSubmission(sub, assessment, studentName) {
   </style></head><body>
   <button class="print" onclick="window.print()">Print / Save as PDF</button>
   <div class="top">
-    ${graded ? `<div class="score"><div class="big">${pct}%</div><div class="sm">${sub.score} / ${max}</div></div>` : `<div class="score"><div class="sm" style="color:#9a7b30;font-weight:600">Not yet graded</div></div>`}
+    ${graded ? `<div class="score"><div class="big">${pct}%</div><div class="sm">${pct} / 100</div></div>` : `<div class="score"><div class="sm" style="color:#9a7b30;font-weight:600">Not yet graded</div></div>`}
     <div class="kick">Submission Report</div>
     <div class="school">${safe(BRAND.name)}</div>
     <h1>${safe(assessment?.title || "Submission")}</h1>
