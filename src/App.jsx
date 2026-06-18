@@ -88,7 +88,7 @@ function CourseFields({ courses, courseId, module, onCourse, onModule }) {
       <Field label="Course (optional)">
         <select style={inputStyle} value={courseId || ""} onChange={(e) => onCourse(e.target.value)}>
           <option value="">— None —</option>
-          {courses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+          {courses.map((c) => <option key={c.id} value={c.id}>{c.title}{c.is_certificate ? " (Certificate class)" : ""}</option>)}
         </select>
       </Field>
       <Field label="Module / Week (optional)">
@@ -291,20 +291,19 @@ function InstructorPortal({ profile, onLogout }) {
   const [ledger, setLedger] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [sessions, setSessions] = useState([]);
-  const [certPrograms, setCertPrograms] = useState([]);
   const [certEnrollments, setCertEnrollments] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cp, cen] = await Promise.all([
+      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
         db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listInstructorCourses(), db.listSessions(),
-        db.listCertPrograms(), db.listCertEnrollments(),
+        db.listCertEnrollments(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
       setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setAssignments(ic); setSessions(se);
-      setCertPrograms(cp); setCertEnrollments(cen);
+      setCertEnrollments(cen);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -330,7 +329,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "students", label: "People", icon: Users },
     { key: "billing", label: "Billing", icon: Receipt },
     { key: "certificates", label: "Certificates", icon: Medal },
-    { key: "certprograms", label: "Cert Programs", icon: Award },
+    { key: "certprograms", label: "Cert Classes", icon: Award },
     { key: "messages", label: "Messages", icon: Mail },
   ];
   // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
@@ -351,7 +350,7 @@ function InstructorPortal({ profile, onLogout }) {
       {loading ? <Spinner /> : (
         <>
           {active === "dash" && <InstructorDash {...{ students, books, tests, subs, profiles, setActive }} />}
-          {active === "courses" && <CoursesManager courses={courses} refresh={refresh} />}
+          {active === "courses" && <CoursesManager courses={courses.filter((c) => !c.is_certificate)} refresh={refresh} />}
           {active === "library" && <LibraryManager books={books} courses={courses} refresh={refresh} profile={profile} />}
           {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
           {active === "tests" && <TestsManager tests={tests} books={books} courses={courses} refresh={refresh} />}
@@ -359,12 +358,12 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "classes" && <ScheduleManager sessions={sessions} courses={courses} students={students} profile={profile} refresh={refresh} />}
           {active === "attendance" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} refresh={refresh} />}
           {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} />}
-          {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses} />}
-          {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses} />}
+          {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
+          {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
           {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} refresh={refresh} />}
           {active === "certificates" && profile.role === "admin" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
-          {active === "certprograms" && profile.role === "admin" && <CertProgramsManager programs={certPrograms} enrollments={certEnrollments} students={students} profiles={profiles} refresh={refresh} />}
+          {active === "certprograms" && profile.role === "admin" && <CertClassesManager courses={courses} students={students} profiles={profiles} tests={tests} homework={homework} subs={subs} hwSubs={hwSubs} certificates={certificates} enrollments={certEnrollments} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
         </>
       )}
@@ -915,33 +914,39 @@ function StudentPortal({ profile, onLogout }) {
   const [certificates, setCertificates] = useState([]);
   const [ledger, setLedger] = useState([]);
   const [sessions, setSessions] = useState([]);
-  const [certPrograms, setCertPrograms] = useState([]);
   const [certEnrollments, setCertEnrollments] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cp, cen] = await Promise.all([
+      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listMessages(),
         db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listSessions(),
-        db.listCertPrograms(), db.listCertEnrollments(),
+        db.listCertEnrollments(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setMessages(m);
       setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setSessions(se);
-      setCertPrograms(cp); setCertEnrollments(cen);
+      setCertEnrollments(cen);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
 
   const prog = profile.program;
-  const visBooks = visibleFor(books, prog);
-  const visTests = visibleFor(tests, prog);
-  const visHw = visibleFor(homework, prog);
+  const certCourseIds = new Set((courses || []).filter((c) => c.is_certificate).map((c) => c.id));
+  const myCertCourseIds = new Set((certEnrollments || []).filter((e) => e.student_id === profile.id).map((e) => e.course_id));
+  const notCert = (it) => !certCourseIds.has(it.course_id);
+  const visBooks = visibleFor(books, prog).filter(notCert);
+  const visTests = visibleFor(tests, prog).filter(notCert);
+  const visHw = visibleFor(homework, prog).filter(notCert);
+  const degTests = (tests || []).filter(notCert);
+  const degHw = (homework || []).filter(notCert);
   const mySubs = subs.filter((s) => s.student_id === profile.id);
   const myHwSubs = hwSubs.filter((s) => s.student_id === profile.id);
   const available = visTests.filter((t) => !mySubs.some((s) => s.test_id === t.id));
   const availableHw = visHw.filter((h) => !myHwSubs.some((s) => s.homework_id === h.id));
+  const certAvailable = (tests || []).filter((t) => myCertCourseIds.has(t.course_id) && !mySubs.some((s) => s.test_id === t.id));
+  const certAvailableHw = (homework || []).filter((h) => myCertCourseIds.has(h.course_id) && !myHwSubs.some((s) => s.homework_id === h.id));
 
   const nav = [
     { key: "dash", label: "Dashboard", icon: LayoutDashboard },
@@ -954,7 +959,7 @@ function StudentPortal({ profile, onLogout }) {
     { key: "grades", label: "Grades", icon: Award },
     { key: "progress", label: "Progress", icon: Medal },
     { key: "certificates", label: "Certificates", icon: Medal },
-    { key: "certprograms", label: "Cert Programs", icon: Award },
+    { key: "certprograms", label: "Cert Classes", icon: Award },
     { key: "tuition", label: "Tuition", icon: Receipt },
     { key: "inbox", label: "Inbox", icon: Mail },
   ];
@@ -970,10 +975,10 @@ function StudentPortal({ profile, onLogout }) {
           {active === "syllabus" && <StudentSyllabus syllabi={syllabi} />}
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} refresh={refresh} />}
-          {active === "grades" && <StudentGrades mySubs={mySubs} tests={tests} myHwSubs={myHwSubs} homework={homework} courses={courses} profile={profile} />}
-          {active === "progress" && <DegreeProgress profile={profile} courses={courses} tests={tests} homework={homework} mySubs={mySubs} myHwSubs={myHwSubs} />}
+          {active === "grades" && <StudentGrades mySubs={mySubs} tests={degTests} myHwSubs={myHwSubs} homework={degHw} courses={courses} profile={profile} />}
+          {active === "progress" && <DegreeProgress profile={profile} courses={courses} tests={degTests} homework={degHw} mySubs={mySubs} myHwSubs={myHwSubs} />}
           {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
-          {active === "certprograms" && <StudentCertPrograms programs={certPrograms} enrollments={certEnrollments} profile={profile} refresh={refresh} />}
+          {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certAvailable={certAvailable} certAvailableHw={certAvailableHw} myHwSubs={myHwSubs} homework={homework} books={books} certificates={certificates} refresh={refresh} />}
           {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
         </>
@@ -2349,23 +2354,15 @@ function StudentCertificates({ certificates, profile }) {
   );
 }
 
-/* ============================================================ CERTIFICATE PROGRAMS (self-paced) */
-const PILLAR = { stew: "Stewardship", theo: "Theology", grief: "Grief Care" };
-const newLid = () => "pl-" + Math.random().toString(36).slice(2, 9);
-const progPct = (en, prog) => {
-  const total = (prog?.lessons || []).length;
-  return total ? Math.round(((en.completed_lesson_ids || []).length / total) * 100) : 0;
-};
-/* build a cert-shaped object so we can reuse the existing openCertificate() printable */
-const programCert = (prog, en) => ({
-  title: prog.title,
-  issued_on: en.issued_date || new Date().toISOString().slice(0, 10),
-  note: "a certificate program",
-  serial: "NCTS-CP-" + String(en.id).slice(0, 8).toUpperCase(),
-});
+/* ============================================================ CERTIFICATE CLASSES (cohort) */
+/* A certificate class is a pl_courses row flagged is_certificate, with a length (6/12 weeks)
+   and optional start date. It reuses the normal Tests, Homework, and Grading. A roster table
+   (pl_cert_enrollments) tracks who's in each class; the certificate is awarded through the
+   existing pl_certificates system so it prints on the same layout. */
+const PILLAR = { stew: "Stewardship", theo: "Theology", grief: "Grief Care", bib: "Biblical Studies", thp: "The Healed Place" };
 
 function PillarTag({ pillar }) {
-  const tone = pillar === "stew" ? C.green : pillar === "grief" ? C.rose : C.gold;
+  const tone = { stew: C.green, theo: C.gold, grief: C.rose, bib: C.ink2, thp: C.ink }[pillar] || C.gold;
   return (
     <span className="pl-body" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase",
       color: tone, background: C.paper2, border: `1px solid ${C.line}`, padding: "3px 9px", borderRadius: 999 }}>
@@ -2374,68 +2371,97 @@ function PillarTag({ pillar }) {
   );
 }
 
-function CertProgramsManager({ programs, enrollments, students, profiles, refresh }) {
+function CertClassesManager({ courses, students, profiles, tests, homework, subs, hwSubs, certificates, enrollments, refresh }) {
   const [editing, setEditing] = useState(null);
-  const [openRoster, setOpenRoster] = useState(null);
-  const instructors = profiles.filter((p) => ["instructor", "admin", "assistant"].includes(p.role));
+  const [openId, setOpenId] = useState(null);
+  const [addStu, setAddStu] = useState("");
+  const classes = courses.filter((c) => c.is_certificate);
   const nameOf = (id) => (profiles.find((p) => p.id === id) || {}).full_name || "Student";
 
-  async function remove(p) {
-    if (!window.confirm(`Delete "${p.title}"? This also removes its enrollments.`)) return;
-    try { await db.deleteCertProgram(p.id); await refresh(); } catch (e) { window.alert(e.message); }
+  async function remove(c) {
+    if (!window.confirm(`Delete "${c.title}"? Its roster is removed; any tests/homework keep their work but lose the class label.`)) return;
+    try { await db.deleteCourse(c.id); await refresh(); } catch (e) { window.alert(e.message); }
   }
-  async function issue(en) {
-    try { await db.issueCertProgram(en.id); await refresh(); } catch (e) { window.alert(e.message); }
+  async function enroll(courseId, studentId) {
+    if (!studentId) return;
+    try { await db.enrollCertClass(courseId, studentId); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function unenroll(id) {
+    if (!window.confirm("Remove this student from the class?")) return;
+    try { await db.unenrollCertClass(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function award(c, studentId) {
+    try {
+      await db.issueCertificate({ student_id: studentId, title: c.title, course_id: c.id, program: "certificate", note: c.duration_weeks ? `${c.duration_weeks}-week certificate class` : "Certificate class" });
+      await refresh();
+    } catch (e) { window.alert(e.message); }
+  }
+  function progressFor(c, studentId) {
+    const ct = tests.filter((t) => t.course_id === c.id);
+    const ch = homework.filter((h) => h.course_id === c.id);
+    const total = ct.length + ch.length;
+    let done = 0;
+    ct.forEach((t) => { if (subs.some((s) => s.test_id === t.id && s.student_id === studentId && s.status === "graded")) done++; });
+    ch.forEach((h) => { if (hwSubs.some((s) => s.homework_id === h.id && s.student_id === studentId && s.status === "graded")) done++; });
+    return { done, total };
   }
 
   return (
     <>
-      <PageHead title="Certificate Programs" sub="Self-paced, non-degree programs that end in a certificate of completion." action={<Btn icon={Plus} onClick={() => setEditing({ title: "", blurb: "", pillar: "theo", instructor_id: "", fee: 0, lessons: [] })}>New program</Btn>} />
-      {editing && <ProgramEditor draft={editing} instructors={instructors} onClose={() => setEditing(null)} refresh={refresh} />}
+      <PageHead title="Certificate Classes" sub="Cohort classes (6 or 12 weeks) with their own homework and tests, ending in a certificate." action={<Btn icon={Plus} onClick={() => setEditing({ title: "", code: "", description: "", pillar: "theo", fee: 0, duration_weeks: 6, start_date: "" })}>New class</Btn>} />
+      {editing && <ClassEditor draft={editing} onClose={() => setEditing(null)} refresh={refresh} />}
       <div className="flex flex-col gap-3">
-        {programs.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No certificate programs yet. Create one to get started.</span></Card>}
-        {programs.map((p) => {
-          const ens = enrollments.filter((e) => e.program_id === p.id);
-          const done = ens.filter((e) => e.issued).length;
-          const open = openRoster === p.id;
+        {classes.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No certificate classes yet. Create one, then add its homework and tests from the Homework and Tests tabs (choose this class under “Course”).</span></Card>}
+        {classes.map((c) => {
+          const roster = enrollments.filter((e) => e.course_id === c.id);
+          const ct = tests.filter((t) => t.course_id === c.id).length;
+          const ch = homework.filter((h) => h.course_id === c.id).length;
+          const open = openId === c.id;
+          const enrolledIds = new Set(roster.map((r) => r.student_id));
+          const notEnrolled = students.filter((s) => !enrolledIds.has(s.id));
           return (
-            <Card key={p.id}>
+            <Card key={c.id}>
               <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
                 <div className="flex items-center gap-3">
                   <div className="flex items-center justify-center" style={{ width: 42, height: 42, borderRadius: 10, background: C.paper2, border: `1px solid ${C.goldSoft}` }}><Award size={20} color={C.gold} /></div>
                   <div>
                     <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
-                      <span className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink }}>{p.title}</span>
-                      <PillarTag pillar={p.pillar} />
+                      <span className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink }}>{c.code ? `${c.code} \u2014 ` : ""}{c.title}</span>
+                      {c.pillar && <PillarTag pillar={c.pillar} />}
                     </div>
-                    <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{(p.lessons || []).length} lessons · {p.fee ? money(p.fee) : "No fee"} · {ens.length} enrolled · {done} completed</div>
+                    <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{c.duration_weeks ? `${c.duration_weeks} weeks` : "Length TBD"}{c.start_date ? ` \u00B7 starts ${fdate(c.start_date)}` : ""} \u00B7 {ct} tests \u00B7 {ch} homework \u00B7 {roster.length} enrolled \u00B7 {c.fee ? money(c.fee) : "No fee"}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Btn small kind="ghost" onClick={() => setOpenRoster(open ? null : p.id)}>{open ? "Hide roster" : "Roster"}</Btn>
-                  <Btn small kind="ghost" icon={PencilLine} onClick={() => setEditing(p)}>Edit</Btn>
-                  <button onClick={() => remove(p)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+                  <Btn small kind="ghost" onClick={() => setOpenId(open ? null : c.id)}>{open ? "Hide roster" : "Roster"}</Btn>
+                  <Btn small kind="ghost" icon={PencilLine} onClick={() => setEditing(c)}>Edit</Btn>
+                  <button onClick={() => remove(c)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
                 </div>
               </div>
               {open && (
                 <div style={{ marginTop: 14, borderTop: `1px solid ${C.line}`, paddingTop: 12 }}>
-                  {ens.length === 0 ? <span className="pl-body" style={{ color: C.muted, fontSize: 13.5 }}>No students enrolled yet.</span> : ens.map((en) => {
-                    const pct = progPct(en, p);
+                  <div className="flex items-center gap-2" style={{ marginBottom: 12, flexWrap: "wrap" }}>
+                    <select style={{ ...inputStyle, marginBottom: 0, maxWidth: 280 }} value={addStu} onChange={(e) => setAddStu(e.target.value)}>
+                      <option value="">\u2014 enroll a student \u2014</option>
+                      {notEnrolled.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                    </select>
+                    <Btn small icon={Plus} onClick={() => { enroll(c.id, addStu); setAddStu(""); }}>Enroll</Btn>
+                  </div>
+                  {roster.length === 0 ? <span className="pl-body" style={{ color: C.muted, fontSize: 13.5 }}>No students enrolled yet.</span> : roster.map((r) => {
+                    const { done, total } = progressFor(c, r.student_id);
+                    const ready = total > 0 && done >= total;
+                    const cert = certificates.find((x) => x.course_id === c.id && x.student_id === r.student_id);
                     return (
-                      <div key={en.id} className="flex items-center justify-between gap-3" style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
+                      <div key={r.id} className="flex items-center justify-between gap-3" style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
                         <div style={{ minWidth: 0, flex: 1 }}>
-                          <div className="pl-body" style={{ fontWeight: 600, fontSize: 14.5 }}>{nameOf(en.student_id)}</div>
-                          <div style={{ height: 6, background: C.paper2, borderRadius: 999, marginTop: 6, overflow: "hidden", maxWidth: 320 }}>
-                            <div style={{ height: "100%", width: pct + "%", background: en.issued ? C.green : C.gold, borderRadius: 999 }} />
-                          </div>
+                          <div className="pl-body" style={{ fontWeight: 600, fontSize: 14.5 }}>{nameOf(r.student_id)}</div>
+                          <div className="pl-body" style={{ fontSize: 12.5, color: ready ? C.green : C.muted, marginTop: 2 }}>{total ? `${done}/${total} coursework graded` : "No coursework added yet"}{ready ? " \u00B7 ready for certificate" : ""}</div>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="pl-body" style={{ fontSize: 12.5, color: C.muted, width: 38, textAlign: "right" }}>{pct}%</span>
-                          {en.issued
-                            ? <Btn small icon={ExternalLink} onClick={() => openCertificate(programCert(p, en), nameOf(en.student_id))}>View</Btn>
-                            : pct >= 100
-                              ? <Btn small icon={Check} onClick={() => issue(en)}>Issue</Btn>
-                              : <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>In progress</span>}
+                          {cert
+                            ? <Btn small icon={ExternalLink} onClick={() => openCertificate(cert, nameOf(r.student_id))}>View cert</Btn>
+                            : <Btn small icon={Award} onClick={() => award(c, r.student_id)}>Issue cert</Btn>}
+                          <button onClick={() => unenroll(r.id)} title="Remove from class" className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><X size={17} /></button>
                         </div>
                       </div>
                     );
@@ -2450,147 +2476,85 @@ function CertProgramsManager({ programs, enrollments, students, profiles, refres
   );
 }
 
-function ProgramEditor({ draft, instructors, onClose, refresh }) {
-  const [f, setF] = useState({ ...draft, blurb: draft.blurb || "", instructor_id: draft.instructor_id || "", fee: draft.fee ?? 0, lessons: (draft.lessons || []).map((l) => ({ ...l })) });
+function ClassEditor({ draft, onClose, refresh }) {
+  const [f, setF] = useState({ ...draft, code: draft.code || "", description: draft.description || "", pillar: draft.pillar || "theo", fee: draft.fee ?? 0, duration_weeks: draft.duration_weeks || 6, start_date: draft.start_date || "" });
   const [busy, setBusy] = useState(false);
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
-  const addLesson = () => setF((p) => ({ ...p, lessons: [...p.lessons, { id: newLid(), title: "" }] }));
-  const setLesson = (i, v) => setF((p) => ({ ...p, lessons: p.lessons.map((l, idx) => idx === i ? { ...l, title: v } : l) }));
-  const delLesson = (i) => setF((p) => ({ ...p, lessons: p.lessons.filter((_, idx) => idx !== i) }));
-
   async function save() {
-    if (!f.title.trim()) { window.alert("Enter a program title."); return; }
-    const lessons = f.lessons.filter((l) => l.title.trim()).map((l) => ({ id: l.id || newLid(), title: l.title.trim() }));
+    if (!f.title.trim()) { window.alert("Enter a class title."); return; }
     setBusy(true);
     try {
-      await db.saveCertProgram({ id: f.id, title: f.title.trim(), blurb: f.blurb.trim(), pillar: f.pillar, instructor_id: f.instructor_id || null, fee: Number(f.fee) || 0, lessons });
-      await refresh();
-      onClose();
+      await db.saveCertClass({ id: f.id, title: f.title.trim(), code: f.code.trim(), description: f.description.trim(), pillar: f.pillar, fee: Number(f.fee) || 0, duration_weeks: Number(f.duration_weeks) || null, start_date: f.start_date || null });
+      await refresh(); onClose();
     } catch (e) { window.alert(e.message); }
     setBusy(false);
   }
-
   return (
     <Card style={{ marginBottom: 18, maxWidth: 680 }}>
-      <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: "0 0 12px" }}>{f.id ? "Edit program" : "New certificate program"}</h3>
-      <Field label="Title"><input style={inputStyle} value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="Certificate in Grief Care" /></Field>
-      <Field label="Description"><input style={inputStyle} value={f.blurb} onChange={(e) => set("blurb", e.target.value)} placeholder="Who it's for and what it covers" /></Field>
+      <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: "0 0 12px" }}>{f.id ? "Edit certificate class" : "New certificate class"}</h3>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Class code (optional)"><input style={inputStyle} value={f.code} onChange={(e) => set("code", e.target.value)} placeholder="e.g. CERT-GRF" /></Field>
+        <Field label="Fee (USD)"><input style={inputStyle} type="number" value={f.fee} onChange={(e) => set("fee", e.target.value)} placeholder="0" /></Field>
+      </div>
+      <Field label="Class title"><input style={inputStyle} value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="Certificate in Grief Care" /></Field>
+      <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 70 }} value={f.description} onChange={(e) => set("description", e.target.value)} /></Field>
       <div className="grid grid-cols-3 gap-3">
         <Field label="Pillar">
           <select style={inputStyle} value={f.pillar} onChange={(e) => set("pillar", e.target.value)}>
-            <option value="stew">Stewardship</option><option value="theo">Theology</option><option value="grief">Grief Care</option>
+            {Object.entries(PILLAR).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
           </select>
         </Field>
-        <Field label="Fee (USD)"><input style={inputStyle} type="number" value={f.fee} onChange={(e) => set("fee", e.target.value)} placeholder="0" /></Field>
-        <Field label="Instructor">
-          <select style={inputStyle} value={f.instructor_id} onChange={(e) => set("instructor_id", e.target.value)}>
-            <option value="">— none —</option>
-            {instructors.map((i) => <option key={i.id} value={i.id}>{i.full_name}</option>)}
+        <Field label="Length">
+          <select style={inputStyle} value={f.duration_weeks} onChange={(e) => set("duration_weeks", e.target.value)}>
+            <option value={6}>6 weeks</option>
+            <option value={12}>12 weeks</option>
           </select>
         </Field>
+        <Field label="Start date (optional)"><input style={inputStyle} type="date" value={f.start_date} onChange={(e) => set("start_date", e.target.value)} /></Field>
       </div>
-      <div style={{ marginTop: 6 }}>
-        <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-          <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: C.muted, letterSpacing: ".04em", textTransform: "uppercase" }}>Lessons</span>
-          <Btn small kind="ghost" icon={Plus} onClick={addLesson}>Add lesson</Btn>
-        </div>
-        {f.lessons.length === 0 && <span className="pl-body" style={{ color: C.muted, fontSize: 13.5 }}>No lessons yet. Add a few that a student checks off to complete the program.</span>}
-        <div className="flex flex-col gap-2">
-          {f.lessons.map((l, i) => (
-            <div key={l.id} className="flex items-center gap-2">
-              <span className="pl-body" style={{ fontSize: 12.5, color: C.muted, width: 22 }}>{String(i + 1).padStart(2, "0")}</span>
-              <input style={{ ...inputStyle, marginBottom: 0 }} value={l.title} onChange={(e) => setLesson(i, e.target.value)} placeholder="Lesson title" />
-              <button onClick={() => delLesson(i)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><X size={18} /></button>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="flex gap-2" style={{ marginTop: 16 }}><Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : "Save program"}</Btn><Btn kind="ghost" onClick={onClose}>Cancel</Btn></div>
+      <div className="flex gap-2" style={{ marginTop: 8 }}><Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving\u2026" : "Save class"}</Btn><Btn kind="ghost" onClick={onClose}>Cancel</Btn></div>
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>After saving, add this class's homework and tests from the Homework and Tests tabs \u2014 choose this class under \u201CCourse.\u201D</p>
     </Card>
   );
 }
 
-function StudentCertPrograms({ programs, enrollments, profile, refresh }) {
-  const mine = enrollments.filter((e) => e.student_id === profile.id);
-  const myIds = new Set(mine.map((e) => e.program_id));
-  const available = programs.filter((p) => !myIds.has(p.id));
-
-  async function enroll(p) {
-    try { await db.enrollCertProgram(p.id); await refresh(); } catch (e) { window.alert(e.message); }
-  }
-  async function toggle(en, prog, lessonId) {
-    const had = (en.completed_lesson_ids || []).includes(lessonId);
-    const ids = had ? en.completed_lesson_ids.filter((x) => x !== lessonId) : [...(en.completed_lesson_ids || []), lessonId];
-    const complete = (prog.lessons || []).length > 0 && ids.length >= prog.lessons.length;
-    try {
-      await db.saveCertProgress(en.id, ids, complete, complete ? new Date().toISOString().slice(0, 10) : null);
-      await refresh();
-    } catch (e) { window.alert(e.message); }
-  }
+function StudentCertClasses({ courses, enrollments, profile, certAvailable, certAvailableHw, myHwSubs, homework, books, certificates, refresh }) {
+  const myEnroll = enrollments.filter((e) => e.student_id === profile.id);
+  const myClassIds = new Set(myEnroll.map((e) => e.course_id));
+  const myClasses = courses.filter((c) => c.is_certificate && myClassIds.has(c.id));
+  const myCerts = certificates.filter((c) => c.student_id === profile.id && myClassIds.has(c.course_id));
 
   return (
     <>
-      <PageHead title="Certificate Programs" sub="Work at your own pace. Finish the lessons to earn your certificate." />
-      {mine.length === 0 && available.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No certificate programs are available yet.</span></Card>}
-
-      {mine.length > 0 && <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: "4px 0 12px" }}>My programs</h3>}
-      <div className="flex flex-col gap-3" style={{ marginBottom: mine.length ? 26 : 0 }}>
-        {mine.map((en) => {
-          const p = programs.find((x) => x.id === en.program_id);
-          if (!p) return null;
-          const total = (p.lessons || []).length;
-          const doneCount = (en.completed_lesson_ids || []).length;
-          const pct = total ? Math.round((doneCount / total) * 100) : 0;
+      <PageHead title="Certificate Classes" sub="Your enrolled certificate classes, their coursework, and the certificates you've earned." />
+      {myClasses.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>You're not enrolled in any certificate classes yet. Your instructor will add you to one.</span></Card>}
+      <div className="flex flex-col gap-3" style={{ marginBottom: myClasses.length ? 24 : 0 }}>
+        {myClasses.map((c) => {
+          const cert = myCerts.find((x) => x.course_id === c.id);
           return (
-            <Card key={en.id}>
-              <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+            <Card key={c.id}>
+              <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
                 <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
-                  <span className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink }}>{p.title}</span>
-                  <PillarTag pillar={p.pillar} />
+                  <span className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink }}>{c.title}</span>
+                  {c.pillar && <PillarTag pillar={c.pillar} />}
                 </div>
-                <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{doneCount}/{total} lessons</span>
+                {cert
+                  ? <Btn small icon={ExternalLink} onClick={() => openCertificate(cert, profile.full_name)}>View / Print certificate</Btn>
+                  : <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{c.duration_weeks ? `${c.duration_weeks} weeks` : ""}{c.start_date ? ` \u00B7 starts ${fdate(c.start_date)}` : ""}</span>}
               </div>
-              <div style={{ height: 7, background: C.paper2, borderRadius: 999, overflow: "hidden", marginBottom: 14 }}>
-                <div style={{ height: "100%", width: pct + "%", background: en.issued ? C.green : C.gold, borderRadius: 999 }} />
-              </div>
-              {en.issued && (
-                <div className="flex items-center justify-between" style={{ background: C.greenSoft, borderRadius: 10, padding: "10px 14px", marginBottom: 14, gap: 10, flexWrap: "wrap" }}>
-                  <span className="pl-body" style={{ color: C.green, fontWeight: 600, fontSize: 14 }}>Certificate earned — well done.</span>
-                  <Btn small icon={ExternalLink} onClick={() => openCertificate(programCert(p, en), profile.full_name)}>View / Print</Btn>
-                </div>
-              )}
-              <div className="flex flex-col gap-2">
-                {(p.lessons || []).map((l, i) => {
-                  const done = (en.completed_lesson_ids || []).includes(l.id);
-                  return (
-                    <button key={l.id} onClick={() => toggle(en, p, l.id)} className="pl-press" style={{ display: "flex", alignItems: "center", gap: 11, textAlign: "left", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 13px", cursor: "pointer" }}>
-                      <span style={{ width: 22, height: 22, borderRadius: "50%", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: done ? C.green : "transparent", border: `1.5px solid ${done ? C.green : C.line}`, color: "#fff" }}>{done && <Check size={13} />}</span>
-                      <span className="pl-body" style={{ fontSize: 12.5, color: C.muted, width: 20 }}>{String(i + 1).padStart(2, "0")}</span>
-                      <span className="pl-body" style={{ flex: 1, fontSize: 14.5 }}>{l.title}</span>
-                    </button>
-                  );
-                })}
-                {total === 0 && <span className="pl-body" style={{ color: C.muted, fontSize: 13.5 }}>This program has no lessons yet.</span>}
-              </div>
+              {c.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.text, margin: "8px 0 0", lineHeight: 1.55 }}>{c.description}</p>}
+              {cert && <div className="pl-body" style={{ marginTop: 10, color: C.green, fontWeight: 600, fontSize: 14 }}>Certificate earned {fdate(cert.issued_on)} \u2014 well done.</div>}
             </Card>
           );
         })}
       </div>
-
-      {available.length > 0 && <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: "4px 0 12px" }}>Available programs</h3>}
-      <div className="grid grid-cols-2 gap-4">
-        {available.map((p) => (
-          <Card key={p.id}>
-            <div className="flex items-center gap-2" style={{ flexWrap: "wrap", marginBottom: 8 }}>
-              <span className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink }}>{p.title}</span>
-              <PillarTag pillar={p.pillar} />
-            </div>
-            {p.blurb && <p className="pl-body" style={{ fontSize: 13.5, color: C.text, margin: "0 0 10px", lineHeight: 1.55 }}>{p.blurb}</p>}
-            <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginBottom: 12 }}>{(p.lessons || []).length} lessons · {p.fee ? money(p.fee) : "No fee"}</div>
-            <Btn full icon={Plus} onClick={() => enroll(p)}>Enroll</Btn>
-          </Card>
-        ))}
-      </div>
+      {myClasses.length > 0 && (
+        <>
+          <StudentTests available={certAvailable} books={books} courses={courses} refresh={refresh} />
+          <div style={{ height: 18 }} />
+          <StudentHomework availableHw={certAvailableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} refresh={refresh} />
+        </>
+      )}
     </>
   );
 }
