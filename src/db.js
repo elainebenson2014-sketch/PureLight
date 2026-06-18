@@ -430,67 +430,42 @@ export async function unassignCourse(instructor_id, course_id) {
   if (error) throw error;
 }
 
-/* ---------------- CERTIFICATE PROGRAMS (self-paced, non-degree) ---------------- */
-export async function listCertPrograms() {
-  const { data, error } = await supabase.from("pl_cert_programs").select("*").order("created_at", { ascending: true });
-  if (error) throw error;
-  return data;
-}
-
-export async function saveCertProgram(p) {
+/* ---------------- CERTIFICATE CLASSES (cohort: pl_courses flagged is_certificate) ---------------- */
+export async function saveCertClass(c) {
   const { data: { user } } = await supabase.auth.getUser();
   const rec = {
-    title: p.title, blurb: p.blurb || "", pillar: p.pillar || "theo",
-    instructor_id: p.instructor_id || null, fee: Number(p.fee) || 0, lessons: p.lessons || [],
+    title: c.title, description: c.description || "", code: c.code || null,
+    program: "certificate", is_certificate: true,
+    pillar: c.pillar || null, fee: Number(c.fee) || 0,
+    duration_weeks: c.duration_weeks ? Number(c.duration_weeks) : null,
+    start_date: c.start_date || null,
   };
-  if (p.id) {
-    const { error } = await supabase.from("pl_cert_programs").update(rec).eq("id", p.id);
+  if (c.id) {
+    const { error } = await supabase.from("pl_courses").update(rec).eq("id", c.id);
     if (error) throw error;
-    return p.id;
+    return c.id;
   }
-  const { data, error } = await supabase.from("pl_cert_programs").insert({ ...rec, created_by: user.id }).select("id").single();
+  const { data, error } = await supabase.from("pl_courses").insert({ ...rec, created_by: user.id }).select("id").single();
   if (error) throw error;
   return data.id;
 }
 
-export async function deleteCertProgram(id) {
-  const { error } = await supabase.from("pl_cert_programs").delete().eq("id", id);
-  if (error) throw error;
-}
-
+/* roster: which students are in which certificate class */
 export async function listCertEnrollments() {
-  const { data, error } = await supabase.from("pl_cert_enrollments").select("*").order("created_at", { ascending: false });
+  const { data, error } = await supabase.from("pl_cert_enrollments").select("*");
   if (error) throw error;
   return data;
 }
 
-/* student enrolls themselves (or admin enrolls a student by passing student_id) */
-export async function enrollCertProgram(program_id, student_id) {
+export async function enrollCertClass(course_id, student_id) {
   let sid = student_id;
   if (!sid) { const { data: { user } } = await supabase.auth.getUser(); sid = user.id; }
   const { error } = await supabase.from("pl_cert_enrollments")
-    .upsert({ student_id: sid, program_id, completed_lesson_ids: [] }, { onConflict: "student_id,program_id", ignoreDuplicates: true });
+    .upsert({ student_id: sid, course_id }, { onConflict: "student_id,course_id", ignoreDuplicates: true });
   if (error) throw error;
 }
 
-/* save a student's lesson progress; pass issued/issued_date to award (or clear) the certificate */
-export async function saveCertProgress(enrollment_id, completed_lesson_ids, issued, issued_date) {
-  const patch = { completed_lesson_ids: completed_lesson_ids || [] };
-  if (issued !== undefined) patch.issued = issued;
-  if (issued_date !== undefined) patch.issued_date = issued_date;
-  const { error } = await supabase.from("pl_cert_enrollments").update(patch).eq("id", enrollment_id);
-  if (error) throw error;
-}
-
-/* Administration manually awards the certificate for a completed enrollment */
-export async function issueCertProgram(enrollment_id, issued_date) {
-  const { error } = await supabase.from("pl_cert_enrollments")
-    .update({ issued: true, issued_date: issued_date || new Date().toISOString().slice(0, 10) })
-    .eq("id", enrollment_id);
-  if (error) throw error;
-}
-
-export async function deleteCertEnrollment(id) {
+export async function unenrollCertClass(id) {
   const { error } = await supabase.from("pl_cert_enrollments").delete().eq("id", id);
   if (error) throw error;
 }
