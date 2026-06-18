@@ -363,7 +363,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
           {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} refresh={refresh} />}
           {active === "certificates" && profile.role === "admin" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
-          {active === "certprograms" && profile.role === "admin" && <CertClassesManager courses={courses} students={students} profiles={profiles} tests={tests} homework={homework} subs={subs} hwSubs={hwSubs} certificates={certificates} enrollments={certEnrollments} refresh={refresh} />}
+          {active === "certprograms" && profile.role === "admin" && <CertClassesManager courses={courses} students={students} profiles={profiles} tests={tests} homework={homework} subs={subs} hwSubs={hwSubs} certificates={certificates} enrollments={certEnrollments} ledger={ledger} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
         </>
       )}
@@ -931,6 +931,15 @@ function StudentPortal({ profile, onLogout }) {
     setLoading(false);
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    if (p.get("cert_paid")) {
+      window.history.replaceState({}, "", window.location.pathname);
+      window.alert("Payment received — thank you! Your class will show as Paid in a moment.");
+      const t = setTimeout(() => refresh(), 2500);
+      return () => clearTimeout(t);
+    }
+  }, [refresh]);
 
   const prog = profile.program;
   const certCourseIds = new Set((courses || []).filter((c) => c.is_certificate).map((c) => c.id));
@@ -978,7 +987,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "grades" && <StudentGrades mySubs={mySubs} tests={degTests} myHwSubs={myHwSubs} homework={degHw} courses={courses} profile={profile} />}
           {active === "progress" && <DegreeProgress profile={profile} courses={courses} tests={degTests} homework={degHw} mySubs={mySubs} myHwSubs={myHwSubs} />}
           {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
-          {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certAvailable={certAvailable} certAvailableHw={certAvailableHw} myHwSubs={myHwSubs} homework={homework} books={books} certificates={certificates} refresh={refresh} />}
+          {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certAvailable={certAvailable} certAvailableHw={certAvailableHw} myHwSubs={myHwSubs} homework={homework} books={books} certificates={certificates} ledger={ledger.filter((e) => e.student_id === profile.id)} refresh={refresh} />}
           {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
         </>
@@ -1055,7 +1064,7 @@ function SessionRow({ s, courses, onEdit, onDelete, onRemind, manage }) {
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{s.title}</h3>
-          <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{fwhen(s.starts_at)}{s.duration_min ? ` \u00B7 ${s.duration_min} min` : ""}{c ? ` \u00B7 ${c.code ? c.code + " " : ""}${c.title}` : ""}</div>
+          <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{fwhen(s.starts_at)}{s.duration_min ? ` · ${s.duration_min} min` : ""}{c ? ` · ${c.code ? c.code + " " : ""}${c.title}` : ""}</div>
           {s.notes && <div className="pl-body" style={{ fontSize: 13, color: C.text, marginTop: 6, whiteSpace: "pre-wrap" }}>{s.notes}</div>}
         </div>
         <div className="flex items-center gap-2">
@@ -1085,11 +1094,11 @@ function ScheduleManager({ sessions, courses, students, profile, refresh }) {
     const recips = (students || []).filter((st) => (s.program === "all" || st.program === s.program) && st.email).map((st) => st.email);
     if (recips.length === 0) { window.alert("No students with an email in this class's program yet."); return; }
     if (!window.confirm(`Email a reminder to ${recips.length} student${recips.length === 1 ? "" : "s"}?`)) return;
-    setNote("Sending reminder\u2026");
+    setNote("Sending reminder…");
     const join = s.zoom_url ? `<p><a href="${s.zoom_url}">Join the class on Zoom</a></p>` : "";
-    const html = `<p>This is a reminder for your upcoming class:</p><p><b>${s.title}</b><br/>${fwhen(s.starts_at)}${s.duration_min ? ` \u00B7 ${s.duration_min} min` : ""}</p>${join}${s.notes ? `<p>${s.notes}</p>` : ""}<p style="color:#888">\u2014 NCTS PureLight</p>`;
+    const html = `<p>This is a reminder for your upcoming class:</p><p><b>${s.title}</b><br/>${fwhen(s.starts_at)}${s.duration_min ? ` · ${s.duration_min} min` : ""}</p>${join}${s.notes ? `<p>${s.notes}</p>` : ""}<p style="color:#888">— NCTS PureLight</p>`;
     const r = await db.sendEmail({ to: profile.email, bcc: recips, subject: `Class reminder: ${s.title}`, html });
-    setNote(r && !r.error ? `Reminder sent to ${recips.length} student${recips.length === 1 ? "" : "s"}.` : "Couldn't send \u2014 check your email settings.");
+    setNote(r && !r.error ? `Reminder sent to ${recips.length} student${recips.length === 1 ? "" : "s"}.` : "Couldn't send — check your email settings.");
   }
   async function save() {
     if (!form.title.trim() || !form.starts_at) { window.alert("Add a title and a date/time."); return; }
@@ -1114,21 +1123,21 @@ function ScheduleManager({ sessions, courses, students, profile, refresh }) {
       <PageHead title="Live Classes" sub="Schedule Zoom sessions; students see them on their Schedule." action={<Btn icon={Plus} onClick={() => { setForm(blank); setShow(true); }}>New class</Btn>} />
       {show && (
         <Card style={{ marginBottom: 18, maxWidth: 640 }}>
-          <Field label="Title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Genesis \u2014 Week 3 Lecture" /></Field>
-          <Field label="Course (optional)"><select style={inputStyle} value={form.course_id} onChange={(e) => setForm({ ...form, course_id: e.target.value })}><option value="">\u2014 None \u2014</option>{courses.map((c) => <option key={c.id} value={c.id}>{c.code ? `${c.code} \u2014 ` : ""}{c.title}</option>)}</select></Field>
+          <Field label="Title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Genesis — Week 3 Lecture" /></Field>
+          <Field label="Course (optional)"><select style={inputStyle} value={form.course_id} onChange={(e) => setForm({ ...form, course_id: e.target.value })}><option value="">— None —</option>{courses.map((c) => <option key={c.id} value={c.id}>{c.code ? `${c.code} — ` : ""}{c.title}</option>)}</select></Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Date & time"><input type="datetime-local" style={inputStyle} value={form.starts_at} onChange={(e) => setForm({ ...form, starts_at: e.target.value })} /></Field>
             <Field label="Length (min)"><input type="number" style={inputStyle} value={form.duration_min} onChange={(e) => setForm({ ...form, duration_min: e.target.value })} /></Field>
           </div>
-          <Field label="Zoom link"><input style={inputStyle} value={form.zoom_url} onChange={(e) => setForm({ ...form, zoom_url: e.target.value })} placeholder="https://zoom.us/j/\u2026" /></Field>
+          <Field label="Zoom link"><input style={inputStyle} value={form.zoom_url} onChange={(e) => setForm({ ...form, zoom_url: e.target.value })} placeholder="https://zoom.us/j/…" /></Field>
           <Field label="Notes (optional)"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
-          <div className="flex gap-2"><Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving\u2026" : "Save class"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
+          <div className="flex gap-2"><Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save class"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
         </Card>
       )}
       <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Upcoming</h3>
       {note && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginBottom: 10 }}>{note}</div>}
       <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
-        {upcoming.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No upcoming classes. Tap \u201CNew class\u201D to schedule one.</span></Card>}
+        {upcoming.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No upcoming classes. Tap “New class” to schedule one.</span></Card>}
         {upcoming.map((s) => <SessionRow key={s.id} s={s} courses={courses} onEdit={() => edit(s)} onDelete={() => remove(s.id)} onRemind={() => remind(s)} manage />)}
       </div>
       {past.length > 0 && (
@@ -1167,7 +1176,7 @@ function StudentSchedule({ sessions, homework, tests, courses, profile }) {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h3 className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink, margin: 0 }}>{i.data.title}</h3>
-                    <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{tag} \u00B7 {fwhen(i.when, false)}{c ? ` \u00B7 ${c.code ? c.code + " " : ""}${c.title}` : ""}</div>
+                    <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{tag} · {fwhen(i.when, false)}{c ? ` · ${c.code ? c.code + " " : ""}${c.title}` : ""}</div>
                   </div>
                   <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, letterSpacing: 0.5 }}>{i.kind === "hw" ? "HW" : "TEST"}</span>
                 </div>
@@ -1193,9 +1202,9 @@ function StudentCourses({ courses, profile }) {
         <div className="flex flex-col gap-3">
           {mine.map((c) => (
             <Card key={c.id}>
-              <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} \u2014 ` : ""}{c.title}</h3>
+              <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} — ` : ""}{c.title}</h3>
               <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>
-                {c.credit_hours ? `${c.credit_hours} credit hours` : ""}{c.credit_hours && c.description ? " \u00B7 " : ""}{c.description || ""}
+                {c.credit_hours ? `${c.credit_hours} credit hours` : ""}{c.credit_hours && c.description ? " · " : ""}{c.description || ""}
               </div>
             </Card>
           ))}
@@ -1550,7 +1559,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
   }
   async function importCsv(file) {
     if (!file) return;
-    setCsvNote("Reading file\u2026");
+    setCsvNote("Reading file…");
     try {
       const text = await file.text();
       const rows = parseCSV(text);
@@ -1574,7 +1583,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
       const codeMap = new Map();
       (courses || []).forEach((c) => { if (c.code) codeMap.set(c.code.trim().toLowerCase(), c); });
       let made = 0; const skipped = [];
-      setCsvNote(`Importing ${order.length} assignment${order.length === 1 ? "" : "s"}\u2026`);
+      setCsvNote(`Importing ${order.length} assignment${order.length === 1 ? "" : "s"}…`);
       for (const key of order) {
         const g = groups.get(key); const c = codeMap.get(g.code.toLowerCase());
         if (!c) { skipped.push(g.code); continue; }
@@ -1583,7 +1592,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
       }
       await refresh();
       const uniq = [...new Set(skipped)];
-      setCsvNote(`Created ${made} assignment${made === 1 ? "" : "s"}.${uniq.length ? ` Skipped (course code not found \u2014 import courses first): ${uniq.join(", ")}.` : ""}`);
+      setCsvNote(`Created ${made} assignment${made === 1 ? "" : "s"}.${uniq.length ? ` Skipped (course code not found — import courses first): ${uniq.join(", ")}.` : ""}`);
     } catch (e) { setCsvNote("Couldn't import: " + e.message); }
   }
   async function removeHw(id) {
@@ -1951,7 +1960,7 @@ function CoursesManager({ courses, refresh }) {
   }
   async function onCsv(file) {
     if (!file) return;
-    setCsvNote("Reading file\u2026");
+    setCsvNote("Reading file…");
     try {
       const text = await file.text();
       const rows = parseCSV(text);
@@ -1996,7 +2005,7 @@ function CoursesManager({ courses, refresh }) {
           <Field label="Course title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Introduction to the Bible" /></Field>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 80 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <Field label="Program / level"><ProgramSelect value={form.program} onChange={(v) => setForm({ ...form, program: v })} /></Field>
-          <div className="flex gap-2"><Btn icon={Check} onClick={create} disabled={busy}>{busy ? "Saving\u2026" : "Create course"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
+          <div className="flex gap-2"><Btn icon={Check} onClick={create} disabled={busy}>{busy ? "Saving…" : "Create course"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
         </Card>
       )}
       <div className="flex flex-col gap-3">
@@ -2005,8 +2014,8 @@ function CoursesManager({ courses, refresh }) {
           <Card key={c.id}>
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} \u2014 ` : ""}{c.title}</h3>
-                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(c.program)}{c.credit_hours ? ` \u00B7 ${c.credit_hours} cr` : ""}{c.description ? ` \u00B7 ${c.description}` : ""}</div>
+                <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} — ` : ""}{c.title}</h3>
+                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(c.program)}{c.credit_hours ? ` · ${c.credit_hours} cr` : ""}{c.description ? ` · ${c.description}` : ""}</div>
               </div>
               <button onClick={() => remove(c.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
             </div>
@@ -2138,19 +2147,19 @@ function openSubmission(sub, assessment, studentName) {
     const ans = sub.answers?.[q.id];
     let answer = "", correct = "", badge = "";
     if (q.type === "mc") {
-      answer = safe(q.options?.[Number(ans)] ?? "\u2014");
+      answer = safe(q.options?.[Number(ans)] ?? "—");
       correct = safe(q.options?.[Number(q.correct_answer)] ?? "");
       const ok = String(ans) === String(q.correct_answer);
       badge = `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
     } else if (q.type === "tf") {
-      answer = safe(ans ?? "\u2014");
+      answer = safe(ans ?? "—");
       correct = safe(q.correct_answer);
       const ok = ans === q.correct_answer;
       badge = `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
     } else {
       answer = safe(ans || "(no response)");
       const aw = sub.manual?.[q.id];
-      badge = `<span class="b man">${aw != null && aw !== "" ? aw : "\u2014"}/${q.points} pts</span>`;
+      badge = `<span class="b man">${aw != null && aw !== "" ? aw : "—"}/${q.points} pts</span>`;
     }
     return `<div class="q"><div class="qh"><span class="qn">Q${i + 1} \u00b7 ${safe(QTYPE[q.type] || q.type)} \u00b7 ${q.points} pts</span>${badge}</div>
       <div class="pr">${safe(q.prompt)}</div>
@@ -2160,7 +2169,7 @@ function openSubmission(sub, assessment, studentName) {
   const respHtml = sub.response ? `<div class="q"><div class="pr">Written response</div><div class="an">${safe(sub.response)}</div></div>` : "";
   const fileHtml = sub.file_path ? `<div class="note">A file was uploaded with this submission (open it in the app).</div>` : "";
   const fbHtml = sub.feedback ? `<div class="fb"><div class="fbh">Instructor feedback</div>${safe(sub.feedback)}</div>` : "";
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${safe(studentName)} \u2014 ${safe(assessment?.title || "Submission")}</title>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${safe(studentName)} — ${safe(assessment?.title || "Submission")}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
   <style>
@@ -2371,7 +2380,7 @@ function PillarTag({ pillar }) {
   );
 }
 
-function CertClassesManager({ courses, students, profiles, tests, homework, subs, hwSubs, certificates, enrollments, refresh }) {
+function CertClassesManager({ courses, students, profiles, tests, homework, subs, hwSubs, certificates, enrollments, ledger, refresh }) {
   const [editing, setEditing] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [addStu, setAddStu] = useState("");
@@ -2426,10 +2435,10 @@ function CertClassesManager({ courses, students, profiles, tests, homework, subs
                   <div className="flex items-center justify-center" style={{ width: 42, height: 42, borderRadius: 10, background: C.paper2, border: `1px solid ${C.goldSoft}` }}><Award size={20} color={C.gold} /></div>
                   <div>
                     <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
-                      <span className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink }}>{c.code ? `${c.code} \u2014 ` : ""}{c.title}</span>
+                      <span className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink }}>{c.code ? `${c.code} — ` : ""}{c.title}</span>
                       {c.pillar && <PillarTag pillar={c.pillar} />}
                     </div>
-                    <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{c.duration_weeks ? `${c.duration_weeks} weeks` : "Length TBD"}{c.start_date ? ` \u00B7 starts ${fdate(c.start_date)}` : ""} \u00B7 {ct} tests \u00B7 {ch} homework \u00B7 {roster.length} enrolled \u00B7 {c.fee ? money(c.fee) : "No fee"}</div>
+                    <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{c.duration_weeks ? `${c.duration_weeks} weeks` : "Length TBD"}{c.start_date ? ` · starts ${fdate(c.start_date)}` : ""} · {ct} tests · {ch} homework · {roster.length} enrolled · {c.fee ? money(c.fee) : "No fee"}</div>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -2442,7 +2451,7 @@ function CertClassesManager({ courses, students, profiles, tests, homework, subs
                 <div style={{ marginTop: 14, borderTop: `1px solid ${C.line}`, paddingTop: 12 }}>
                   <div className="flex items-center gap-2" style={{ marginBottom: 12, flexWrap: "wrap" }}>
                     <select style={{ ...inputStyle, marginBottom: 0, maxWidth: 280 }} value={addStu} onChange={(e) => setAddStu(e.target.value)}>
-                      <option value="">\u2014 enroll a student \u2014</option>
+                      <option value="">— enroll a student —</option>
                       {notEnrolled.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
                     </select>
                     <Btn small icon={Plus} onClick={() => { enroll(c.id, addStu); setAddStu(""); }}>Enroll</Btn>
@@ -2451,11 +2460,12 @@ function CertClassesManager({ courses, students, profiles, tests, homework, subs
                     const { done, total } = progressFor(c, r.student_id);
                     const ready = total > 0 && done >= total;
                     const cert = certificates.find((x) => x.course_id === c.id && x.student_id === r.student_id);
+                    const paid = Number(c.fee) > 0 && (ledger || []).some((e) => e.kind === "payment" && e.course_id === c.id && e.student_id === r.student_id);
                     return (
                       <div key={r.id} className="flex items-center justify-between gap-3" style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div className="pl-body" style={{ fontWeight: 600, fontSize: 14.5 }}>{nameOf(r.student_id)}</div>
-                          <div className="pl-body" style={{ fontSize: 12.5, color: ready ? C.green : C.muted, marginTop: 2 }}>{total ? `${done}/${total} coursework graded` : "No coursework added yet"}{ready ? " \u00B7 ready for certificate" : ""}</div>
+                          <div className="pl-body" style={{ fontSize: 12.5, color: ready ? C.green : C.muted, marginTop: 2 }}>{total ? `${done}/${total} coursework graded` : "No coursework added yet"}{ready ? " · ready for certificate" : ""}{Number(c.fee) > 0 ? (paid ? " · paid" : " · unpaid") : ""}</div>
                         </div>
                         <div className="flex items-center gap-2">
                           {cert
@@ -2512,17 +2522,25 @@ function ClassEditor({ draft, onClose, refresh }) {
         </Field>
         <Field label="Start date (optional)"><input style={inputStyle} type="date" value={f.start_date} onChange={(e) => set("start_date", e.target.value)} /></Field>
       </div>
-      <div className="flex gap-2" style={{ marginTop: 8 }}><Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving\u2026" : "Save class"}</Btn><Btn kind="ghost" onClick={onClose}>Cancel</Btn></div>
-      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>After saving, add this class's homework and tests from the Homework and Tests tabs \u2014 choose this class under \u201CCourse.\u201D</p>
+      <div className="flex gap-2" style={{ marginTop: 8 }}><Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : "Save class"}</Btn><Btn kind="ghost" onClick={onClose}>Cancel</Btn></div>
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>After saving, add this class's homework and tests from the Homework and Tests tabs — choose this class under “Course.”</p>
     </Card>
   );
 }
 
-function StudentCertClasses({ courses, enrollments, profile, certAvailable, certAvailableHw, myHwSubs, homework, books, certificates, refresh }) {
+function StudentCertClasses({ courses, enrollments, profile, certAvailable, certAvailableHw, myHwSubs, homework, books, certificates, ledger, refresh }) {
   const myEnroll = enrollments.filter((e) => e.student_id === profile.id);
   const myClassIds = new Set(myEnroll.map((e) => e.course_id));
   const myClasses = courses.filter((c) => c.is_certificate && myClassIds.has(c.id));
   const myCerts = certificates.filter((c) => c.student_id === profile.id && myClassIds.has(c.course_id));
+  const paidIds = new Set((ledger || []).filter((e) => e.kind === "payment" && e.course_id).map((e) => e.course_id));
+  const certHomework = (homework || []).filter((h) => myClassIds.has(h.course_id));
+  const certMyHwSubs = (myHwSubs || []).filter((s) => certHomework.some((h) => h.id === s.homework_id));
+
+  async function pay(c) {
+    try { const url = await db.startCertCheckout(c.id); window.location.href = url; }
+    catch (e) { window.alert(e.message); }
+  }
 
   return (
     <>
@@ -2531,6 +2549,7 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
       <div className="flex flex-col gap-3" style={{ marginBottom: myClasses.length ? 24 : 0 }}>
         {myClasses.map((c) => {
           const cert = myCerts.find((x) => x.course_id === c.id);
+          const paid = paidIds.has(c.id);
           return (
             <Card key={c.id}>
               <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
@@ -2540,10 +2559,18 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
                 </div>
                 {cert
                   ? <Btn small icon={ExternalLink} onClick={() => openCertificate(cert, profile.full_name)}>View / Print certificate</Btn>
-                  : <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{c.duration_weeks ? `${c.duration_weeks} weeks` : ""}{c.start_date ? ` \u00B7 starts ${fdate(c.start_date)}` : ""}</span>}
+                  : <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{c.duration_weeks ? `${c.duration_weeks} weeks` : ""}{c.start_date ? ` · starts ${fdate(c.start_date)}` : ""}</span>}
               </div>
               {c.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.text, margin: "8px 0 0", lineHeight: 1.55 }}>{c.description}</p>}
-              {cert && <div className="pl-body" style={{ marginTop: 10, color: C.green, fontWeight: 600, fontSize: 14 }}>Certificate earned {fdate(cert.issued_on)} \u2014 well done.</div>}
+              {Number(c.fee) > 0 && (
+                <div className="flex items-center justify-between" style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}`, gap: 10, flexWrap: "wrap" }}>
+                  <span className="pl-body" style={{ fontSize: 14, color: C.ink }}>Tuition: <b>{money(c.fee)}</b></span>
+                  {paid
+                    ? <span className="pl-body" style={{ fontSize: 13, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={15} /> Paid</span>
+                    : <Btn small icon={Receipt} onClick={() => pay(c)}>Pay {money(c.fee)}</Btn>}
+                </div>
+              )}
+              {cert && <div className="pl-body" style={{ marginTop: 10, color: C.green, fontWeight: 600, fontSize: 14 }}>Certificate earned {fdate(cert.issued_on)} — well done.</div>}
             </Card>
           );
         })}
@@ -2552,7 +2579,7 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
         <>
           <StudentTests available={certAvailable} books={books} courses={courses} refresh={refresh} />
           <div style={{ height: 18 }} />
-          <StudentHomework availableHw={certAvailableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} refresh={refresh} />
+          <StudentHomework availableHw={certAvailableHw} myHwSubs={certMyHwSubs} homework={certHomework} courses={courses} refresh={refresh} />
         </>
       )}
     </>
