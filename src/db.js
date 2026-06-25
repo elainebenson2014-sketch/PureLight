@@ -293,9 +293,60 @@ export async function gradeHomework(id, { manual, score, max_points, feedback })
 }
 
 /* ---------------- PROGRAMS ---------------- */
+// Labels must match App.jsx PROGRAMS / the checkout function so charge and
+// payment descriptions line up exactly (e.g. "Bachelor tuition").
+const TUITION_LEVEL_LABELS = {
+  certificate: "Certificate", associate: "Associate", bachelor: "Bachelor",
+  master: "Master", doctorate: "Doctoral", phd: "PhD",
+};
+
+/* Post the registration / books / tuition charges for a student's level so the
+   ledger reconciles against their payments. Idempotent: a charge whose
+   description already exists is skipped, so it's safe to call repeatedly. */
+export async function postTuitionCharges(student_id, program) {
+  if (!student_id || !program) return;
+  const { data: trows, error: te } = await supabase
+    .from("pl_tuition").select("amount,registration,books").eq("program", program);
+  if (te) throw te;
+  const t = Array.isArray(trows) ? trows[0] : null;
+  if (!t) return;
+
+  const label = TUITION_LEVEL_LABELS[program] || program;
+  const total = Number(t.amount) || 0;
+  const reg = Number(t.registration) || 0;
+  const books = Number(t.books) || 0;
+  const tuitionPortion = Math.max(0, Math.round((total - reg - books) * 100) / 100);
+
+  const planned = [
+    { description: `${label} registration`, amount: reg },
+    { description: `${label} books`, amount: books },
+    { description: `${label} tuition`, amount: tuitionPortion },
+  ].filter((c) => c.amount > 0);
+  if (!planned.length) return;
+
+  const { data: existing, error: ee } = await supabase
+    .from("pl_ledger").select("description").eq("student_id", student_id).eq("kind", "charge");
+  if (ee) throw ee;
+  const have = new Set((existing || []).map((e) => (e.description || "").trim().toLowerCase()));
+
+  const { data: { user } } = await supabase.auth.getUser();
+  const rows = planned
+    .filter((c) => !have.has(c.description.toLowerCase()))
+    .map((c) => ({ student_id, kind: "charge", description: c.description, amount: c.amount, recorded_by: user.id }));
+  if (rows.length) {
+    const { error } = await supabase.from("pl_ledger").insert(rows);
+    if (error) throw error;
+  }
+}
+
 export async function setStudentProgram(id, program) {
   const { error } = await supabase.from("pl_profiles").update({ program: program || null }).eq("id", id);
   if (error) throw error;
+  // Post the level's charges so the student's ledger reconciles. Wrapped so a
+  // charge hiccup never blocks the level assignment itself.
+  if (program) {
+    try { await postTuitionCharges(id, program); } catch (e) { console.error("postTuitionCharges", e); }
+  }
 }
 
 /* ---------------- COURSES ---------------- */
