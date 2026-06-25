@@ -772,23 +772,12 @@ function StudentsManager({ profiles, meId, courses, assignments, canSetRole, ref
     { key: "admin", label: "Administration" },
   ];
   const roleLabel = (r) => ROLES.find((x) => x.key === r)?.label || r;
-  const people = [...(profiles || [])].sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
+  const byName = (a, b) => (a.full_name || "").localeCompare(b.full_name || "");
+  const staff = [...(profiles || [])].filter((p) => p.role !== "student").sort(byName);
+  const students = [...(profiles || [])].filter((p) => p.role === "student").sort(byName);
   const assignedSet = (instructorId) => new Set((assignments || []).filter((a) => a.instructor_id === instructorId).map((a) => a.course_id));
 
-  return (
-    <>
-      <PageHead title="People" sub="Invite students, set roles and levels, and assign instructors to courses." />
-      <Card style={{ marginBottom: 18 }}>
-        <div className="flex items-end gap-3">
-          <div style={{ flex: 1 }}><Field label="Invite a student by email"><input style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="student@example.com" /></Field></div>
-          <div style={{ marginBottom: 14 }}><Btn icon={Send} onClick={invite} disabled={busy}>{busy ? "Sending…" : "Send invite"}</Btn></div>
-        </div>
-        {note && <div className="pl-body" style={{ fontSize: 13, color: note.ok ? C.green : C.rose }}>{note.text}</div>}
-        {canSetRole && <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, margin: "6px 0 0" }}>To add an instructor: have them create an account, then set their role to <b>Instructor</b> and check the courses they should grade.</p>}
-      </Card>
-      <div className="flex flex-col gap-2">
-        {people.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No people yet.</span></Card>}
-        {people.map((s) => {
+  const personCard = (s) => {
           const aset = s.role === "instructor" ? assignedSet(s.id) : null;
           return (
             <Card key={s.id} style={{ padding: 16 }}>
@@ -838,7 +827,34 @@ function StudentsManager({ profiles, meId, courses, assignments, canSetRole, ref
               )}
             </Card>
           );
-        })}
+        };
+
+  return (
+    <>
+      <PageHead title="People" sub="Invite students, set roles and levels, and assign instructors to courses." />
+      <Card style={{ marginBottom: 18 }}>
+        <div className="flex items-end gap-3">
+          <div style={{ flex: 1 }}><Field label="Invite a student by email"><input style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="student@example.com" /></Field></div>
+          <div style={{ marginBottom: 14 }}><Btn icon={Send} onClick={invite} disabled={busy}>{busy ? "Sending…" : "Send invite"}</Btn></div>
+        </div>
+        {note && <div className="pl-body" style={{ fontSize: 13, color: note.ok ? C.green : C.rose }}>{note.text}</div>}
+        {canSetRole && <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, margin: "6px 0 0" }}>To add an instructor: have them create an account, then set their role to <b>Instructor</b> and check the courses they should grade.</p>}
+      </Card>
+      <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+        <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>Staff</h3>
+        <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{staff.length}</span>
+      </div>
+      <div className="flex flex-col gap-2" style={{ marginBottom: 26 }}>
+        {staff.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No staff yet.</span></Card>}
+        {staff.map(personCard)}
+      </div>
+      <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+        <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>Students</h3>
+        <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{students.length}</span>
+      </div>
+      <div className="flex flex-col gap-2">
+        {students.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card>}
+        {students.map(personCard)}
       </div>
     </>
   );
