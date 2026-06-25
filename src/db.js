@@ -471,12 +471,50 @@ export async function unenrollCertClass(id) {
 }
 
 /* Start a Stripe Checkout for a certificate class fee; returns the URL to redirect to. */
-export async function startCertCheckout(course_id) {
+export async function startCertCheckout(course_id, half) {
   const { data: { user } } = await supabase.auth.getUser();
   const r = await fetch("/api/create-checkout-session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ course_id, student_id: user.id, student_email: user.email, origin: window.location.origin }),
+    body: JSON.stringify({ course_id, half: !!half, student_id: user.id, student_email: user.email, origin: window.location.origin }),
+  });
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
+  return j.url;
+}
+
+/* ---------------- TUITION (per program level) ---------------- */
+export async function listTuition() {
+  const { data, error } = await supabase.from("pl_tuition").select("*");
+  if (error) throw error;
+  return data || [];
+}
+
+export async function setTuition(program, fields) {
+  const f = fields || {};
+  const { error } = await supabase.from("pl_tuition").upsert(
+    {
+      program,
+      amount: Number(f.amount) || 0,
+      registration: Number(f.registration) || 0,
+      books: Number(f.books) || 0,
+      installments: Math.max(1, parseInt(f.installments, 10) || 7),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "program" }
+  );
+  if (error) throw error;
+}
+
+/* Start a Stripe Checkout for a program level's tuition; returns the URL to redirect to.
+   The amount is looked up server-side from pl_tuition by the checkout function —
+   never trust a price sent from the browser. */
+export async function startTuitionCheckout(tuition_level, bucket) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const r = await fetch("/api/create-checkout-session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tuition_level, bucket, student_id: user.id, student_email: user.email, origin: window.location.origin }),
   });
   const j = await r.json();
   if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
