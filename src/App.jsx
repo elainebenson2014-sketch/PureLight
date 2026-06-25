@@ -72,6 +72,10 @@ const STUDENT_PROGRAMS = PROGRAMS.filter((p) => p.key !== "all");
 const programLabel = (k) => PROGRAMS.find((p) => p.key === k)?.label || "All programs";
 const visibleFor = (items, program) => (items || []).filter((it) => it.program === "all" || it.program === program);
 
+// Online tuition payment. The checkout + webhook functions handle tuition_level
+// payments (registration / books / installments), so this is live.
+const TUITION_PAY_ENABLED = true;
+
 function ProgramSelect({ value, onChange, includeAll = true }) {
   const list = includeAll ? PROGRAMS : STUDENT_PROGRAMS;
   return (
@@ -292,18 +296,19 @@ function InstructorPortal({ profile, onLogout }) {
   const [assignments, setAssignments] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [certEnrollments, setCertEnrollments] = useState([]);
+  const [tuition, setTuition] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen] = await Promise.all([
+      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen, tu] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
         db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listInstructorCourses(), db.listSessions(),
-        db.listCertEnrollments(),
+        db.listCertEnrollments(), db.listTuition(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
       setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setAssignments(ic); setSessions(se);
-      setCertEnrollments(cen);
+      setCertEnrollments(cen); setTuition(tu);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -328,14 +333,15 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "gradebook", label: "Gradebook", icon: LayoutGrid },
     { key: "students", label: "People", icon: Users },
     { key: "billing", label: "Billing", icon: Receipt },
+    { key: "tuition", label: "Tuition", icon: GraduationCap },
     { key: "certificates", label: "Certificates", icon: Medal },
     { key: "certprograms", label: "Cert Classes", icon: Award },
     { key: "messages", label: "Messages", icon: Mail },
   ];
   // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
   let nav = fullNav;
-  if (profile.role === "instructor") nav = fullNav.filter((n) => !["students", "billing", "certificates", "certprograms"].includes(n.key));
-  else if (profile.role === "assistant") nav = fullNav.filter((n) => !["billing", "certificates", "certprograms"].includes(n.key));
+  if (profile.role === "instructor") nav = fullNav.filter((n) => !["students", "billing", "tuition", "certificates", "certprograms"].includes(n.key));
+  else if (profile.role === "assistant") nav = fullNav.filter((n) => !["billing", "tuition", "certificates", "certprograms"].includes(n.key));
 
   // For an Instructor, grading is limited to the courses they're assigned.
   const myCourseSet = profile.role === "instructor"
@@ -362,6 +368,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
           {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} refresh={refresh} />}
+          {active === "tuition" && profile.role === "admin" && <TuitionManager tuition={tuition} refresh={refresh} />}
           {active === "certificates" && profile.role === "admin" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
           {active === "certprograms" && profile.role === "admin" && <CertClassesManager courses={courses} students={students} profiles={profiles} tests={tests} homework={homework} subs={subs} hwSubs={hwSubs} certificates={certificates} enrollments={certEnrollments} ledger={ledger} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
@@ -915,27 +922,28 @@ function StudentPortal({ profile, onLogout }) {
   const [ledger, setLedger] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [certEnrollments, setCertEnrollments] = useState([]);
+  const [tuition, setTuition] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen] = await Promise.all([
+      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen, tu] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listMessages(),
         db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listSessions(),
-        db.listCertEnrollments(),
+        db.listCertEnrollments(), db.listTuition(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setMessages(m);
       setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setSessions(se);
-      setCertEnrollments(cen);
+      setCertEnrollments(cen); setTuition(tu);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
-    if (p.get("cert_paid")) {
+    if (p.get("cert_paid") || p.get("tuition_paid")) {
       window.history.replaceState({}, "", window.location.pathname);
-      window.alert("Payment received — thank you! Your class will show as Paid in a moment.");
+      window.alert("Payment received — thank you! It will show as Paid in a moment.");
       const t = setTimeout(() => refresh(), 2500);
       return () => clearTimeout(t);
     }
@@ -988,7 +996,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "progress" && <DegreeProgress profile={profile} courses={courses} tests={degTests} homework={degHw} mySubs={mySubs} myHwSubs={myHwSubs} />}
           {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
           {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certAvailable={certAvailable} certAvailableHw={certAvailableHw} myHwSubs={myHwSubs} homework={homework} books={books} certificates={certificates} ledger={ledger.filter((e) => e.student_id === profile.id)} refresh={refresh} />}
-          {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} />}
+          {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} tuition={tuition} profile={profile} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
         </>
       )}
@@ -2460,7 +2468,8 @@ function CertClassesManager({ courses, students, profiles, tests, homework, subs
                     const { done, total } = progressFor(c, r.student_id);
                     const ready = total > 0 && done >= total;
                     const cert = certificates.find((x) => x.course_id === c.id && x.student_id === r.student_id);
-                    const paid = Number(c.fee) > 0 && (ledger || []).some((e) => e.kind === "payment" && e.course_id === c.id && e.student_id === r.student_id);
+                    const paidAmt = (ledger || []).filter((e) => e.kind === "payment" && e.course_id === c.id && e.student_id === r.student_id).reduce((a, e) => a + (Number(e.amount) || 0), 0);
+                    const paid = Number(c.fee) > 0 && paidAmt >= Number(c.fee) - 0.005;
                     return (
                       <div key={r.id} className="flex items-center justify-between gap-3" style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
                         <div style={{ minWidth: 0, flex: 1 }}>
@@ -2533,12 +2542,14 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
   const myClassIds = new Set(myEnroll.map((e) => e.course_id));
   const myClasses = courses.filter((c) => c.is_certificate && myClassIds.has(c.id));
   const myCerts = certificates.filter((c) => c.student_id === profile.id && myClassIds.has(c.course_id));
-  const paidIds = new Set((ledger || []).filter((e) => e.kind === "payment" && e.course_id).map((e) => e.course_id));
+  const paidForCourse = (id) => (ledger || [])
+    .filter((e) => e.kind === "payment" && e.course_id === id)
+    .reduce((a, e) => a + (Number(e.amount) || 0), 0);
   const certHomework = (homework || []).filter((h) => myClassIds.has(h.course_id));
   const certMyHwSubs = (myHwSubs || []).filter((s) => certHomework.some((h) => h.id === s.homework_id));
 
-  async function pay(c) {
-    try { const url = await db.startCertCheckout(c.id); window.location.href = url; }
+  async function pay(c, half) {
+    try { const url = await db.startCertCheckout(c.id, half); window.location.href = url; }
     catch (e) { window.alert(e.message); }
   }
 
@@ -2549,7 +2560,12 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
       <div className="flex flex-col gap-3" style={{ marginBottom: myClasses.length ? 24 : 0 }}>
         {myClasses.map((c) => {
           const cert = myCerts.find((x) => x.course_id === c.id);
-          const paid = paidIds.has(c.id);
+          const fee = Number(c.fee) || 0;
+          const cPaid = paidForCourse(c.id);
+          const cRemaining = Math.max(0, Math.round((fee - cPaid) * 100) / 100);
+          const isPaid = fee > 0 && cRemaining <= 0.005;
+          const canHalf = (Number(c.duration_weeks) || 0) >= 12 && cRemaining > Math.round((fee / 2) * 100) / 100 + 0.005;
+          const halfAmt = Math.min(Math.round((fee / 2) * 100) / 100, cRemaining);
           return (
             <Card key={c.id}>
               <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
@@ -2562,12 +2578,17 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
                   : <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{c.duration_weeks ? `${c.duration_weeks} weeks` : ""}{c.start_date ? ` · starts ${fdate(c.start_date)}` : ""}</span>}
               </div>
               {c.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.text, margin: "8px 0 0", lineHeight: 1.55 }}>{c.description}</p>}
-              {Number(c.fee) > 0 && (
+              {fee > 0 && (
                 <div className="flex items-center justify-between" style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}`, gap: 10, flexWrap: "wrap" }}>
-                  <span className="pl-body" style={{ fontSize: 14, color: C.ink }}>Tuition: <b>{money(c.fee)}</b></span>
-                  {paid
-                    ? <span className="pl-body" style={{ fontSize: 13, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={15} /> Paid</span>
-                    : <Btn small icon={Receipt} onClick={() => pay(c)}>Pay {money(c.fee)}</Btn>}
+                  <span className="pl-body" style={{ fontSize: 14, color: C.ink }}>Tuition: <b>{money(fee)}</b>{cPaid > 0 && !isPaid ? <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}> · {money(cRemaining)} left</span> : null}</span>
+                  {isPaid ? (
+                    <span className="pl-body" style={{ fontSize: 13, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={15} /> Paid</span>
+                  ) : (
+                    <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                      {canHalf && <Btn small kind="ghost" icon={Receipt} onClick={() => pay(c, true)}>Pay half {money(halfAmt)}</Btn>}
+                      <Btn small icon={Receipt} onClick={() => pay(c, false)}>Pay {money(cRemaining)}</Btn>
+                    </div>
+                  )}
                 </div>
               )}
               {cert && <div className="pl-body" style={{ marginTop: 10, color: C.green, fontWeight: 600, fontSize: 14 }}>Certificate earned {fdate(cert.issued_on)} — well done.</div>}
@@ -2775,15 +2796,154 @@ function BillingManager({ students, ledger, refresh }) {
   );
 }
 
+/* ---------- TUITION (admin: payment plan per level) ---------- */
+function TuitionManager({ tuition, refresh }) {
+  const [rows, setRows] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const m = {};
+    STUDENT_PROGRAMS.forEach((p) => {
+      const t = (tuition || []).find((x) => x.program === p.key) || {};
+      m[p.key] = {
+        amount: t.amount != null ? String(t.amount) : "",
+        registration: t.registration != null ? String(t.registration) : "",
+        books: t.books != null ? String(t.books) : "",
+        installments: t.installments != null ? String(t.installments) : "7",
+      };
+    });
+    setRows(m);
+  }, [tuition]);
+
+  const set = (key, field, val) => setRows((r) => ({ ...r, [key]: { ...r[key], [field]: val } }));
+
+  async function save() {
+    setBusy(true); setSaved(false);
+    try {
+      for (const p of STUDENT_PROGRAMS) {
+        const r = rows[p.key] || {};
+        await db.setTuition(p.key, { amount: r.amount, registration: r.registration, books: r.books, installments: r.installments });
+      }
+      await refresh();
+      setSaved(true);
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  const planNote = (r) => {
+    const total = Number(r?.amount) || 0, reg = Number(r?.registration) || 0, bk = Number(r?.books) || 0;
+    const n = Math.max(1, parseInt(r?.installments, 10) || 7);
+    const portion = Math.max(0, total - reg - bk);
+    if (total <= 0) return "";
+    return `Tuition balance ${money(portion)} ÷ ${n} ≈ ${money(portion / n)} per payment`;
+  };
+
+  return (
+    <>
+      <PageHead title="Tuition" sub="Set the payment plan for each level. Registration and Books come out of the total; the rest splits across the number of payments." />
+      <div className="flex flex-col gap-3" style={{ maxWidth: 760 }}>
+        {STUDENT_PROGRAMS.map((p) => {
+          const r = rows[p.key] || {};
+          return (
+            <Card key={p.key}>
+              <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: "0 0 12px" }}>{p.label}</h3>
+              <div className="grid grid-cols-4 gap-3">
+                <Field label="Total (USD)"><input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={r.amount ?? ""} onChange={(e) => set(p.key, "amount", e.target.value)} /></Field>
+                <Field label="Registration"><input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={r.registration ?? ""} onChange={(e) => set(p.key, "registration", e.target.value)} /></Field>
+                <Field label="Books"><input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={r.books ?? ""} onChange={(e) => set(p.key, "books", e.target.value)} /></Field>
+                <Field label="# Payments"><input style={inputStyle} type="number" inputMode="numeric" placeholder="7" value={r.installments ?? ""} onChange={(e) => set(p.key, "installments", e.target.value)} /></Field>
+              </div>
+              {planNote(r) && <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{planNote(r)}</div>}
+            </Card>
+          );
+        })}
+        <Card>
+          <div className="flex items-center gap-3">
+            <Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : "Save all levels"}</Btn>
+            {saved && <span className="pl-body" style={{ color: C.green, fontSize: 13 }}>Saved</span>}
+          </div>
+          <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 10, lineHeight: 1.5 }}>
+            Degree students pay Registration, then Books (due September), then the remaining balance across the number of payments above. Certificate classes pay from their own fee — 6-week in full, 12-week in full or two installments.
+          </p>
+        </Card>
+      </div>
+    </>
+  );
+}
+
 /* ---------- TUITION (student) ---------- */
-function StudentTuition({ ledger }) {
+function StudentTuition({ ledger, tuition, profile }) {
   const charged = ledger.filter((e) => e.kind === "charge").reduce((a, e) => a + Number(e.amount || 0), 0);
   const paid = ledger.filter((e) => e.kind === "payment").reduce((a, e) => a + Number(e.amount || 0), 0);
   const balance = charged - paid;
   const es = [...ledger].sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  const prog = profile?.program;
+  const myT = prog ? (tuition || []).find((t) => t.program === prog) : null;
+  const total = myT ? Number(myT.amount) || 0 : 0;
+  const regFee = myT ? Number(myT.registration) || 0 : 0;
+  const bookFee = myT ? Number(myT.books) || 0 : 0;
+  const nPay = myT ? Math.max(1, parseInt(myT.installments, 10) || 7) : 7;
+  const tuitionPortion = Math.max(0, Math.round((total - regFee - bookFee) * 100) / 100);
+  const label = prog ? programLabel(prog) : "";
+
+  const paidFor = (word) => ledger
+    .filter((e) => e.kind === "payment" && (e.description || "").trim().toLowerCase() === `${label} ${word}`.toLowerCase())
+    .reduce((a, e) => a + (Number(e.amount) || 0), 0);
+
+  const regPaid = paidFor("registration");
+  const bookPaid = paidFor("books");
+  const tuitionPaidAmt = paidFor("tuition");
+  const perPay = Math.round((tuitionPortion / nPay) * 100) / 100;
+  const tuitionRemaining = Math.max(0, Math.round((tuitionPortion - tuitionPaidAmt) * 100) / 100);
+  const nextTuition = Math.min(perPay, tuitionRemaining);
+  const fullyPaid = total > 0 && regPaid >= regFee - 0.005 && bookPaid >= bookFee - 0.005 && tuitionRemaining <= 0.005;
+
+  async function pay(bucket) {
+    try { const url = await db.startTuitionCheckout(prog, bucket); window.location.href = url; }
+    catch (e) { window.alert(e.message); }
+  }
+
+  function bucketRow(title, due, owed, paidAmt, bucket, payAmt) {
+    const done = owed > 0 && paidAmt >= owed - 0.005;
+    const showAmt = payAmt != null ? payAmt : Math.max(0, Math.round((owed - paidAmt) * 100) / 100);
+    return (
+      <div className="flex items-center justify-between" style={{ padding: "12px 0", borderTop: `1px solid ${C.line}`, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="pl-body" style={{ fontWeight: 600, fontSize: 15, color: C.ink }}>{title}{due ? <span className="pl-body" style={{ fontSize: 12, color: C.gold, marginLeft: 8 }}>{due}</span> : null}</div>
+          <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+            {money(owed)}{paidAmt > 0 ? ` • ${money(paidAmt)} paid` : ""}{owed > 0 ? ` • ${money(Math.max(0, owed - paidAmt))} left` : ""}
+            {bucket === "tuition" && owed > 0 ? ` • ${nPay} payments of ~${money(perPay)}` : ""}
+          </div>
+        </div>
+        {owed <= 0 ? (
+          <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>—</span>
+        ) : done ? (
+          <span className="pl-body" style={{ fontSize: 14, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={16} /> Paid</span>
+        ) : TUITION_PAY_ENABLED ? (
+          <Btn small icon={Receipt} onClick={() => pay(bucket)}>Pay {money(showAmt)}</Btn>
+        ) : (
+          <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Contact the office</span>
+        )}
+      </div>
+    );
+  }
+
   return (
     <>
-      <PageHead title="Tuition" sub="Your charges, payments, and balance." />
+      <PageHead title="Tuition" sub="Your payment plan, charges, payments, and balance." />
+
+      {prog && total > 0 && (
+        <Card style={{ marginBottom: 20 }}>
+          <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 2 }}>{label} Program — {money(total)} total</div>
+          {bucketRow("Registration", "", regFee, regPaid, "registration", null)}
+          {bucketRow("Books", "Due September", bookFee, bookPaid, "books", null)}
+          {bucketRow("Tuition", "", tuitionPortion, tuitionPaidAmt, "tuition", nextTuition)}
+          {fullyPaid && <div className="pl-body" style={{ marginTop: 12, color: C.green, fontWeight: 600, fontSize: 14 }}>Your account is paid in full — thank you.</div>}
+        </Card>
+      )}
+
       <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
         <Stat icon={Receipt} label="Total charged" value={money(charged)} />
         <Stat icon={Check} label="Total paid" value={money(paid)} tone={C.green} />
