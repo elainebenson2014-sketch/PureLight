@@ -39,7 +39,33 @@ export default async function handler(req, res) {
     if (event.type === "checkout.session.completed") {
       const s = event.data.object || {};
       const md = s.metadata || {};
-      if (md.course_id && md.student_id) {
+      const amount = (s.amount_total || 0) / 100;
+      let row = null;
+
+      if (md.tuition_level && md.student_id) {
+        // Degree tuition: registration / books / tuition installment.
+        row = {
+          student_id: md.student_id,
+          kind: "payment",
+          description: md.description || `${md.tuition_level} tuition`,
+          amount,
+          method: "card",
+          recorded_by: md.student_id,
+        };
+      } else if (md.course_id && md.student_id) {
+        // Certificate class.
+        row = {
+          student_id: md.student_id,
+          course_id: md.course_id,
+          kind: "payment",
+          description: md.title ? `Certificate class: ${md.title}` : "Certificate class payment",
+          amount,
+          method: "card",
+          recorded_by: md.student_id,
+        };
+      }
+
+      if (row) {
         await fetch(`${process.env.SUPABASE_URL}/rest/v1/pl_ledger`, {
           method: "POST",
           headers: {
@@ -48,15 +74,7 @@ export default async function handler(req, res) {
             Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
             Prefer: "return=minimal",
           },
-          body: JSON.stringify({
-            student_id: md.student_id,
-            course_id: md.course_id,
-            kind: "payment",
-            description: md.title ? `Certificate class: ${md.title}` : "Certificate class payment",
-            amount: (s.amount_total || 0) / 100,
-            method: "card",
-            recorded_by: md.student_id,
-          }),
+          body: JSON.stringify(row),
         });
       }
     }
