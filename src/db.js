@@ -356,12 +356,17 @@ export async function listCourses() {
   return data;
 }
 
-export async function createCourse({ title, description, program, code, credit_hours }) {
+export async function createCourse({ title, description, program, code, credit_hours, ce_type, ce_hours, passing_score, approval_number, provider_name }) {
   const { data: { user } } = await supabase.auth.getUser();
   const ch = (credit_hours !== undefined && credit_hours !== null && credit_hours !== "") ? Number(credit_hours) : null;
   const { error } = await supabase.from("pl_courses").insert({
     title, description: description || "", program: program || "all",
     code: code || null, credit_hours: ch, created_by: user.id,
+    ce_type: ce_type || "none",
+    ce_hours: ce_hours ? Number(ce_hours) : null,
+    passing_score: passing_score ? Number(passing_score) : 75,
+    approval_number: approval_number || null,
+    provider_name: provider_name || null,
   });
   if (error) throw error;
 }
@@ -408,12 +413,16 @@ export async function listCertificates() {
   return data;
 }
 
-export async function issueCertificate({ student_id, title, course_id, program, note }) {
+export async function issueCertificate({ student_id, title, course_id, program, note, ce_hours, approval_number, provider_name }) {
   const { data: { user } } = await supabase.auth.getUser();
+  const sid = student_id || user.id;
   const serial = "NCTS-" + new Date().getFullYear() + "-" + Math.random().toString(36).slice(2, 8).toUpperCase();
   const { error } = await supabase.from("pl_certificates").insert({
-    student_id, title, course_id: course_id || null, program: program || null,
+    student_id: sid, title, course_id: course_id || null, program: program || null,
     serial, note: note || "", issued_by: user.id,
+    ce_hours: ce_hours || null,
+    approval_number: approval_number || null,
+    provider_name: provider_name || null,
   });
   if (error) throw error;
 }
