@@ -7,9 +7,9 @@ import { Sparkles, LogOut } from "lucide-react";
 // the original NCTS site is never affected.
 const ENV = (typeof import.meta !== "undefined" && import.meta.env) || {};
 export const BRAND = {
-  name:    ENV.VITE_SCHOOL_NAME    || "NCTS PureLight",
-  short:   ENV.VITE_SCHOOL_SHORT   || "NCTS",
-  tagline: ENV.VITE_SCHOOL_TAGLINE || "School of Excellence",
+  name:    ENV.VITE_SCHOOL_NAME    || "Yona LMS",
+  short:   ENV.VITE_SCHOOL_SHORT   || "Yona",
+  tagline: ENV.VITE_SCHOOL_TAGLINE || "Learning That Transforms",
   logoUrl: ENV.VITE_LOGO_URL       || "",
 };
 
