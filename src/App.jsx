@@ -72,6 +72,15 @@ const STUDENT_PROGRAMS = PROGRAMS.filter((p) => p.key !== "all");
 const programLabel = (k) => PROGRAMS.find((p) => p.key === k)?.label || "All programs";
 const visibleFor = (items, program) => (items || []).filter((it) => it.program === "all" || it.program === program);
 
+const CE_TYPES = [
+  { key: "none",     label: "Standard / Degree" },
+  { key: "ce",       label: "CE Course — counts toward LPC renewal" },
+  { key: "faith_ce", label: "Faith-Based CE — counts toward LPC renewal" },
+  { key: "open",     label: "Open / Elective — no CE credit" },
+];
+const isCEType = (t) => t === "ce" || t === "faith_ce";
+const ceTypeLabel = (k) => CE_TYPES.find((x) => x.key === k)?.label || "Standard";
+
 // Online tuition payment. The checkout + webhook functions handle tuition_level
 // payments (registration / books / installments), so this is live.
 const TUITION_PAY_ENABLED = true;
@@ -336,6 +345,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "tuition", label: "Tuition", icon: GraduationCap },
     { key: "certificates", label: "Certificates", icon: Medal },
     { key: "certprograms", label: "Cert Classes", icon: Award },
+    { key: "cehours", label: "CE Hours", icon: Clock },
     { key: "messages", label: "Messages", icon: Mail },
   ];
   // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
@@ -371,6 +381,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "tuition" && profile.role === "admin" && <TuitionManager tuition={tuition} refresh={refresh} />}
           {active === "certificates" && profile.role === "admin" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
           {active === "certprograms" && profile.role === "admin" && <CertClassesManager courses={courses} students={students} profiles={profiles} tests={tests} homework={homework} subs={subs} hwSubs={hwSubs} certificates={certificates} enrollments={certEnrollments} ledger={ledger} refresh={refresh} />}
+          {active === "cehours" && profile.role === "admin" && <CEHoursDashboard students={students} courses={courses} subs={subs} tests={tests} certificates={certificates} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
         </>
       )}
@@ -992,6 +1003,7 @@ function StudentPortal({ profile, onLogout }) {
     { key: "grades", label: "Grades", icon: Award },
     { key: "progress", label: "Progress", icon: Medal },
     { key: "certificates", label: "Certificates", icon: Medal },
+    { key: "cehours", label: "CE Hours", icon: Clock },
     { key: "certprograms", label: "Cert Classes", icon: Award },
     { key: "tuition", label: "Tuition", icon: Receipt },
     { key: "inbox", label: "Inbox", icon: Mail },
@@ -1011,6 +1023,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "grades" && <StudentGrades mySubs={mySubs} tests={degTests} myHwSubs={myHwSubs} homework={degHw} courses={courses} profile={profile} />}
           {active === "progress" && <DegreeProgress profile={profile} courses={courses} tests={degTests} homework={degHw} mySubs={mySubs} myHwSubs={myHwSubs} />}
           {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
+          {active === "cehours" && <StudentCEHours profile={profile} courses={courses} tests={tests} subs={mySubs} certificates={certificates} />}
           {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certAvailable={certAvailable} certAvailableHw={certAvailableHw} myHwSubs={myHwSubs} homework={homework} books={books} certificates={certificates} ledger={ledger.filter((e) => e.student_id === profile.id)} refresh={refresh} />}
           {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} tuition={tuition} profile={profile} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
@@ -1278,16 +1291,60 @@ function StudentTests({ available, books, courses, refresh }) {
 
   async function submit() {
     setBusy(true);
-    try { await db.createSubmission({ test_id: taking.id, answers, max_score: sumPoints(taking.questions) }); await refresh(); setTaking(null); setAnswers({}); }
-    catch (e) { window.alert(e.message); }
+    try {
+      const maxScore = sumPoints(taking.questions);
+      await db.createSubmission({ test_id: taking.id, answers, max_score: maxScore });
+
+      // ── CE PASS-GATE ──────────────────────────────────────────
+      const course = courses.find((c) => c.id === taking.course_id);
+      if (course && isCEType(course.ce_type)) {
+        let autoPoints = 0;
+        for (const q of taking.questions) {
+          const a = answers[q.id];
+          if (q.type === "mc" && String(a) === String(q.correct_answer)) autoPoints += q.points;
+          if (q.type === "tf" && a === q.correct_answer) autoPoints += q.points;
+        }
+        const pct = maxScore > 0 ? Math.round((autoPoints / maxScore) * 100) : 0;
+        const passing = Number(course.passing_score) || 75;
+        if (pct >= passing) {
+          try {
+            await db.issueCertificate({
+              title: course.title,
+              course_id: course.id,
+              note: [course.ce_hours ? `${course.ce_hours} contact hours` : "", course.approval_number || ""].filter(Boolean).join(" · "),
+              ce_hours: course.ce_hours || null,
+              approval_number: course.approval_number || null,
+              provider_name: course.provider_name || null,
+            });
+          } catch (certErr) { console.error("CE cert auto-issue:", certErr); }
+          window.alert(`You passed with ${pct}%! 🎉\n\nYour CE certificate has been issued.\nHours earned: ${course.ce_hours || "—"} contact hours.\nView it under CE Hours in your menu.`);
+        } else {
+          window.alert(`You scored ${pct}%. A passing score of ${passing}% is required to earn CE credit for this course.\n\nYour submission has been recorded.`);
+        }
+      }
+      // ── END CE PASS-GATE ──────────────────────────────────────
+
+      await refresh(); setTaking(null); setAnswers({});
+    } catch (e) { window.alert(e.message); }
     setBusy(false);
   }
 
   if (taking) {
     const answered = taking.questions.filter((q) => answers[q.id] !== undefined && answers[q.id] !== "").length;
+    const course = courses.find((c) => c.id === taking.course_id);
+    const isCE = course && isCEType(course.ce_type);
     return (
       <>
         <PageHead title={taking.title} sub={taking.description} action={<Btn kind="ghost" icon={X} onClick={() => { setTaking(null); setAnswers({}); }}>Exit</Btn>} />
+        {isCE && (
+          <Card style={{ marginBottom: 12, padding: "12px 16px", background: C.paper, border: `1px solid ${C.goldSoft}` }}>
+            <div className="flex items-center gap-2">
+              <Award size={16} color={C.gold} />
+              <span className="pl-body" style={{ fontSize: 13, color: C.gold, fontWeight: 600 }}>CE Post-Test — {course.ce_type === "faith_ce" ? "Faith-Based CE" : "Continuing Education"}</span>
+              <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>· Pass {course.passing_score || 75}% to earn {course.ce_hours || "—"} contact hours</span>
+            </div>
+          </Card>
+        )}
         {taking.questions.map((q, i) => (
           <Card key={q.id} style={{ marginBottom: 12 }}>
             <span className="pl-body" style={{ fontWeight: 700, color: C.gold, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".06em" }}>Question {i + 1} · {q.points} pts</span>
@@ -1308,7 +1365,7 @@ function StudentTests({ available, books, courses, refresh }) {
         ))}
         <div className="flex items-center justify-between" style={{ marginTop: 16 }}>
           <span className="pl-body" style={{ color: C.muted, fontSize: 14 }}>{answered} / {taking.questions.length} answered</span>
-          <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : "Submit test"}</Btn>
+          <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : isCE ? "Submit post-test" : "Submit test"}</Btn>
         </div>
       </>
     );
@@ -1321,17 +1378,24 @@ function StudentTests({ available, books, courses, refresh }) {
         <Grouped items={available} courses={courses}>
           {(items) => (
             <div className="flex flex-col gap-3">
-              {items.map((t) => (
-                <Card key={t.id}>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{t.title}</h3>
-                      <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{books.find((b) => b.id === t.book_id)?.title || "General"} · {t.questions.length} questions · {sumPoints(t.questions)} pts</div>
+              {items.map((t) => {
+                const course = courses.find((c) => c.id === t.course_id);
+                const isCE = course && isCEType(course.ce_type);
+                return (
+                  <Card key={t.id}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{t.title}</h3>
+                          {isCE && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: C.goldSoft, padding: "2px 8px", borderRadius: 999 }}>{course.ce_type === "faith_ce" ? "Faith CE" : "CE"} Post-Test</span>}
+                        </div>
+                        <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{books.find((b) => b.id === t.book_id)?.title || "General"} · {t.questions.length} questions · {sumPoints(t.questions)} pts{isCE ? ` · Pass ${course.passing_score || 75}% for ${course.ce_hours || "—"} CE hrs` : ""}</div>
+                      </div>
+                      <Btn icon={PencilLine} onClick={() => setTaking(t)}>Begin</Btn>
                     </div>
-                    <Btn icon={PencilLine} onClick={() => setTaking(t)}>Begin</Btn>
-                  </div>
-                </Card>
-              ))}
+                  </Card>
+                );
+              })}
             </div>
           )}
         </Grouped>}
@@ -1966,7 +2030,11 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
 
 /* ---------- COURSES (instructor) ---------- */
 function CoursesManager({ courses, refresh }) {
-  const [form, setForm] = useState({ code: "", title: "", credit_hours: "", description: "", program: "all" });
+  const blankForm = {
+    code: "", title: "", credit_hours: "", description: "", program: "all",
+    ce_type: "none", ce_hours: "", passing_score: "75", approval_number: "", provider_name: "",
+  };
+  const [form, setForm] = useState(blankForm);
   const [busy, setBusy] = useState(false);
   const [show, setShow] = useState(false);
   const [csvNote, setCsvNote] = useState(null);
@@ -1974,7 +2042,7 @@ function CoursesManager({ courses, refresh }) {
   async function create() {
     if (!form.title.trim()) return;
     setBusy(true);
-    try { await db.createCourse(form); await refresh(); setForm({ code: "", title: "", credit_hours: "", description: "", program: "all" }); setShow(false); }
+    try { await db.createCourse(form); await refresh(); setForm(blankForm); setShow(false); }
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
@@ -2001,13 +2069,15 @@ function CoursesManager({ courses, refresh }) {
         if (!title) { skipped++; continue; }
         let prog = iProg >= 0 ? (row[iProg] || "").trim().toLowerCase() : "all";
         if (!valid.has(prog)) prog = "all";
-        recs.push({ code: iCode >= 0 ? (row[iCode] || "").trim() : "", title, credit_hours: iCred >= 0 ? (row[iCred] || "").trim() : "", program: prog, description: iDesc >= 0 ? (row[iDesc] || "").trim() : "" });
+        recs.push({ code: iCode >= 0 ? (row[iCode] || "").trim() : "", title, credit_hours: iCred >= 0 ? (row[iCred] || "").trim() : "", program: prog, description: iDesc >= 0 ? (row[iDesc] || "").trim() : "", ce_type: "none", ce_hours: null, passing_score: 75, approval_number: null, provider_name: null });
       }
       if (recs.length) await db.bulkAddCourses(recs);
       await refresh();
       setCsvNote(`Imported ${recs.length} course${recs.length === 1 ? "" : "s"}${skipped ? `, skipped ${skipped} (missing title)` : ""}.`);
     } catch (e) { setCsvNote("Couldn't read that file: " + e.message); }
   }
+
+  const ceOn = isCEType(form.ce_type);
 
   return (
     <>
@@ -2021,7 +2091,7 @@ function CoursesManager({ courses, refresh }) {
         {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
       </Card>
       {show && (
-        <Card style={{ marginBottom: 18, maxWidth: 640 }}>
+        <Card style={{ marginBottom: 18, maxWidth: 680 }}>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Course code"><input style={inputStyle} value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="e.g. ABS-101" /></Field>
             <Field label="Credit hours"><input style={inputStyle} value={form.credit_hours} onChange={(e) => setForm({ ...form, credit_hours: e.target.value })} placeholder="e.g. 4" inputMode="decimal" /></Field>
@@ -2029,6 +2099,23 @@ function CoursesManager({ courses, refresh }) {
           <Field label="Course title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Introduction to the Bible" /></Field>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 80 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <Field label="Program / level"><ProgramSelect value={form.program} onChange={(v) => setForm({ ...form, program: v })} /></Field>
+          <Field label="Course type">
+            <select style={inputStyle} value={form.ce_type} onChange={(e) => setForm({ ...form, ce_type: e.target.value })}>
+              {CE_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </select>
+          </Field>
+          {ceOn && (
+            <div style={{ background: C.paper, border: `1px solid ${C.goldSoft}`, borderRadius: 10, padding: "14px 16px", marginBottom: 10 }}>
+              <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>CE Settings — required for certificate issuance</div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="CE / contact hours"><input style={inputStyle} type="number" step="0.5" value={form.ce_hours} onChange={(e) => setForm({ ...form, ce_hours: e.target.value })} placeholder="e.g. 2.0" /></Field>
+                <Field label="Passing score (%)"><input style={inputStyle} type="number" value={form.passing_score} onChange={(e) => setForm({ ...form, passing_score: e.target.value })} placeholder="75" /></Field>
+              </div>
+              <Field label="CE approval number"><input style={inputStyle} value={form.approval_number} onChange={(e) => setForm({ ...form, approval_number: e.target.value })} placeholder="e.g. NBCC ACEP #12345" /></Field>
+              <Field label="Provider name (appears on CE certificate)"><input style={inputStyle} value={form.provider_name} onChange={(e) => setForm({ ...form, provider_name: e.target.value })} placeholder="e.g. Healing Forward LLC" /></Field>
+              <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 6 }}>Learners must score ≥ {form.passing_score || 75}% on the post-test to receive a CE certificate. The certificate auto-issues on pass.</div>
+            </div>
+          )}
           <div className="flex gap-2"><Btn icon={Check} onClick={create} disabled={busy}>{busy ? "Saving…" : "Create course"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
         </Card>
       )}
@@ -2038,8 +2125,12 @@ function CoursesManager({ courses, refresh }) {
           <Card key={c.id}>
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} — ` : ""}{c.title}</h3>
-                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(c.program)}{c.credit_hours ? ` · ${c.credit_hours} cr` : ""}{c.description ? ` · ${c.description}` : ""}</div>
+                <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                  <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} — ` : ""}{c.title}</h3>
+                  {isCEType(c.ce_type) && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: C.goldSoft, padding: "2px 9px", borderRadius: 999 }}>{c.ce_type === "faith_ce" ? "Faith CE" : "CE"} · {c.ce_hours || "?"} hrs</span>}
+                  {c.ce_type === "open" && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.paper, padding: "2px 9px", borderRadius: 999, border: `1px solid ${C.line}` }}>Open / Elective</span>}
+                </div>
+                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(c.program)}{c.credit_hours ? ` · ${c.credit_hours} cr` : ""}{isCEType(c.ce_type) && c.approval_number ? ` · ${c.approval_number}` : ""}{c.description ? ` · ${c.description}` : ""}</div>
               </div>
               <button onClick={() => remove(c.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
             </div>
@@ -2282,6 +2373,69 @@ function openCertificate(cert, studentName) {
           <div><div class="sigline">Date — ${dateStr}</div></div>
         </div>
         <div class="serial">Serial ${safe(cert.serial)}</div>
+      </div>
+    </div>
+  </body></html>`;
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); }
+  else window.alert("Please allow pop-ups to view the certificate.");
+}
+
+function openCECertificate(cert, studentName, course) {
+  const safe = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  const dateStr = new Date(cert.issued_on).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  const providerName = safe(course?.provider_name || cert.provider_name || BRAND.name);
+  const approvalNum = safe(course?.approval_number || cert.approval_number || "");
+  const ceHours = safe(course?.ce_hours || cert.ce_hours || "");
+  const ceTypeLabel = course?.ce_type === "faith_ce" ? "Faith-Based Continuing Education" : "Continuing Education";
+  const serial = safe(cert.serial || "");
+  const html = `<!doctype html><html><head><meta charset="utf-8">
+  <title>CE Certificate — ${safe(studentName)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    @page { size: landscape; margin: 0; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:'Source Serif 4',Georgia,serif; color:#15213d; background:#e9e3d4; display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; }
+    .cert { width:1050px; max-width:96vw; aspect-ratio:1.414/1; background:#f6f1e7; position:relative; padding:52px 64px; box-shadow:0 24px 70px rgba(0,0,0,.20); }
+    .frame { position:absolute; inset:18px; border:2px solid #1B3A6B; pointer-events:none; }
+    .frame:before { content:''; position:absolute; inset:7px; border:1px solid #5b7fc4; }
+    .inner { position:relative; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+    .kicker { letter-spacing:.34em; text-transform:uppercase; font-size:11.5px; color:#1B3A6B; font-weight:600; }
+    .provider { font-family:'Fraunces',serif; font-size:26px; font-weight:600; margin:6px 0 0; color:#1B3A6B; }
+    .cetype { font-size:13.5px; color:#5b6478; font-style:italic; margin:4px 0 0; }
+    .rule { width:64px; height:2px; background:#C49A1A; margin:16px auto 20px; }
+    .pres { font-size:14.5px; color:#5b6478; font-style:italic; }
+    .name { font-family:'Fraunces',serif; font-size:42px; font-weight:600; margin:8px 0 14px; padding:0 24px 10px; border-bottom:2px solid #C49A1A; }
+    .body { font-size:15.5px; max-width:660px; line-height:1.7; color:#2a3147; }
+    .body b { color:#15213d; }
+    .hours-badge { display:inline-block; margin:14px 0 0; background:#1B3A6B; color:#f6f1e7; font-family:'Fraunces',serif; font-size:16px; font-weight:600; padding:8px 28px; border-radius:999px; letter-spacing:.04em; }
+    .row { display:flex; gap:70px; margin-top:32px; }
+    .sigline { width:200px; border-top:1.5px solid #15213d; padding-top:7px; font-size:12px; color:#5b6478; letter-spacing:.04em; }
+    .approval { position:absolute; bottom:30px; left:50%; transform:translateX(-50%); font-size:10.5px; color:#7a8299; letter-spacing:.06em; text-align:center; white-space:nowrap; }
+    .serial { position:absolute; bottom:8px; right:6px; font-size:10px; color:#9aa2b3; letter-spacing:.06em; }
+    .print { position:fixed; top:16px; right:16px; background:#1B3A6B; color:#f6f1e7; border:none; padding:10px 18px; border-radius:8px; font-family:'Source Serif 4',serif; font-size:14px; cursor:pointer; }
+    @media print { .print { display:none; } body { background:#fff; padding:0; } .cert { box-shadow:none; } }
+  </style></head>
+  <body>
+    <button class="print" onclick="window.print()">Print / Save as PDF</button>
+    <div class="cert"><div class="frame"></div>
+      <div class="inner">
+        <div class="kicker">Certificate of Completion</div>
+        <div class="provider">${providerName}</div>
+        <div class="cetype">${ceTypeLabel}</div>
+        <div class="rule"></div>
+        <div class="pres">This certifies that</div>
+        <div class="name">${safe(studentName)}</div>
+        <div class="body">has successfully completed <b>${safe(cert.title)}</b>${cert.note ? `, ${safe(cert.note)}` : ""}, demonstrating competency through successful completion of the required post-assessment.</div>
+        ${ceHours ? `<div class="hours-badge">${ceHours} Contact Hour${Number(ceHours) === 1 ? "" : "s"}</div>` : ""}
+        <div class="row">
+          <div><div class="sigline">Presenter / Instructor</div></div>
+          <div><div class="sigline">Completion Date — ${dateStr}</div></div>
+        </div>
+        ${approvalNum ? `<div class="approval">Approved by ${approvalNum}</div>` : ""}
+        <div class="serial">Serial ${serial}</div>
       </div>
     </div>
   </body></html>`;
@@ -3193,4 +3347,178 @@ function openTranscript(studentName, items, summary) {
   </body></html>`;
   const w = window.open("", "_blank");
   if (w) { w.document.write(html); w.document.close(); } else window.alert("Please allow pop-ups to view the transcript.");
+}
+
+/* ============================================================ CE HOURS DASHBOARD (admin) */
+function CEHoursDashboard({ students, courses, subs, tests, certificates, refresh }) {
+  const [filterStudent, setFilterStudent] = useState("");
+  const [filterCourse, setFilterCourse] = useState("");
+  const ceCourses = courses.filter((c) => isCEType(c.ce_type));
+
+  function ceEarned(studentId) {
+    const rows = [];
+    for (const course of ceCourses) {
+      const courseTests = tests.filter((t) => t.course_id === course.id);
+      for (const test of courseTests) {
+        const sub = subs.find((s) => s.student_id === studentId && s.test_id === test.id && s.status === "graded");
+        if (!sub || !sub.max_score) continue;
+        const pct = Math.round((sub.score / sub.max_score) * 100);
+        const passing = Number(course.passing_score) || 75;
+        if (pct < passing) continue;
+        rows.push({ courseId: course.id, courseTitle: course.title, ceType: course.ce_type, ceHours: Number(course.ce_hours) || 0, approvalNumber: course.approval_number || "", completedDate: sub.graded_at || sub.submitted_at || "", score: pct });
+      }
+    }
+    return rows;
+  }
+
+  const allRows = students.filter((s) => !filterStudent || s.id === filterStudent).map((s) => ({ student: s, earned: ceEarned(s.id) }));
+  const filtered = allRows.map((r) => ({ ...r, earned: filterCourse ? r.earned.filter((e) => e.courseId === filterCourse) : r.earned })).filter((r) => r.earned.length > 0 || !filterStudent);
+
+  function exportCSV() {
+    const lines = [["Student", "Course", "Type", "CE Hours", "Approval #", "Score %", "Completed"].join(",")];
+    for (const { student, earned } of filtered) {
+      for (const e of earned) {
+        lines.push([`"${student.full_name}"`, `"${e.courseTitle}"`, e.ceType === "faith_ce" ? "Faith CE" : "CE", e.ceHours, `"${e.approvalNumber}"`, e.score + "%", fdate(e.completedDate)].join(","));
+      }
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "ce-hours.csv"; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <>
+      <PageHead title="CE Hours" sub="Continuing education hours earned by learner. Export for reporting." action={<Btn icon={ExternalLink} onClick={exportCSV}>Export CSV</Btn>} />
+      {ceCourses.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No CE courses yet. Create a course and set its type to CE or Faith-Based CE.</span></Card>
+      ) : (
+        <>
+          <Card style={{ marginBottom: 18 }}>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Filter by learner">
+                <select style={inputStyle} value={filterStudent} onChange={(e) => setFilterStudent(e.target.value)}>
+                  <option value="">All learners</option>
+                  {students.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                </select>
+              </Field>
+              <Field label="Filter by course">
+                <select style={inputStyle} value={filterCourse} onChange={(e) => setFilterCourse(e.target.value)}>
+                  <option value="">All CE courses</option>
+                  {ceCourses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+                </select>
+              </Field>
+            </div>
+          </Card>
+          <div className="flex flex-col gap-3">
+            {filtered.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No CE hours recorded yet.</span></Card>}
+            {filtered.map(({ student, earned }) => {
+              const totalHours = earned.reduce((a, e) => a + e.ceHours, 0);
+              const ceOnly = earned.filter((e) => e.ceType === "ce").reduce((a, e) => a + e.ceHours, 0);
+              const faithOnly = earned.filter((e) => e.ceType === "faith_ce").reduce((a, e) => a + e.ceHours, 0);
+              return (
+                <Card key={student.id}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: earned.length ? 12 : 0 }}>
+                    <div className="flex items-center gap-3">
+                      <Initials name={student.full_name} size={38} />
+                      <div>
+                        <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5, color: C.ink }}>{student.full_name}</div>
+                        <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{totalHours.toFixed(1)} total hours{ceOnly > 0 ? ` · ${ceOnly.toFixed(1)} CE` : ""}{faithOnly > 0 ? ` · ${faithOnly.toFixed(1)} Faith CE` : ""}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="pl-display" style={{ fontSize: 22, fontWeight: 600, color: C.green }}>{totalHours.toFixed(1)}</span>
+                      <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>hrs</span>
+                    </div>
+                  </div>
+                  {earned.length > 0 && (
+                    <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 10 }}>
+                      {earned.map((e, i) => {
+                        const cert = certificates.find((cx) => cx.student_id === student.id && cx.course_id === e.courseId);
+                        return (
+                          <div key={i} className="flex items-center justify-between" style={{ padding: "7px 0", borderBottom: i < earned.length - 1 ? `1px solid ${C.line}` : "none" }}>
+                            <div style={{ flex: 1 }}>
+                              <div className="pl-body" style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{e.courseTitle}</div>
+                              <div className="pl-body" style={{ fontSize: 12, color: C.muted }}>{e.ceType === "faith_ce" ? "Faith CE" : "CE"} · {e.score}% · completed {fdate(e.completedDate)}{e.approvalNumber ? ` · ${e.approvalNumber}` : ""}</div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="pl-body" style={{ fontSize: 13, fontWeight: 700, color: C.green }}>{e.ceHours.toFixed(1)} hrs</span>
+                              {cert && <Btn small kind="ghost" icon={ExternalLink} onClick={() => openCECertificate(cert, student.full_name, courses.find((c) => c.id === e.courseId))}>Cert</Btn>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ============================================================ STUDENT CE HOURS */
+function StudentCEHours({ profile, courses, tests, subs, certificates }) {
+  const ceCourses = courses.filter((c) => isCEType(c.ce_type));
+  const earned = [];
+  for (const course of ceCourses) {
+    const courseTests = tests.filter((t) => t.course_id === course.id);
+    for (const test of courseTests) {
+      const sub = subs.find((s) => s.student_id === profile.id && s.test_id === test.id && s.status === "graded");
+      if (!sub || !sub.max_score) continue;
+      const pct = Math.round((sub.score / sub.max_score) * 100);
+      const passing = Number(course.passing_score) || 75;
+      if (pct < passing) continue;
+      earned.push({ courseId: course.id, courseTitle: course.title, ceType: course.ce_type, ceHours: Number(course.ce_hours) || 0, approvalNumber: course.approval_number || "", providerName: course.provider_name || BRAND.name, completedDate: sub.graded_at || sub.submitted_at || "", score: pct });
+    }
+  }
+  const totalHours = earned.reduce((a, e) => a + e.ceHours, 0);
+  const ceOnly = earned.filter((e) => e.ceType === "ce").reduce((a, e) => a + e.ceHours, 0);
+  const faithOnly = earned.filter((e) => e.ceType === "faith_ce").reduce((a, e) => a + e.ceHours, 0);
+
+  return (
+    <>
+      <PageHead title="CE Hours" sub="Your continuing education hours and CE certificates." />
+      <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
+        <Stat icon={Clock} label="Total CE hours" value={totalHours.toFixed(1)} tone={C.green} />
+        <Stat icon={Award} label="CE hours" value={ceOnly.toFixed(1)} />
+        <Stat icon={Award} label="Faith CE hours" value={faithOnly.toFixed(1)} tone={C.gold} />
+      </div>
+      {earned.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No CE hours earned yet. Complete a CE course post-test with a passing score to earn hours.</span></Card>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {earned.map((e, i) => {
+            const cert = certificates.find((cx) => cx.student_id === profile.id && cx.course_id === e.courseId);
+            const course = courses.find((c) => c.id === e.courseId);
+            return (
+              <Card key={i}>
+                <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center justify-center" style={{ width: 44, height: 44, borderRadius: 10, background: C.paper2, border: `1px solid ${C.goldSoft}` }}><Award size={20} color={C.gold} /></div>
+                    <div>
+                      <div className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink }}>{e.courseTitle}</div>
+                      <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{e.ceType === "faith_ce" ? "Faith-Based CE" : "CE"} · {e.score}% · {fdate(e.completedDate)}</div>
+                      {e.approvalNumber && <div className="pl-body" style={{ fontSize: 12, color: C.gold, marginTop: 2 }}>{e.approvalNumber}</div>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div style={{ textAlign: "right" }}>
+                      <div className="pl-display" style={{ fontSize: 22, fontWeight: 600, color: C.green }}>{e.ceHours.toFixed(1)}</div>
+                      <div className="pl-body" style={{ fontSize: 11, color: C.muted }}>hours</div>
+                    </div>
+                    {cert && <Btn small icon={ExternalLink} onClick={() => openCECertificate(cert, profile.full_name, course)}>CE Cert</Btn>}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 14, lineHeight: 1.5 }}>CE certificates are issued automatically when you pass a post-test with the required score. Your provider is responsible for reporting hours to the appropriate licensing board.</p>
+    </>
+  );
 }
