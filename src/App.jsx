@@ -7,7 +7,7 @@ import {
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
 import {
-  C, FONTS, QTYPE, inputStyle, Btn, Card, Field, PageHead, Stat, Shell, Spinner, Initials, BRAND,
+  C, FONTS, QTYPE, inputStyle, Btn, Card, Field, PageHead, Stat, Shell, Spinner, Initials, BRAND, FEATURES,
 } from "./ui.jsx";
 
 const sumPoints = (questions) => (questions || []).reduce((a, q) => a + (Number(q.points) || 0), 0);
@@ -329,25 +329,25 @@ function InstructorPortal({ profile, onLogout }) {
   const pendingHw = hwSubs.filter((s) => s.status !== "graded").length;
 
   const fullNav = [
-    { key: "dash", label: "Dashboard", icon: LayoutDashboard },
-    { key: "courses", label: "Courses", icon: GraduationCap },
-    { key: "library", label: "Library", icon: Library },
-    { key: "syllabus", label: "Syllabus", icon: ScrollText },
-    { key: "tests", label: "Tests", icon: FileText },
-    { key: "homework", label: "Homework", icon: NotebookPen },
-    { key: "classes", label: "Live Classes", icon: PlayCircle },
-    { key: "attendance", label: "Attendance", icon: CalendarDays },
-    { key: "grading", label: "Grading", icon: ClipboardCheck },
-    { key: "reports", label: "Reports", icon: BarChart3 },
-    { key: "gradebook", label: "Gradebook", icon: LayoutGrid },
-    { key: "students", label: "People", icon: Users },
-    { key: "billing", label: "Billing", icon: Receipt },
-    { key: "tuition", label: "Tuition", icon: GraduationCap },
-    { key: "certificates", label: "Certificates", icon: Medal },
-    { key: "certprograms", label: "Cert Classes", icon: Award },
-    { key: "cehours", label: "CE Hours", icon: Clock },
-    { key: "messages", label: "Messages", icon: Mail },
-  ];
+    { key: "dash",        label: "Dashboard",   icon: LayoutDashboard, show: true },
+    { key: "courses",     label: "Courses",      icon: GraduationCap,   show: true },
+    { key: "library",     label: "Library",      icon: Library,         show: FEATURES.library },
+    { key: "syllabus",    label: "Syllabus",     icon: ScrollText,      show: FEATURES.syllabus },
+    { key: "tests",       label: "Tests",        icon: FileText,        show: FEATURES.tests },
+    { key: "homework",    label: "Homework",     icon: NotebookPen,     show: FEATURES.homework },
+    { key: "classes",     label: "Live Classes", icon: PlayCircle,      show: FEATURES.live_classes },
+    { key: "attendance",  label: "Attendance",   icon: CalendarDays,    show: FEATURES.attendance },
+    { key: "grading",     label: "Grading",      icon: ClipboardCheck,  show: FEATURES.grading },
+    { key: "reports",     label: "Reports",      icon: BarChart3,       show: FEATURES.reports },
+    { key: "gradebook",   label: "Gradebook",    icon: LayoutGrid,      show: FEATURES.gradebook },
+    { key: "students",    label: "People",       icon: Users,           show: FEATURES.people },
+    { key: "billing",     label: "Billing",      icon: Receipt,         show: FEATURES.billing },
+    { key: "tuition",     label: "Tuition",      icon: GraduationCap,   show: FEATURES.tuition },
+    { key: "certificates",label: "Certificates", icon: Medal,           show: FEATURES.certificates },
+    { key: "certprograms",label: "Cert Classes", icon: Award,           show: FEATURES.cert_classes },
+    { key: "cehours",     label: "CE Hours",     icon: Clock,           show: FEATURES.ce_hours },
+    { key: "messages",    label: "Messages",     icon: Mail,            show: FEATURES.messages },
+  ].filter((n) => n.show);
   // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
   let nav = fullNav;
   if (profile.role === "instructor") nav = fullNav.filter((n) => !["students", "billing", "tuition", "certificates", "certprograms"].includes(n.key));
@@ -993,21 +993,21 @@ function StudentPortal({ profile, onLogout }) {
   const certAvailableHw = (homework || []).filter((h) => myCertCourseIds.has(h.course_id) && !myHwSubs.some((s) => s.homework_id === h.id));
 
   const nav = [
-    { key: "dash", label: "Dashboard", icon: LayoutDashboard },
-    { key: "courses", label: "My Courses", icon: GraduationCap },
-    { key: "schedule", label: "Schedule", icon: CalendarDays },
-    { key: "library", label: "Library", icon: Library },
-    { key: "syllabus", label: "Syllabus", icon: ScrollText },
-    { key: "tests", label: "My Tests", icon: FileText },
-    { key: "homework", label: "Homework", icon: NotebookPen },
-    { key: "grades", label: "Grades", icon: Award },
-    { key: "progress", label: "Progress", icon: Medal },
-    { key: "certificates", label: "Certificates", icon: Medal },
-    { key: "cehours", label: "CE Hours", icon: Clock },
-    { key: "certprograms", label: "Cert Classes", icon: Award },
-    { key: "tuition", label: "Tuition", icon: Receipt },
-    { key: "inbox", label: "Inbox", icon: Mail },
-  ];
+    { key: "dash",        label: "Dashboard",   icon: LayoutDashboard, show: true },
+    { key: "courses",     label: "My Courses",  icon: GraduationCap,   show: true },
+    { key: "schedule",    label: "Schedule",    icon: CalendarDays,    show: FEATURES.live_classes },
+    { key: "library",     label: "Library",     icon: Library,         show: FEATURES.library },
+    { key: "syllabus",    label: "Syllabus",    icon: ScrollText,      show: FEATURES.syllabus },
+    { key: "tests",       label: "My Tests",    icon: FileText,        show: FEATURES.tests },
+    { key: "homework",    label: "Homework",    icon: NotebookPen,     show: FEATURES.homework },
+    { key: "grades",      label: "Grades",      icon: Award,           show: FEATURES.grades },
+    { key: "progress",    label: "Progress",    icon: Medal,           show: FEATURES.degree_progress },
+    { key: "certificates",label: "Certificates",icon: Medal,           show: FEATURES.certificates },
+    { key: "cehours",     label: "CE Hours",    icon: Clock,           show: FEATURES.ce_hours },
+    { key: "certprograms",label: "Cert Classes",icon: Award,           show: FEATURES.cert_classes },
+    { key: "tuition",     label: "Tuition",     icon: Receipt,         show: FEATURES.tuition },
+    { key: "inbox",       label: "Inbox",       icon: Mail,            show: FEATURES.messages },
+  ].filter((n) => n.show);
 
   return (
     <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ tests: available.length, homework: availableHw.length }}>
