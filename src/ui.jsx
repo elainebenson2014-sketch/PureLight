@@ -1,5 +1,6 @@
 logoUrl: ENV.VITE_LOGO_URL       || "",
-};export const FEATURES = {
+};
+export const FEATURES = {
   library:         (ENV.VITE_FEATURE_LIBRARY         ?? "true") !== "false",
   syllabus:        (ENV.VITE_FEATURE_SYLLABUS         ?? "true") !== "false",
   homework:        (ENV.VITE_FEATURE_HOMEWORK         ?? "true") !== "false",
