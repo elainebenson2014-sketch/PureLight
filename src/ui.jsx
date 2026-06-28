@@ -230,8 +230,7 @@ export function Shell({ user, onLogout, nav, active, setActive, children, badge 
       borderTop: "1px solid #ffffff10",
       background: C.ink, zIndex: 10,
     }}>
-      © {new Date().getFullYear()} ETB Enterprises, LLC<br/>
-      {BRAND.name}™ · All rights reserved.
+      {"© " + new Date().getFullYear() + " ETB Enterprises, LLC · " + BRAND.name + "™ · All rights reserved."}
     </div>
   );
 }
