@@ -223,5 +223,15 @@ export function Shell({ user, onLogout, nav, active, setActive, children, badge 
       </aside>
       <main style={{ flex: 1, padding: "30px 38px", maxWidth: 1100 }}>{children}</main>
     </div>
+    <div style={{
+      position: "fixed", bottom: 0, left: 0, width: 248,
+      textAlign: "center", padding: "8px 12px",
+      fontSize: 10, color: "#ffffff40", lineHeight: 1.4,
+      borderTop: "1px solid #ffffff10",
+      background: C.ink, zIndex: 10,
+    }}>
+      © {new Date().getFullYear()} ETB Enterprises, LLC<br/>
+      {BRAND.name}™ · All rights reserved.
+    </div>
   );
 }
