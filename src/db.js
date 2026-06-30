@@ -11,6 +11,18 @@ export async function getProfile() {
   return data;
 }
 
+export async function isInstructor() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return false;
+  const { data, error } = await supabase
+    .from("pl_profiles")
+    .select("role")
+    .eq("id", user.id)
+    .single();
+  if (error) return false;
+  return data?.role === "instructor";
+}
+
 export async function listProfiles() {
   const { data, error } = await supabase.from("pl_profiles").select("*").order("full_name");
   if (error) throw error;
@@ -64,9 +76,14 @@ export async function deleteBook(id) {
 
 /* ---------------- TESTS + QUESTIONS ---------------- */
 export async function listTests() {
+  const instructor = await isInstructor();
+  // Students never receive correct_answer; instructors do (for authoring/grading).
+  const qCols = instructor
+    ? "pl_questions(*)"
+    : "pl_questions(id,test_id,position,type,prompt,points,options)";
   const { data, error } = await supabase
     .from("pl_tests")
-    .select("*, pl_questions(*)")
+    .select(`*, ${qCols}`)
     .order("created_at", { ascending: false });
   if (error) throw error;
   return (data || []).map((t) => ({
@@ -127,12 +144,15 @@ export async function listSubmissions() {
   return data;
 }
 
-export async function createSubmission({ test_id, answers, max_score }) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const { error } = await supabase.from("pl_submissions").insert({
-    test_id, student_id: user.id, answers, max_score,
+export async function createSubmission({ test_id, answers }) {
+  // Server grades objective questions, writes the submission, and
+  // (for objective CE tests) issues the certificate. Returns the result.
+  const { data, error } = await supabase.rpc("pl_submit_test", {
+    p_test_id: test_id,
+    p_answers: answers || {},
   });
   if (error) throw error;
+  return data; // { score, max_score, pct, has_subjective, ce_type, passing_score, certificate_issued, status }
 }
 
 export async function gradeSubmission(id, { manual, score, max_score, feedback }) {
@@ -192,9 +212,13 @@ export async function saveSyllabus({ term, title, content, file }) {
 
 /* ---------------- HOMEWORK ---------------- */
 export async function listHomework() {
+  const instructor = await isInstructor();
+  const qCols = instructor
+    ? "pl_homework_questions(*)"
+    : "pl_homework_questions(id,homework_id,position,type,prompt,points,options)";
   const { data, error } = await supabase
     .from("pl_homework")
-    .select("*, pl_homework_questions(*)")
+    .select(`*, ${qCols}`)
     .order("due_date", { ascending: true, nullsFirst: false })
     .order("title", { ascending: true });
   if (error) throw error;
@@ -275,14 +299,19 @@ export async function deleteSession(id) {
   if (error) throw error;
 }
 
-export async function submitHomework({ homework_id, answers, response, file, max_points }) {
-  const { data: { user } } = await supabase.auth.getUser();
+export async function submitHomework({ homework_id, answers, response, file }) {
+  // Upload any attachment first (storage RLS still applies), then let the
+  // server grade objective questions and write the submission.
   let file_path = null;
   if (file) file_path = await uploadFile("homework-submissions", file);
-  const { error } = await supabase.from("pl_homework_submissions").insert({
-    homework_id, student_id: user.id, answers: answers || {}, response: response || "", file_path, max_points,
+  const { data, error } = await supabase.rpc("pl_submit_homework", {
+    p_homework_id: homework_id,
+    p_answers: answers || {},
+    p_response: response || "",
+    p_file: file_path,
   });
   if (error) throw error;
+  return data; // { score, max_points, has_subjective, status }
 }
 
 export async function gradeHomework(id, { manual, score, max_points, feedback }) {
