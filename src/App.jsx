@@ -1301,37 +1301,25 @@ function StudentTests({ available, books, courses, refresh }) {
   async function submit() {
     setBusy(true);
     try {
-      const maxScore = sumPoints(taking.questions);
-      await db.createSubmission({ test_id: taking.id, answers, max_score: maxScore });
-
-      // ── CE PASS-GATE ──────────────────────────────────────────
+      // Server grades objective questions, records the submission, and
+      // issues the CE certificate if the course passes its gate.
+      const res = await db.createSubmission({ test_id: taking.id, answers });
       const course = courses.find((c) => c.id === taking.course_id);
-      if (course && isCEType(course.ce_type)) {
-        let autoPoints = 0;
-        for (const q of taking.questions) {
-          const a = answers[q.id];
-          if (q.type === "mc" && String(a) === String(q.correct_answer)) autoPoints += q.points;
-          if (q.type === "tf" && a === q.correct_answer) autoPoints += q.points;
-        }
-        const pct = maxScore > 0 ? Math.round((autoPoints / maxScore) * 100) : 0;
-        const passing = Number(course.passing_score) || 75;
-        if (pct >= passing) {
-          try {
-            await db.issueCertificate({
-              title: course.title,
-              course_id: course.id,
-              note: [course.ce_hours ? `${course.ce_hours} contact hours` : "", course.approval_number || ""].filter(Boolean).join(" · "),
-              ce_hours: course.ce_hours || null,
-              approval_number: course.approval_number || null,
-              provider_name: course.provider_name || null,
-            });
-          } catch (certErr) { console.error("CE cert auto-issue:", certErr); }
-          window.alert(`You passed with ${pct}%! 🎉\n\nYour CE certificate has been issued.\nHours earned: ${course.ce_hours || "—"} contact hours.\nView it under CE Hours in your menu.`);
+
+      if (res && course && isCEType(course.ce_type)) {
+        if (res.has_subjective) {
+          window.alert("Your test has been submitted. Some questions need instructor review before your CE result is final.");
+        } else if (res.certificate_issued) {
+          window.alert(`You passed with ${res.pct}%! 🎉\n\nYour CE certificate has been issued.\nHours earned: ${course.ce_hours || "—"} contact hours.\nView it under CE Hours in your menu.`);
         } else {
-          window.alert(`You scored ${pct}%. A passing score of ${passing}% is required to earn CE credit for this course.\n\nYour submission has been recorded.`);
+          const passing = res.passing_score || Number(course.passing_score) || 75;
+          window.alert(`You scored ${res.pct}%. A passing score of ${passing}% is required to earn CE credit for this course.\n\nYour submission has been recorded.`);
         }
+      } else if (res && !res.has_subjective && res.pct != null) {
+        window.alert(`Your test has been submitted. Score: ${res.pct}%.`);
+      } else {
+        window.alert("Your test has been submitted.");
       }
-      // ── END CE PASS-GATE ──────────────────────────────────────
 
       await refresh(); setTaking(null); setAnswers({});
     } catch (e) { window.alert(e.message); }
@@ -1935,9 +1923,11 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
   function start(h) { setDoing(h); setAnswers({}); setResponse(""); setFile(null); }
 
   async function submit() {
-    const maxPts = doing.questions.length ? sumPoints(doing.questions) : doing.points;
     setBusy(true);
-    try { await db.submitHomework({ homework_id: doing.id, answers, response, file, max_points: maxPts }); await refresh(); setDoing(null); setAnswers({}); setResponse(""); setFile(null); }
+    try {
+      await db.submitHomework({ homework_id: doing.id, answers, response, file });
+      await refresh(); setDoing(null); setAnswers({}); setResponse(""); setFile(null);
+    }
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
