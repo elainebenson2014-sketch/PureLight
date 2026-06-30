@@ -34,6 +34,12 @@ async function sb(path) {
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
   try {
+    // TEMP DEBUG — safe to leave for a few minutes, remove after confirming.
+    // Logs ONLY the first 12 characters (never the full secret) so we can see
+    // in Vercel's Logs tab whether this function is actually using a live or
+    // test key at request time.
+    const _k = process.env.STRIPE_SECRET_KEY || "";
+    console.log("STRIPE KEY PREFIX SEEN BY FUNCTION:", _k.slice(0, 12), "| length:", _k.length);
     const { course_id, half, tuition_level, bucket, student_id, student_email, origin } = req.body || {};
     if (!student_id) { res.status(400).json({ error: "Missing student." }); return; }
     const base = origin || `https://${req.headers.host}`;
