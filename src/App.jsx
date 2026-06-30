@@ -3027,7 +3027,6 @@ function TuitionManager({ tuition, refresh }) {
         amount: t.amount != null ? String(t.amount) : "",
         registration: t.registration != null ? String(t.registration) : "",
         books: t.books != null ? String(t.books) : "",
-        installments: t.installments != null ? String(t.installments) : "7",
       };
     });
     setRows(m);
@@ -3040,7 +3039,7 @@ function TuitionManager({ tuition, refresh }) {
     try {
       for (const p of TUITION_LEVELS) {
         const r = rows[p.key] || {};
-        await db.setTuition(p.key, { amount: r.amount, registration: r.registration, books: r.books, installments: r.installments });
+        await db.setTuition(p.key, { amount: r.amount, registration: r.registration, books: r.books });
       }
       await refresh();
       setSaved(true);
@@ -3050,26 +3049,24 @@ function TuitionManager({ tuition, refresh }) {
 
   const planNote = (r) => {
     const total = Number(r?.amount) || 0, reg = Number(r?.registration) || 0, bk = Number(r?.books) || 0;
-    const n = Math.max(1, parseInt(r?.installments, 10) || 7);
     const portion = Math.max(0, total - reg - bk);
     if (total <= 0) return "";
-    return `Tuition balance ${money(portion)} ÷ ${n} ≈ ${money(portion / n)} per payment`;
+    return `Tuition balance ${money(portion)} — students can pay in full (${money(portion)}), half (${money(portion / 2)}), or four payments of ${money(portion / 4)}`;
   };
 
   return (
     <>
-      <PageHead title="Tuition" sub="Set the payment plan for each level. Registration and Books come out of the total; the rest splits across the number of payments." />
+      <PageHead title="Tuition" sub="Set the total, registration, and books for each level. Students choose to pay tuition in full, half, or four payments." />
       <div className="flex flex-col gap-3" style={{ maxWidth: 760 }}>
         {TUITION_LEVELS.map((p) => {
           const r = rows[p.key] || {};
           return (
             <Card key={p.key}>
               <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: "0 0 12px" }}>{p.label}</h3>
-              <div className="grid grid-cols-4 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <Field label="Total (USD)"><input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={r.amount ?? ""} onChange={(e) => set(p.key, "amount", e.target.value)} /></Field>
                 <Field label="Registration"><input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={r.registration ?? ""} onChange={(e) => set(p.key, "registration", e.target.value)} /></Field>
                 <Field label="Books"><input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={r.books ?? ""} onChange={(e) => set(p.key, "books", e.target.value)} /></Field>
-                <Field label="# Payments"><input style={inputStyle} type="number" inputMode="numeric" placeholder="7" value={r.installments ?? ""} onChange={(e) => set(p.key, "installments", e.target.value)} /></Field>
               </div>
               {planNote(r) && <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{planNote(r)}</div>}
             </Card>
@@ -3081,7 +3078,7 @@ function TuitionManager({ tuition, refresh }) {
             {saved && <span className="pl-body" style={{ color: C.green, fontSize: 13 }}>Saved</span>}
           </div>
           <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 10, lineHeight: 1.5 }}>
-            Degree students pay Registration, then Books (due September), then the remaining balance across the number of payments above. Certificate classes pay from their own fee — 6-week in full, 12-week in full or two installments.
+            Degree students pay Registration, then Books (due September), then the remaining tuition balance — in full, half, or four payments, in any combination. Certificate classes pay from their own fee — 6-week in full, 12-week in full or two installments.
           </p>
         </Card>
       </div>
@@ -3102,7 +3099,6 @@ function StudentTuition({ ledger, tuition, profile }) {
   const total = myT ? Number(myT.amount) || 0 : 0;
   const regFee = myT ? Number(myT.registration) || 0 : 0;
   const bookFee = myT ? Number(myT.books) || 0 : 0;
-  const nPay = myT ? Math.max(1, parseInt(myT.installments, 10) || 7) : 7;
   const tuitionPortion = Math.max(0, Math.round((total - regFee - bookFee) * 100) / 100);
   const label = prog ? programLabel(prog) : "";
 
@@ -3113,26 +3109,30 @@ function StudentTuition({ ledger, tuition, profile }) {
   const regPaid = paidFor("registration");
   const bookPaid = paidFor("books");
   const tuitionPaidAmt = paidFor("tuition");
-  const perPay = Math.round((tuitionPortion / nPay) * 100) / 100;
   const tuitionRemaining = Math.max(0, Math.round((tuitionPortion - tuitionPaidAmt) * 100) / 100);
-  const nextTuition = Math.min(perPay, tuitionRemaining);
+  const halfAmt = Math.round((tuitionPortion / 2) * 100) / 100;
+  const fourAmt = Math.round((tuitionPortion / 4) * 100) / 100;
+  // Only offer half/four as distinct options while they'd actually leave a
+  // balance afterward — once remaining is that small, "pay full" is the same
+  // thing, so there's no point cluttering the buttons.
+  const showHalf = tuitionRemaining > halfAmt + 0.005;
+  const showFour = tuitionRemaining > fourAmt + 0.005;
   const fullyPaid = total > 0 && regPaid >= regFee - 0.005 && bookPaid >= bookFee - 0.005 && tuitionRemaining <= 0.005;
 
-  async function pay(bucket) {
-    try { const url = await db.startTuitionCheckout(prog, bucket); window.location.href = url; }
+  async function pay(bucket, plan) {
+    try { const url = await db.startTuitionCheckout(prog, bucket, plan); window.location.href = url; }
     catch (e) { window.alert(e.message); }
   }
 
-  function bucketRow(title, due, owed, paidAmt, bucket, payAmt) {
+  function bucketRow(title, due, owed, paidAmt, bucket) {
     const done = owed > 0 && paidAmt >= owed - 0.005;
-    const showAmt = payAmt != null ? payAmt : Math.max(0, Math.round((owed - paidAmt) * 100) / 100);
+    const showAmt = Math.max(0, Math.round((owed - paidAmt) * 100) / 100);
     return (
       <div className="flex items-center justify-between" style={{ padding: "12px 0", borderTop: `1px solid ${C.line}`, flexWrap: "wrap", gap: 10 }}>
         <div>
           <div className="pl-body" style={{ fontWeight: 600, fontSize: 15, color: C.ink }}>{title}{due ? <span className="pl-body" style={{ fontSize: 12, color: C.gold, marginLeft: 8 }}>{due}</span> : null}</div>
           <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
             {money(owed)}{paidAmt > 0 ? ` • ${money(paidAmt)} paid` : ""}{owed > 0 ? ` • ${money(Math.max(0, owed - paidAmt))} left` : ""}
-            {bucket === "tuition" && owed > 0 ? ` • ${nPay} payments of ~${money(perPay)}` : ""}
           </div>
         </div>
         {owed <= 0 ? (
@@ -3148,6 +3148,36 @@ function StudentTuition({ ledger, tuition, profile }) {
     );
   }
 
+  function tuitionRow() {
+    const done = tuitionPortion > 0 && tuitionRemaining <= 0.005;
+    return (
+      <div style={{ padding: "12px 0", borderTop: `1px solid ${C.line}` }}>
+        <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+          <div>
+            <div className="pl-body" style={{ fontWeight: 600, fontSize: 15, color: C.ink }}>Tuition</div>
+            <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+              {money(tuitionPortion)}{tuitionPaidAmt > 0 ? ` • ${money(tuitionPaidAmt)} paid` : ""}{tuitionPortion > 0 ? ` • ${money(tuitionRemaining)} left` : ""}
+            </div>
+          </div>
+          {tuitionPortion <= 0 ? (
+            <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>—</span>
+          ) : done ? (
+            <span className="pl-body" style={{ fontSize: 14, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={16} /> Paid</span>
+          ) : !TUITION_PAY_ENABLED ? (
+            <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Contact the office</span>
+          ) : null}
+        </div>
+        {tuitionPortion > 0 && !done && TUITION_PAY_ENABLED && (
+          <div className="flex items-center gap-2" style={{ flexWrap: "wrap", marginTop: 8 }}>
+            <Btn small icon={Receipt} onClick={() => pay("tuition", "full")}>Pay full {money(tuitionRemaining)}</Btn>
+            {showHalf && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "half")}>Pay half {money(Math.min(halfAmt, tuitionRemaining))}</Btn>}
+            {showFour && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "four")}>Pay 1 of 4 {money(Math.min(fourAmt, tuitionRemaining))}</Btn>}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <>
       <PageHead title="Tuition" sub="Your payment plan, charges, payments, and balance." />
@@ -3155,9 +3185,9 @@ function StudentTuition({ ledger, tuition, profile }) {
       {prog && total > 0 && (
         <Card style={{ marginBottom: 20 }}>
           <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 2 }}>{label} Program — {money(total)} total</div>
-          {bucketRow("Registration", "", regFee, regPaid, "registration", null)}
-          {bucketRow("Books", "Due September", bookFee, bookPaid, "books", null)}
-          {bucketRow("Tuition", "", tuitionPortion, tuitionPaidAmt, "tuition", nextTuition)}
+          {bucketRow("Registration", "", regFee, regPaid, "registration")}
+          {bucketRow("Books", "Due September", bookFee, bookPaid, "books")}
+          {tuitionRow()}
           {fullyPaid && <div className="pl-body" style={{ marginTop: 12, color: C.green, fontWeight: 600, fontSize: 14 }}>Your account is paid in full — thank you.</div>}
         </Card>
       )}
