@@ -2723,6 +2723,14 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
   const certHomework = (homework || []).filter((h) => myClassIds.has(h.course_id));
   const certMyHwSubs = (myHwSubs || []).filter((s) => certHomework.some((h) => h.id === s.homework_id));
 
+  // Billing summary across all enrolled cert classes — same shape as the
+  // Tuition page (Total charged / Total paid / Balance due + a statement).
+  const certCharged = myClasses.reduce((a, c) => a + (Number(c.fee) || 0), 0);
+  const certEntries = (ledger || []).filter((e) => myClassIds.has(e.course_id));
+  const certPaid = certEntries.filter((e) => e.kind === "payment").reduce((a, e) => a + (Number(e.amount) || 0), 0);
+  const certBalance = certCharged - certPaid;
+  const certEs = [...certEntries].sort((a, b) => (a.date < b.date ? -1 : 1));
+
   async function pay(c, half) {
     try { const url = await db.startCertCheckout(c.id, half); window.location.href = url; }
     catch (e) { window.alert(e.message); }
@@ -2771,6 +2779,40 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
           );
         })}
       </div>
+
+      {myClasses.length > 0 && certCharged > 0 && (
+        <>
+          <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
+            <Stat icon={Receipt} label="Total charged" value={money(certCharged)} />
+            <Stat icon={Check} label="Total paid" value={money(certPaid)} tone={C.green} />
+            <Stat icon={Receipt} label="Balance due" value={money(certBalance)} tone={certBalance > 0 ? C.rose : C.green} />
+          </div>
+          <Card style={{ marginBottom: 24 }}>
+            <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Statement</h3>
+            {certEs.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No charges or payments on record yet.</span> :
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+                  <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5 }}>
+                    <th style={{ padding: "6px 8px" }}>Date</th><th style={{ padding: "6px 8px" }}>Description</th>
+                    <th style={{ padding: "6px 8px", textAlign: "right" }}>Charge</th><th style={{ padding: "6px 8px", textAlign: "right" }}>Payment</th>
+                  </tr></thead>
+                  <tbody>
+                    {certEs.map((e) => (
+                      <tr key={e.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                        <td style={{ padding: "8px" }}>{fdate(e.date)}</td>
+                        <td style={{ padding: "8px" }}>{e.description || (e.kind === "payment" ? "Payment" : "Charge")}{e.method ? ` · ${e.method}` : ""}</td>
+                        <td style={{ padding: "8px", textAlign: "right", color: C.ink }}>{e.kind === "charge" ? money(e.amount) : ""}</td>
+                        <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{e.kind === "payment" ? money(e.amount) : ""}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>}
+            {certBalance > 0 && <p className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 12 }}>Please contact the school office to make a payment on your balance.</p>}
+          </Card>
+        </>
+      )}
+
       {myClasses.length > 0 && (
         <>
           <StudentTests available={certAvailable} books={books} courses={courses} refresh={refresh} />
