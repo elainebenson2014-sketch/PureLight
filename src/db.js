@@ -296,8 +296,8 @@ export async function gradeHomework(id, { manual, score, max_points, feedback })
 // Labels must match App.jsx PROGRAMS / the checkout function so charge and
 // payment descriptions line up exactly (e.g. "Bachelor tuition").
 const TUITION_LEVEL_LABELS = {
-  certificate: "Certificate", associate: "Associate", bachelor: "Bachelor",
-  master: "Master", doctorate: "Doctoral", phd: "PhD",
+  associate: "Associate", bachelor: "Bachelor",
+  master: "Master", master2: "Master 2", doctorate: "Doctoral", phd: "PhD",
 };
 
 /* Post the registration / books / tuition charges for a student's level so the
@@ -568,13 +568,14 @@ export async function setTuition(program, fields) {
 
 /* Start a Stripe Checkout for a program level's tuition; returns the URL to redirect to.
    The amount is looked up server-side from pl_tuition by the checkout function —
-   never trust a price sent from the browser. */
-export async function startTuitionCheckout(tuition_level, bucket) {
+   never trust a price sent from the browser. `plan` only applies to the
+   "tuition" bucket: "full" | "half" | "four". */
+export async function startTuitionCheckout(tuition_level, bucket, plan) {
   const { data: { user } } = await supabase.auth.getUser();
   const r = await fetch("/api/create-checkout-session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tuition_level, bucket, student_id: user.id, student_email: user.email, origin: window.location.origin }),
+    body: JSON.stringify({ tuition_level, bucket, plan, student_id: user.id, student_email: user.email, origin: window.location.origin }),
   });
   const j = await r.json();
   if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
