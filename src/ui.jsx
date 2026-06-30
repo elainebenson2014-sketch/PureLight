@@ -219,10 +219,10 @@ export function Shell({ user, onLogout, nav, active, setActive, children, badge 
             style={{ width: "100%", padding: "9px 12px", borderRadius: 9, background: "#ffffff10", color: "#fff", border: "none", cursor: "pointer", fontSize: 13.5, fontWeight: 600 }}>
             <LogOut size={16} /> Sign out
           </button>
+          <div className="pl-body text-center" style={{ marginTop: 12, fontSize: 10, color: "#ffffff40", lineHeight: 1.5 }}>{"© " + new Date().getFullYear() + " ETB Enterprises, LLC · " + BRAND.name + "™"}</div>
         </div>
       </aside>
       <main style={{ flex: 1, padding: "30px 38px", maxWidth: 1100 }}>{children}</main>
-      <aside style={{ position: "fixed", bottom: 0, left: 0, width: 248, textAlign: "center", padding: "8px 12px", fontSize: 10, color: "#ffffff40", background: C.ink, borderTop: "1px solid #ffffff10", zIndex: 10 }}>{"© " + new Date().getFullYear() + " ETB Enterprises, LLC · " + BRAND.name + "™"}</aside>
     </div>
   );
 }
