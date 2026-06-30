@@ -65,10 +65,15 @@ const PROGRAMS = [
   { key: "associate", label: "Associate" },
   { key: "bachelor", label: "Bachelor" },
   { key: "master", label: "Master" },
+  { key: "master2", label: "Master 2" },
   { key: "doctorate", label: "Doctoral" },
   { key: "phd", label: "PhD" },
 ];
 const STUDENT_PROGRAMS = PROGRAMS.filter((p) => p.key !== "all");
+// Tuition (Registration/Books/installments) only applies to the formal degree
+// ladder. "Certificate" students pay per-course via Cert Classes instead, so
+// it's excluded here even though it stays selectable as a program/field above.
+const TUITION_LEVELS = STUDENT_PROGRAMS.filter((p) => p.key !== "certificate");
 const programLabel = (k) => PROGRAMS.find((p) => p.key === k)?.label || "All programs";
 const visibleFor = (items, program) => (items || []).filter((it) => it.program === "all" || it.program === program);
 
@@ -2974,7 +2979,7 @@ function TuitionManager({ tuition, refresh }) {
 
   useEffect(() => {
     const m = {};
-    STUDENT_PROGRAMS.forEach((p) => {
+    TUITION_LEVELS.forEach((p) => {
       const t = (tuition || []).find((x) => x.program === p.key) || {};
       m[p.key] = {
         amount: t.amount != null ? String(t.amount) : "",
@@ -2991,7 +2996,7 @@ function TuitionManager({ tuition, refresh }) {
   async function save() {
     setBusy(true); setSaved(false);
     try {
-      for (const p of STUDENT_PROGRAMS) {
+      for (const p of TUITION_LEVELS) {
         const r = rows[p.key] || {};
         await db.setTuition(p.key, { amount: r.amount, registration: r.registration, books: r.books, installments: r.installments });
       }
@@ -3013,7 +3018,7 @@ function TuitionManager({ tuition, refresh }) {
     <>
       <PageHead title="Tuition" sub="Set the payment plan for each level. Registration and Books come out of the total; the rest splits across the number of payments." />
       <div className="flex flex-col gap-3" style={{ maxWidth: 760 }}>
-        {STUDENT_PROGRAMS.map((p) => {
+        {TUITION_LEVELS.map((p) => {
           const r = rows[p.key] || {};
           return (
             <Card key={p.key}>
@@ -3050,7 +3055,8 @@ function StudentTuition({ ledger, tuition, profile }) {
   const es = [...ledger].sort((a, b) => (a.date < b.date ? -1 : 1));
 
   const prog = profile?.program;
-  const myT = prog ? (tuition || []).find((t) => t.program === prog) : null;
+  const isTuitionLevel = TUITION_LEVELS.some((p) => p.key === prog);
+  const myT = prog && isTuitionLevel ? (tuition || []).find((t) => t.program === prog) : null;
   const total = myT ? Number(myT.amount) || 0 : 0;
   const regFee = myT ? Number(myT.registration) || 0 : 0;
   const bookFee = myT ? Number(myT.books) || 0 : 0;
