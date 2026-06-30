@@ -4,19 +4,20 @@
    1) Certificate class:  { course_id, half, student_id, student_email, origin }
         half=true on a 12-week class pays one of two installments (fee / 2);
         otherwise it pays the remaining balance in full.
-   2) Degree tuition:     { tuition_level, bucket, student_id, student_email, origin }
+   2) Degree tuition:     { tuition_level, bucket, plan, student_id, student_email, origin }
         bucket = "registration" | "books" | "tuition"
-        Registration and Books come out of the total; "tuition" is the remaining
-        balance (total - registration - books) and is charged one installment at a
-        time ((balance / installments), never more than what's still owed).
+        Registration and Books always charge whatever's left of that bucket in full.
+        "tuition" supports three flexible plans (plan = "full" | "half" | "four"),
+        each capped at whatever balance is actually still owed — so a student can
+        mix and match (e.g. pay half, then finish the rest in two quarter payments).
 
    Vercel env vars: STRIPE_SECRET_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 */
 
 // Must match the labels in App.jsx PROGRAMS so ledger descriptions line up.
 const LEVEL_LABEL = {
-  certificate: "Certificate", associate: "Associate", bachelor: "Bachelor",
-  master: "Master", doctorate: "Doctoral", phd: "PhD",
+  associate: "Associate", bachelor: "Bachelor",
+  master: "Master", master2: "Master 2", doctorate: "Doctoral", phd: "PhD",
 };
 
 function round2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
@@ -34,13 +35,7 @@ async function sb(path) {
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
   try {
-    // TEMP DEBUG — safe to leave for a few minutes, remove after confirming.
-    // Logs ONLY the first 12 characters (never the full secret) so we can see
-    // in Vercel's Logs tab whether this function is actually using a live or
-    // test key at request time.
-    const _k = process.env.STRIPE_SECRET_KEY || "";
-    console.log("STRIPE KEY PREFIX SEEN BY FUNCTION:", _k.slice(0, 12), "| length:", _k.length);
-    const { course_id, half, tuition_level, bucket, student_id, student_email, origin } = req.body || {};
+    const { course_id, half, tuition_level, bucket, plan, student_id, student_email, origin } = req.body || {};
     if (!student_id) { res.status(400).json({ error: "Missing student." }); return; }
     const base = origin || `https://${req.headers.host}`;
 
@@ -51,7 +46,7 @@ export default async function handler(req, res) {
 
     if (tuition_level) {
       // -------- Degree tuition: registration / books / tuition installment --------
-      const trows = await sb(`pl_tuition?program=eq.${encodeURIComponent(tuition_level)}&select=amount,registration,books,installments`);
+      const trows = await sb(`pl_tuition?program=eq.${encodeURIComponent(tuition_level)}&select=amount,registration,books`);
       const t = Array.isArray(trows) ? trows[0] : null;
       if (!t) { res.status(404).json({ error: "Tuition isn't set for this level yet." }); return; }
 
@@ -59,7 +54,6 @@ export default async function handler(req, res) {
       const total = Number(t.amount) || 0;
       const registration = Number(t.registration) || 0;
       const books = Number(t.books) || 0;
-      const installments = Math.max(1, parseInt(t.installments, 10) || 7);
       const portion = Math.max(0, round2(total - registration - books));
 
       const pays = await sb(`pl_ledger?student_id=eq.${student_id}&kind=eq.payment&select=description,amount`);
@@ -77,7 +71,12 @@ export default async function handler(req, res) {
       } else if (bucket === "tuition") {
         word = "tuition";
         const remaining = round2(portion - paidFor("tuition"));
-        amount = Math.min(round2(portion / installments), remaining);
+        const planKey = String(plan || "full").toLowerCase();
+        let want;
+        if (planKey === "half") want = round2(portion / 2);
+        else if (planKey === "four" || planKey === "quarter") want = round2(portion / 4);
+        else want = remaining; // "full" — pay off whatever's left
+        amount = Math.min(want, remaining);
       } else {
         res.status(400).json({ error: "Unknown payment type." }); return;
       }
