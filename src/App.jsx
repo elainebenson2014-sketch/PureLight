@@ -986,16 +986,20 @@ function StudentPortal({ profile, onLogout }) {
   const myCertCourseIds = new Set((certEnrollments || []).filter((e) => e.student_id === profile.id).map((e) => e.course_id));
   const notCert = (it) => !certCourseIds.has(it.course_id);
   const visBooks = visibleFor(books, prog).filter(notCert);
-  const visTests = visibleFor(tests, prog).filter(notCert);
-  const visHw = visibleFor(homework, prog).filter(notCert);
+  // Certificate-class tests/homework now live in the main Tests/Homework tabs
+  // (not the separate Cert Classes page), but only for students actually
+  // enrolled in that specific class — not by the generic program-tag match,
+  // which would otherwise leak a class's coursework to unrelated students.
+  const certTests = (tests || []).filter((t) => myCertCourseIds.has(t.course_id));
+  const certHw = (homework || []).filter((h) => myCertCourseIds.has(h.course_id));
+  const visTests = [...visibleFor(tests, prog).filter(notCert), ...certTests];
+  const visHw = [...visibleFor(homework, prog).filter(notCert), ...certHw];
   const degTests = (tests || []).filter(notCert);
   const degHw = (homework || []).filter(notCert);
   const mySubs = subs.filter((s) => s.student_id === profile.id);
   const myHwSubs = hwSubs.filter((s) => s.student_id === profile.id);
   const available = visTests.filter((t) => !mySubs.some((s) => s.test_id === t.id));
   const availableHw = visHw.filter((h) => !myHwSubs.some((s) => s.homework_id === h.id));
-  const certAvailable = (tests || []).filter((t) => myCertCourseIds.has(t.course_id) && !mySubs.some((s) => s.test_id === t.id));
-  const certAvailableHw = (homework || []).filter((h) => myCertCourseIds.has(h.course_id) && !myHwSubs.some((s) => s.homework_id === h.id));
 
   const nav = [
     { key: "dash",        label: "Dashboard",   icon: LayoutDashboard, show: true },
@@ -1029,7 +1033,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "progress" && <DegreeProgress profile={profile} courses={courses} tests={degTests} homework={degHw} mySubs={mySubs} myHwSubs={myHwSubs} />}
           {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
           {active === "cehours" && <StudentCEHours profile={profile} courses={courses} tests={tests} subs={mySubs} certificates={certificates} />}
-          {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certAvailable={certAvailable} certAvailableHw={certAvailableHw} myHwSubs={myHwSubs} homework={homework} books={books} certificates={certificates} ledger={ledger.filter((e) => e.student_id === profile.id)} refresh={refresh} />}
+          {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certificates={certificates} ledger={ledger.filter((e) => e.student_id === profile.id)} refresh={refresh} />}
           {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} tuition={tuition} profile={profile} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
         </>
@@ -2712,7 +2716,7 @@ function ClassEditor({ draft, onClose, refresh }) {
   );
 }
 
-function StudentCertClasses({ courses, enrollments, profile, certAvailable, certAvailableHw, myHwSubs, homework, books, certificates, ledger, refresh }) {
+function StudentCertClasses({ courses, enrollments, profile, certificates, ledger, refresh }) {
   const myEnroll = enrollments.filter((e) => e.student_id === profile.id);
   const myClassIds = new Set(myEnroll.map((e) => e.course_id));
   const myClasses = courses.filter((c) => c.is_certificate && myClassIds.has(c.id));
@@ -2720,8 +2724,6 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
   const paidForCourse = (id) => (ledger || [])
     .filter((e) => e.kind === "payment" && e.course_id === id)
     .reduce((a, e) => a + (Number(e.amount) || 0), 0);
-  const certHomework = (homework || []).filter((h) => myClassIds.has(h.course_id));
-  const certMyHwSubs = (myHwSubs || []).filter((s) => certHomework.some((h) => h.id === s.homework_id));
 
   // Billing summary across all enrolled cert classes — same shape as the
   // Tuition page (Total charged / Total paid / Balance due + a statement).
@@ -2738,7 +2740,7 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
 
   return (
     <>
-      <PageHead title="Certificate Classes" sub="Your enrolled certificate classes, their coursework, and the certificates you've earned." />
+      <PageHead title="Certificate Classes" sub="Your enrolled certificate classes, billing, and the certificates you've earned. Tests and homework for these classes are in the main Tests and Homework tabs." />
       {myClasses.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>You're not enrolled in any certificate classes yet. Your instructor will add you to one.</span></Card>}
       <div className="flex flex-col gap-3" style={{ marginBottom: myClasses.length ? 24 : 0 }}>
         {myClasses.map((c) => {
@@ -2808,16 +2810,7 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
                   </tbody>
                 </table>
               </div>}
-            {certBalance > 0 && <p className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 12 }}>Please contact the school office to make a payment on your balance.</p>}
           </Card>
-        </>
-      )}
-
-      {myClasses.length > 0 && (
-        <>
-          <StudentTests available={certAvailable} books={books} courses={courses} refresh={refresh} />
-          <div style={{ height: 18 }} />
-          <StudentHomework availableHw={certAvailableHw} myHwSubs={certMyHwSubs} homework={certHomework} courses={courses} refresh={refresh} />
         </>
       )}
     </>
