@@ -11,18 +11,6 @@ export async function getProfile() {
   return data;
 }
 
-export async function isInstructor() {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return false;
-  const { data, error } = await supabase
-    .from("pl_profiles")
-    .select("role")
-    .eq("id", user.id)
-    .single();
-  if (error) return false;
-  return data?.role === "instructor";
-}
-
 export async function listProfiles() {
   const { data, error } = await supabase.from("pl_profiles").select("*").order("full_name");
   if (error) throw error;
@@ -76,26 +64,21 @@ export async function deleteBook(id) {
 
 /* ---------------- TESTS + QUESTIONS ---------------- */
 export async function listTests() {
-  const instructor = await isInstructor();
-  // Students get questions with NO answer data. Instructors embed the
-  // instructor-only answer table and we merge correct_answer back on,
-  // so the rest of the app keeps using q.correct_answer unchanged.
-  const qCols = instructor
-    ? "pl_questions(id,test_id,position,type,prompt,points,options,pl_question_answers(correct_answer))"
-    : "pl_questions(id,test_id,position,type,prompt,points,options)";
   const { data, error } = await supabase
     .from("pl_tests")
-    .select(`*, ${qCols}`)
+    .select("*, pl_questions(*)")
     .order("created_at", { ascending: false });
   if (error) throw error;
+  const allQs = (data || []).flatMap((t) => t.pl_questions || []);
+  const qIds = allQs.map((q) => q.id);
+  let ansMap = {};
+  if (qIds.length) {
+    const { data: ans } = await supabase.from("pl_question_answers").select("question_id, correct_answer").in("question_id", qIds);
+    (ans || []).forEach((a) => { ansMap[a.question_id] = a.correct_answer; });
+  }
   return (data || []).map((t) => ({
     ...t,
-    questions: (t.pl_questions || [])
-      .map((q) => ({
-        ...q,
-        correct_answer: q.pl_question_answers?.[0]?.correct_answer ?? null,
-      }))
-      .sort((a, b) => a.position - b.position),
+    questions: (t.pl_questions || []).sort((a, b) => a.position - b.position).map((q) => ({ ...q, correct_answer: ansMap[q.id] ?? null })),
   }));
 }
 
@@ -121,32 +104,18 @@ export async function saveTest(test, questions) {
   }
 
   const rows = questions.map((q, i) => ({
-    test_id: testId,
-    position: i,
-    type: q.type,
-    prompt: q.prompt,
-    points: Number(q.points) || 0,
-    options: q.options || [],
+    test_id: testId, position: i, type: q.type, prompt: q.prompt,
+    points: Number(q.points) || 0, options: q.options || [],
   }));
   if (rows.length) {
-    // Insert questions and get their new ids back (keyed by position),
-    // then write correct answers into the instructor-only answer table.
-    const { data: inserted, error } = await supabase
-      .from("pl_questions")
-      .insert(rows)
-      .select("id, position");
+    const { data: inserted, error } = await supabase.from("pl_questions").insert(rows).select("id, position");
     if (error) throw error;
-    const ansRows = (inserted || [])
-      .map((r) => {
-        const q = questions[r.position];
-        return { question_id: r.id, correct_answer: q?.correct_answer ?? null, points: Number(q?.points) || 0 };
-      })
-      .filter((a) => a.correct_answer !== null && a.correct_answer !== "");
-    if (ansRows.length) {
-      // Old answer rows were removed via ON DELETE CASCADE when the
-      // old questions were deleted above, so a plain insert is safe.
-      const { error: aerr } = await supabase.from("pl_question_answers").insert(ansRows);
-      if (aerr) throw aerr;
+    const answerRows = (inserted || [])
+      .filter((ins) => { const o = questions[ins.position]; return o?.correct_answer != null && o.correct_answer !== ""; })
+      .map((ins) => { const o = questions[ins.position]; return { question_id: ins.id, correct_answer: String(o.correct_answer), points: Number(o.points) || 0 }; });
+    if (answerRows.length) {
+      const { error: aErr } = await supabase.from("pl_question_answers").insert(answerRows);
+      if (aErr) throw aErr;
     }
   }
   return testId;
@@ -167,15 +136,12 @@ export async function listSubmissions() {
   return data;
 }
 
-export async function createSubmission({ test_id, answers }) {
-  // Server grades objective questions, writes the submission, and
-  // (for objective CE tests) issues the certificate. Returns the result.
-  const { data, error } = await supabase.rpc("pl_submit_test", {
-    p_test_id: test_id,
-    p_answers: answers || {},
+export async function createSubmission({ test_id, answers, max_score }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_submissions").insert({
+    test_id, student_id: user.id, answers, max_score,
   });
   if (error) throw error;
-  return data; // { score, max_score, pct, has_subjective, ce_type, passing_score, certificate_issued, status }
 }
 
 export async function gradeSubmission(id, { manual, score, max_score, feedback }) {
@@ -235,24 +201,22 @@ export async function saveSyllabus({ term, title, content, file }) {
 
 /* ---------------- HOMEWORK ---------------- */
 export async function listHomework() {
-  const instructor = await isInstructor();
-  const qCols = instructor
-    ? "pl_homework_questions(id,homework_id,position,type,prompt,points,options,pl_homework_answers(correct_answer))"
-    : "pl_homework_questions(id,homework_id,position,type,prompt,points,options)";
   const { data, error } = await supabase
     .from("pl_homework")
-    .select(`*, ${qCols}`)
+    .select("*, pl_homework_questions(*)")
     .order("due_date", { ascending: true, nullsFirst: false })
     .order("title", { ascending: true });
   if (error) throw error;
+  const allQs = (data || []).flatMap((h) => h.pl_homework_questions || []);
+  const qIds = allQs.map((q) => q.id);
+  let ansMap = {};
+  if (qIds.length) {
+    const { data: ans } = await supabase.from("pl_homework_answers").select("question_id, correct_answer").in("question_id", qIds);
+    (ans || []).forEach((a) => { ansMap[a.question_id] = a.correct_answer; });
+  }
   return (data || []).map((h) => ({
     ...h,
-    questions: (h.pl_homework_questions || [])
-      .map((q) => ({
-        ...q,
-        correct_answer: q.pl_homework_answers?.[0]?.correct_answer ?? null,
-      }))
-      .sort((a, b) => a.position - b.position),
+    questions: (h.pl_homework_questions || []).sort((a, b) => a.position - b.position).map((q) => ({ ...q, correct_answer: ansMap[q.id] ?? null })),
   }));
 }
 
@@ -285,20 +249,14 @@ export async function saveHomework(hw, questions, file) {
     points: Number(q.points) || 0, options: q.options || [],
   }));
   if (rows.length) {
-    const { data: inserted, error } = await supabase
-      .from("pl_homework_questions")
-      .insert(rows)
-      .select("id, position");
+    const { data: inserted, error } = await supabase.from("pl_homework_questions").insert(rows).select("id, position");
     if (error) throw error;
-    const ansRows = (inserted || [])
-      .map((r) => {
-        const q = (questions || [])[r.position];
-        return { question_id: r.id, correct_answer: q?.correct_answer ?? null, points: Number(q?.points) || 0 };
-      })
-      .filter((a) => a.correct_answer !== null && a.correct_answer !== "");
-    if (ansRows.length) {
-      const { error: aerr } = await supabase.from("pl_homework_answers").insert(ansRows);
-      if (aerr) throw aerr;
+    const answerRows = (inserted || [])
+      .filter((ins) => { const o = questions[ins.position]; return o?.correct_answer != null && o.correct_answer !== ""; })
+      .map((ins) => { const o = questions[ins.position]; return { question_id: ins.id, correct_answer: String(o.correct_answer), points: Number(o.points) || 0 }; });
+    if (answerRows.length) {
+      const { error: aErr } = await supabase.from("pl_homework_answers").insert(answerRows);
+      if (aErr) throw aErr;
     }
   }
   return hwId;
@@ -340,19 +298,14 @@ export async function deleteSession(id) {
   if (error) throw error;
 }
 
-export async function submitHomework({ homework_id, answers, response, file }) {
-  // Upload any attachment first (storage RLS still applies), then let the
-  // server grade objective questions and write the submission.
+export async function submitHomework({ homework_id, answers, response, file, max_points }) {
+  const { data: { user } } = await supabase.auth.getUser();
   let file_path = null;
   if (file) file_path = await uploadFile("homework-submissions", file);
-  const { data, error } = await supabase.rpc("pl_submit_homework", {
-    p_homework_id: homework_id,
-    p_answers: answers || {},
-    p_response: response || "",
-    p_file: file_path,
+  const { error } = await supabase.from("pl_homework_submissions").insert({
+    homework_id, student_id: user.id, answers: answers || {}, response: response || "", file_path, max_points,
   });
   if (error) throw error;
-  return data; // { score, max_points, has_subjective, status }
 }
 
 export async function gradeHomework(id, { manual, score, max_points, feedback }) {
