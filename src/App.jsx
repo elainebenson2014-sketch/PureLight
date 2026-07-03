@@ -391,7 +391,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
-          {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} refresh={refresh} />}
+          {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} courses={courses} refresh={refresh} />}
           {active === "tuition" && profile.role === "admin" && <TuitionManager tuition={tuition} refresh={refresh} />}
           {active === "certificates" && profile.role === "admin" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
           {active === "certprograms" && profile.role === "admin" && <CertClassesManager courses={courses} students={students} profiles={profiles} tests={tests} homework={homework} subs={subs} hwSubs={hwSubs} certificates={certificates} enrollments={certEnrollments} ledger={ledger} refresh={refresh} />}
@@ -2962,12 +2962,14 @@ function parseCSV(text) {
 }
 
 /* ---------- BILLING (instructor) ---------- */
-function BillingManager({ students, ledger, refresh }) {
+function BillingManager({ students, ledger, courses, refresh }) {
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
   const [csvNote, setCsvNote] = useState(null);
   const [charge, setCharge] = useState({ description: "", amount: "", date: todayStr() });
-  const [pay, setPay] = useState({ amount: "", date: todayStr(), method: "Wave", note: "" });
+  const [pay, setPay] = useState({ amount: "", date: todayStr(), method: "Wave", note: "", applyTo: "" });
+
+  const certClasses = (courses || []).filter((c) => c.is_certificate);
 
   const entriesFor = (id) => ledger.filter((e) => e.student_id === id);
   const totals = (id) => {
@@ -2988,7 +2990,13 @@ function BillingManager({ students, ledger, refresh }) {
   async function addPayment() {
     if (!pay.amount) return;
     setBusy(true);
-    try { await db.addLedgerEntry({ student_id: selected, kind: "payment", description: pay.note || "Payment", amount: pay.amount, date: pay.date, method: pay.method }); await refresh(); setPay({ amount: "", date: todayStr(), method: pay.method, note: "" }); }
+    try {
+      const cls = certClasses.find((c) => c.id === pay.applyTo);
+      const description = pay.note || (cls ? cls.title : "Payment");
+      await db.addLedgerEntry({ student_id: selected, kind: "payment", description, amount: pay.amount, date: pay.date, method: pay.method, course_id: cls ? cls.id : undefined });
+      await refresh();
+      setPay({ amount: "", date: todayStr(), method: pay.method, note: "", applyTo: "" });
+    }
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
@@ -3050,11 +3058,20 @@ function BillingManager({ students, ledger, refresh }) {
               <Field label="Amount"><input style={inputStyle} value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} placeholder="100" inputMode="decimal" /></Field>
               <Field label="Date"><input type="date" style={inputStyle} value={pay.date} onChange={(e) => setPay({ ...pay, date: e.target.value })} /></Field>
             </div>
+            {certClasses.length > 0 && (
+              <Field label="Apply to (for installment tracking)">
+                <select style={inputStyle} value={pay.applyTo} onChange={(e) => setPay({ ...pay, applyTo: e.target.value })}>
+                  <option value="">General account (degree tuition)</option>
+                  {certClasses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+                </select>
+              </Field>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <Field label="Method"><input style={inputStyle} value={pay.method} onChange={(e) => setPay({ ...pay, method: e.target.value })} placeholder="Wave" /></Field>
-              <Field label="Note (optional)"><input style={inputStyle} value={pay.note} onChange={(e) => setPay({ ...pay, note: e.target.value })} /></Field>
+              <Field label="Note (optional)"><input style={inputStyle} value={pay.note} onChange={(e) => setPay({ ...pay, note: e.target.value })} placeholder={pay.applyTo ? "Leave blank to use class name" : "e.g. Bachelor tuition"} /></Field>
             </div>
             <Btn small icon={Plus} onClick={addPayment} disabled={busy}>Record payment</Btn>
+            {pay.applyTo && <p className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>This payment will apply to the student's balance for that certificate class and show as paid on their Cert Classes page.</p>}
           </Card>
         </div>
         <Card>
