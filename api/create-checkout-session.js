@@ -86,7 +86,7 @@ export default async function handler(req, res) {
       metadata = { student_id, tuition_level, bucket: word, description: `${label} ${word}` };
       successUrl = `${base}/?tuition_paid=1`;
     } else if (course_id) {
-      // -------- Certificate class: full, or half on a 12-week class --------
+      // -------- Certificate class: full, half, or quarter on a 12-week class --------
       const crows = await sb(`pl_courses?id=eq.${course_id}&select=title,fee,duration_weeks`);
       const course = Array.isArray(crows) ? crows[0] : null;
       if (!course) { res.status(404).json({ error: "Class not found." }); return; }
@@ -97,7 +97,12 @@ export default async function handler(req, res) {
       const paid = (Array.isArray(pays) ? pays : []).reduce((a, e) => a + (Number(e.amount) || 0), 0);
       const remaining = round2(fee - paid);
 
-      amount = (half && weeks >= 12) ? Math.min(round2(fee / 2), remaining) : remaining;
+      const planKey = String(plan || (half ? "half" : "full")).toLowerCase();
+      let want;
+      if (planKey === "half" && weeks >= 12) want = round2(fee / 2);
+      else if ((planKey === "quarter" || planKey === "four") && weeks >= 12) want = round2(fee / 4);
+      else want = remaining; // full — pay off whatever's left
+      amount = Math.min(want, remaining);
       if (amount < 0.5) { res.status(400).json({ error: "This class is already paid in full." }); return; }
 
       productName = course.title || "Certificate class";
