@@ -2865,8 +2865,7 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
           const cPaid = paidForCourse(c.id);
           const cRemaining = Math.max(0, Math.round((fee - cPaid) * 100) / 100);
           const isPaid = fee > 0 && cRemaining <= 0.005;
-          const canHalf = (Number(c.duration_weeks) || 0) >= 12 && cRemaining > Math.round((fee / 2) * 100) / 100 + 0.005;
-          const halfAmt = Math.min(Math.round((fee / 2) * 100) / 100, cRemaining);
+          const weeks = Number(c.duration_weeks) || 0;
           return (
             <Card key={c.id}>
               <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
