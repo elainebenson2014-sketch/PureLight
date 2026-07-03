@@ -3,6 +3,7 @@ import {
   BookOpen, FileText, Users, Mail, LayoutDashboard, Plus, Upload, Trash2, Send,
   ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
   ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal, Receipt, BarChart3, LayoutGrid,
+  Reply, FileCheck, BarChart2, Star, MessageSquare, ClipboardList, ToggleLeft, ToggleRight, CornerDownRight, ThumbsUp,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
@@ -311,18 +312,24 @@ function InstructorPortal({ profile, onLogout }) {
   const [sessions, setSessions] = useState([]);
   const [certEnrollments, setCertEnrollments] = useState([]);
   const [tuition, setTuition] = useState([]);
+  const [forms, setForms] = useState([]);
+  const [formSubs, setFormSubs] = useState([]);
+  const [surveys, setSurveys] = useState([]);
+  const [surveyResps, setSurveyResps] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen, tu] = await Promise.all([
+      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen, tu, fr, fs, sv, sr] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
         db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listInstructorCourses(), db.listSessions(),
         db.listCertEnrollments(), db.listTuition(),
+        db.listForms(), db.listFormSubmissions(), db.listSurveys(), db.listSurveyResponses(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
       setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setAssignments(ic); setSessions(se);
       setCertEnrollments(cen); setTuition(tu);
+      setForms(fr); setFormSubs(fs); setSurveys(sv); setSurveyResps(sr);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -351,6 +358,8 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "certificates",label: "Certificates", icon: Medal,           show: FEATURES.certificates },
     { key: "certprograms",label: "Cert Classes", icon: Award,           show: FEATURES.cert_classes },
     { key: "cehours",     label: "CE Hours",     icon: Clock,           show: FEATURES.ce_hours },
+    { key: "forms",       label: "Forms",        icon: FileCheck,       show: true },
+    { key: "surveys",     label: "Surveys",      icon: BarChart2,       show: true },
     { key: "messages",    label: "Messages",     icon: Mail,            show: FEATURES.messages },
   ].filter((n) => n.show);
   // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
@@ -387,6 +396,8 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "certificates" && profile.role === "admin" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
           {active === "certprograms" && profile.role === "admin" && <CertClassesManager courses={courses} students={students} profiles={profiles} tests={tests} homework={homework} subs={subs} hwSubs={hwSubs} certificates={certificates} enrollments={certEnrollments} ledger={ledger} refresh={refresh} />}
           {active === "cehours" && profile.role === "admin" && <CEHoursDashboard students={students} courses={courses} subs={subs} tests={tests} certificates={certificates} refresh={refresh} />}
+          {active === "forms" && <FormsManager forms={forms} formSubs={formSubs} profiles={profiles} refresh={refresh} />}
+          {active === "surveys" && <SurveyBuilder surveys={surveys} surveyResps={surveyResps} profiles={profiles} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
         </>
       )}
@@ -881,6 +892,9 @@ function MessagesView({ messages, students, profile, canSend, refresh }) {
   const [compose, setCompose] = useState(false);
   const [form, setForm] = useState({ recipient: "all", subject: "", body: "" });
   const [busy, setBusy] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null); // { id, subject, sender_id, sender_name }
+  const [replyBody, setReplyBody] = useState("");
+  const [expanded, setExpanded] = useState({});
 
   async function send() {
     if (!form.subject.trim()) return;
@@ -895,7 +909,68 @@ function MessagesView({ messages, students, profile, canSend, refresh }) {
     setBusy(false);
   }
 
-  const nameFor = (id) => students.find((s) => s.id === id)?.full_name || id;
+  async function sendReply() {
+    if (!replyBody.trim()) return;
+    setBusy(true);
+    try {
+      const r = replyingTo;
+      // Reply goes back to whichever side sent the original
+      const recipientId = r.sender_id === profile.id ? r.recipient : r.sender_id;
+      await db.replyMessage({
+        parent_id: r.root_id || r.id,
+        subject: "Re: " + r.subject.replace(/^Re:\s*/i, ""),
+        body: replyBody,
+        recipient: recipientId,
+        sender_name: profile.full_name,
+      });
+      // Also send email notification if admin is replying to a student
+      if (canSend && recipientId !== "all") {
+        const stu = students.find((s) => s.id === recipientId);
+        if (stu?.email) await db.sendEmail({ to: [stu.email], subject: "Re: " + r.subject, html: `<p>${replyBody.replace(/\n/g, "<br/>")}</p><hr/><p style="color:#777">Sent from ${BRAND.name}</p>` });
+      }
+      await refresh();
+      setReplyingTo(null); setReplyBody("");
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  const nameFor = (id) => students.find((s) => s.id === id)?.full_name || "Staff";
+
+  // Group messages into threads: root messages + their replies
+  const roots = messages.filter((m) => !m.parent_id);
+  const repliesFor = (rootId) => messages.filter((m) => m.parent_id === rootId)
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+  // For students: show threads where they are sender or recipient
+  const visibleRoots = canSend ? roots : roots.filter((m) =>
+    m.recipient === "all" || m.recipient === profile.id || m.sender_id === profile.id
+  );
+
+  function MessageBubble({ m, isReply = false, rootId }) {
+    const isMine = m.sender_id === profile.id;
+    return (
+      <div style={{ display: "flex", gap: 10, marginBottom: 10, paddingLeft: isReply ? 28 : 0 }}>
+        {isReply && <CornerDownRight size={14} style={{ color: C.muted, marginTop: 4, flexShrink: 0 }} />}
+        <div style={{ flex: 1 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 3 }}>
+            <span className="pl-body" style={{ fontWeight: 600, fontSize: 13.5, color: isMine ? C.navy : C.ink }}>
+              {isMine ? "You" : (m.sender_name || "Staff")}
+            </span>
+            <span className="pl-body" style={{ fontSize: 11.5, color: C.muted }}>{fdate(m.created_at)}</span>
+          </div>
+          <div style={{ background: isMine ? C.paper2 : C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 12px" }}>
+            <p className="pl-body" style={{ fontSize: 13.5, lineHeight: 1.55, whiteSpace: "pre-wrap", margin: 0 }}>{m.body}</p>
+          </div>
+          {!isReply && (
+            <button className="pl-body" style={{ background: "none", border: "none", color: C.gold, fontSize: 12.5, cursor: "pointer", marginTop: 4, padding: 0 }}
+              onClick={() => { setReplyingTo({ ...m, root_id: rootId || m.id }); setReplyBody(""); }}>
+              <Reply size={12} style={{ marginRight: 4, verticalAlign: "middle" }} />Reply
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -911,28 +986,58 @@ function MessagesView({ messages, students, profile, canSend, refresh }) {
           <Field label="Subject"><input style={inputStyle} value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} /></Field>
           <Field label="Message"><textarea style={{ ...inputStyle, minHeight: 110 }} value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} /></Field>
           <div className="flex gap-2">
-            <Btn icon={Send} kind="gold" onClick={send} disabled={busy}>{busy ? "Sending…" : "Send email"}</Btn>
+            <Btn icon={Send} kind="gold" onClick={send} disabled={busy}>{busy ? "Sending…" : "Send"}</Btn>
             <Btn kind="ghost" onClick={() => setCompose(false)}>Cancel</Btn>
           </div>
         </Card>
       )}
+      {replyingTo && (
+        <Card style={{ marginBottom: 18, borderLeft: `3px solid ${C.gold}` }}>
+          <div className="pl-body" style={{ fontSize: 12.5, color: C.gold, fontWeight: 600, marginBottom: 6 }}>
+            <Reply size={13} style={{ marginRight: 4, verticalAlign: "middle" }} />Replying to: {replyingTo.subject}
+          </div>
+          <Field label="Your reply">
+            <textarea style={{ ...inputStyle, minHeight: 90 }} value={replyBody} onChange={(e) => setReplyBody(e.target.value)} placeholder="Type your reply…" />
+          </Field>
+          <div className="flex gap-2">
+            <Btn icon={Send} kind="gold" onClick={sendReply} disabled={busy}>{busy ? "Sending…" : "Send Reply"}</Btn>
+            <Btn kind="ghost" onClick={() => { setReplyingTo(null); setReplyBody(""); }}>Cancel</Btn>
+          </div>
+        </Card>
+      )}
       <div className="flex flex-col gap-3">
-        {messages.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No messages yet.</span></Card>}
-        {messages.map((m) => (
-          <Card key={m.id}>
-            <div className="flex items-start gap-3">
-              <div className="inline-flex items-center justify-center" style={{ width: 38, height: 38, borderRadius: 10, background: C.paper2, color: C.ink, flexShrink: 0 }}><Inbox size={18} /></div>
-              <div style={{ flex: 1 }}>
-                <div className="flex items-center justify-between">
-                  <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{m.subject}</span>
-                  <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>{fdate(m.created_at)}</span>
+        {visibleRoots.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No messages yet.</span></Card>}
+        {visibleRoots.map((m) => {
+          const replies = repliesFor(m.id);
+          const isExpanded = expanded[m.id] !== false; // default expanded
+          const recipientLabel = m.recipient === "all" ? "All students" : canSend ? nameFor(m.recipient) : "You";
+          return (
+            <Card key={m.id}>
+              <div className="flex items-start gap-3">
+                <div className="inline-flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 10, background: C.paper2, color: C.gold, flexShrink: 0 }}><MessageSquare size={16} /></div>
+                <div style={{ flex: 1 }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 2 }}>
+                    <span className="pl-body" style={{ fontWeight: 700, fontSize: 15 }}>{m.subject}</span>
+                    <div className="flex items-center gap-3">
+                      {replies.length > 0 && (
+                        <button className="pl-body" style={{ background: "none", border: "none", color: C.muted, fontSize: 12, cursor: "pointer" }}
+                          onClick={() => setExpanded((e) => ({ ...e, [m.id]: !isExpanded }))}>
+                          {replies.length} {replies.length === 1 ? "reply" : "replies"} {isExpanded ? "▲" : "▼"}
+                        </button>
+                      )}
+                      <span className="pl-body" style={{ fontSize: 11.5, color: C.muted }}>{fdate(m.created_at)}</span>
+                    </div>
+                  </div>
+                  <div className="pl-body" style={{ fontSize: 12, color: C.gold, fontWeight: 600, marginBottom: 8 }}>
+                    From {m.sender_name || "Staff"} · To {recipientLabel}
+                  </div>
+                  <MessageBubble m={m} rootId={m.id} />
+                  {isExpanded && replies.map((r) => <MessageBubble key={r.id} m={r} isReply rootId={m.id} />)}
                 </div>
-                <div className="pl-body" style={{ fontSize: 12.5, color: C.gold, fontWeight: 600, marginBottom: 6 }}>From {m.sender_name} · To {m.recipient === "all" ? "All students" : nameFor(m.recipient)}</div>
-                <p className="pl-body" style={{ fontSize: 14, lineHeight: 1.55, whiteSpace: "pre-wrap", margin: 0 }}>{m.body}</p>
               </div>
-            </div>
-          </Card>
-        ))}
+            </Card>
+          );
+        })}
       </div>
     </>
   );
@@ -955,18 +1060,25 @@ function StudentPortal({ profile, onLogout }) {
   const [sessions, setSessions] = useState([]);
   const [certEnrollments, setCertEnrollments] = useState([]);
   const [tuition, setTuition] = useState([]);
+  const [forms, setForms] = useState([]);
+  const [myFormSubs, setMyFormSubs] = useState([]);
+  const [surveys, setSurveys] = useState([]);
+  const [mySurveyResps, setMySurveyResps] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen, tu] = await Promise.all([
+      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen, tu, fr, fs, sv, sr] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listMessages(),
         db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listSessions(),
         db.listCertEnrollments(), db.listTuition(),
+        db.listForms(), db.listFormSubmissions(), db.listSurveys(), db.listSurveyResponses(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setMessages(m);
       setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setSessions(se);
       setCertEnrollments(cen); setTuition(tu);
+      setForms(fr); setMyFormSubs(fs.filter((x) => x.student_id === profile.id));
+      setSurveys(sv); setMySurveyResps(sr.filter((x) => x.student_id === profile.id));
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -1015,6 +1127,8 @@ function StudentPortal({ profile, onLogout }) {
     { key: "cehours",     label: "CE Hours",    icon: Clock,           show: FEATURES.ce_hours },
     { key: "certprograms",label: "Cert Classes",icon: Award,           show: FEATURES.cert_classes },
     { key: "tuition",     label: "Tuition",     icon: Receipt,         show: FEATURES.tuition },
+    { key: "forms",       label: "Forms",       icon: FileCheck,       show: true },
+    { key: "surveys",     label: "Surveys",     icon: BarChart2,       show: true },
     { key: "inbox",       label: "Inbox",       icon: Mail,            show: FEATURES.messages },
   ].filter((n) => n.show);
 
@@ -1035,6 +1149,8 @@ function StudentPortal({ profile, onLogout }) {
           {active === "cehours" && <StudentCEHours profile={profile} courses={courses} tests={tests} subs={mySubs} certificates={certificates} />}
           {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certificates={certificates} ledger={ledger.filter((e) => e.student_id === profile.id)} refresh={refresh} />}
           {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} tuition={tuition} profile={profile} />}
+          {active === "forms" && <StudentForms forms={forms} myFormSubs={myFormSubs} profile={profile} refresh={refresh} />}
+          {active === "surveys" && <StudentSurveys surveys={surveys} mySurveyResps={mySurveyResps} profile={profile} refresh={refresh} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
         </>
       )}
@@ -1301,25 +1417,37 @@ function StudentTests({ available, books, courses, refresh }) {
   async function submit() {
     setBusy(true);
     try {
-      // Server grades objective questions, records the submission, and
-      // issues the CE certificate if the course passes its gate.
-      const res = await db.createSubmission({ test_id: taking.id, answers });
-      const course = courses.find((c) => c.id === taking.course_id);
+      const maxScore = sumPoints(taking.questions);
+      await db.createSubmission({ test_id: taking.id, answers, max_score: maxScore });
 
-      if (res && course && isCEType(course.ce_type)) {
-        if (res.has_subjective) {
-          window.alert("Your test has been submitted. Some questions need instructor review before your CE result is final.");
-        } else if (res.certificate_issued) {
-          window.alert(`You passed with ${res.pct}%! 🎉\n\nYour CE certificate has been issued.\nHours earned: ${course.ce_hours || "—"} contact hours.\nView it under CE Hours in your menu.`);
-        } else {
-          const passing = res.passing_score || Number(course.passing_score) || 75;
-          window.alert(`You scored ${res.pct}%. A passing score of ${passing}% is required to earn CE credit for this course.\n\nYour submission has been recorded.`);
+      // ── CE PASS-GATE ──────────────────────────────────────────
+      const course = courses.find((c) => c.id === taking.course_id);
+      if (course && isCEType(course.ce_type)) {
+        let autoPoints = 0;
+        for (const q of taking.questions) {
+          const a = answers[q.id];
+          if (q.type === "mc" && String(a) === String(q.correct_answer)) autoPoints += q.points;
+          if (q.type === "tf" && a === q.correct_answer) autoPoints += q.points;
         }
-      } else if (res && !res.has_subjective && res.pct != null) {
-        window.alert(`Your test has been submitted. Score: ${res.pct}%.`);
-      } else {
-        window.alert("Your test has been submitted.");
+        const pct = maxScore > 0 ? Math.round((autoPoints / maxScore) * 100) : 0;
+        const passing = Number(course.passing_score) || 75;
+        if (pct >= passing) {
+          try {
+            await db.issueCertificate({
+              title: course.title,
+              course_id: course.id,
+              note: [course.ce_hours ? `${course.ce_hours} contact hours` : "", course.approval_number || ""].filter(Boolean).join(" · "),
+              ce_hours: course.ce_hours || null,
+              approval_number: course.approval_number || null,
+              provider_name: course.provider_name || null,
+            });
+          } catch (certErr) { console.error("CE cert auto-issue:", certErr); }
+          window.alert(`You passed with ${pct}%! 🎉\n\nYour CE certificate has been issued.\nHours earned: ${course.ce_hours || "—"} contact hours.\nView it under CE Hours in your menu.`);
+        } else {
+          window.alert(`You scored ${pct}%. A passing score of ${passing}% is required to earn CE credit for this course.\n\nYour submission has been recorded.`);
+        }
       }
+      // ── END CE PASS-GATE ──────────────────────────────────────
 
       await refresh(); setTaking(null); setAnswers({});
     } catch (e) { window.alert(e.message); }
@@ -1923,11 +2051,9 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
   function start(h) { setDoing(h); setAnswers({}); setResponse(""); setFile(null); }
 
   async function submit() {
+    const maxPts = doing.questions.length ? sumPoints(doing.questions) : doing.points;
     setBusy(true);
-    try {
-      await db.submitHomework({ homework_id: doing.id, answers, response, file });
-      await refresh(); setDoing(null); setAnswers({}); setResponse(""); setFile(null);
-    }
+    try { await db.submitHomework({ homework_id: doing.id, answers, response, file, max_points: maxPts }); await refresh(); setDoing(null); setAnswers({}); setResponse(""); setFile(null); }
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
@@ -3580,6 +3706,652 @@ function StudentCEHours({ profile, courses, tests, subs, certificates }) {
         </div>
       )}
       <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 14, lineHeight: 1.5 }}>CE certificates are issued automatically when you pass a post-test with the required score. Your provider is responsible for reporting hours to the appropriate licensing board.</p>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN — FORMS MANAGER
+   ═══════════════════════════════════════════════════════════════ */
+function FormsManager({ forms, formSubs, profiles, refresh }) {
+  const [mode, setMode] = useState("list"); // "list" | "build" | "subs"
+  const [draft, setDraft] = useState(null);
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [viewForm, setViewForm] = useState(null); // form whose subs we're viewing
+
+  const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
+
+  function startNew() {
+    setDraft({ title: "", description: "", type: "upload", file_path: null, program: "all", required: true, sort_order: 0, active: true });
+    setFile(null); setMode("build");
+  }
+  function startEdit(f) {
+    setDraft({ ...f }); setFile(null); setMode("build");
+  }
+
+  async function save() {
+    if (!draft.title.trim()) { window.alert("Give the form a title."); return; }
+    setBusy(true);
+    try { await db.saveForm({ ...draft, _file: file }); await refresh(); setMode("list"); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  async function remove(id) {
+    if (!window.confirm("Delete this form?")) return;
+    try { await db.deleteForm(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  async function markStatus(subId, status) {
+    try { await db.reviewFormSubmission(subId, status); await refresh(); }
+    catch (e) { window.alert(e.message); }
+  }
+
+  const STATUS_COLOR = { submitted: C.gold, reviewed: C.navy, accepted: C.green };
+
+  if (mode === "build" && draft) {
+    return (
+      <>
+        <PageHead title={draft.id ? "Edit Form" : "New Form"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
+        <Card style={{ maxWidth: 680 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></Field>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 70 }} value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></Field>
+          <Field label="Type">
+            <select style={inputStyle} value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })}>
+              <option value="upload">Upload only — student uploads completed form</option>
+              <option value="pdf">PDF + Upload — show PDF to fill, student uploads completed</option>
+            </select>
+          </Field>
+          {draft.type === "pdf" && (
+            <Field label="PDF form (for students to view/fill)">
+              <input type="file" accept=".pdf" onChange={(e) => setFile(e.target.files?.[0])} />
+              {draft.file_path && !file && <FileLink path={draft.file_path} label="Current PDF" />}
+            </Field>
+          )}
+          <Field label="Program">
+            <select style={inputStyle} value={draft.program} onChange={(e) => setDraft({ ...draft, program: e.target.value })}>
+              <option value="all">All programs</option>
+              {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </Field>
+          <div className="flex items-center gap-4" style={{ marginTop: 8 }}>
+            <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" checked={draft.required} onChange={(e) => setDraft({ ...draft, required: e.target.checked })} />
+              Required for enrollment
+            </label>
+            <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
+              Active (visible to students)
+            </label>
+          </div>
+          <div className="flex gap-2" style={{ marginTop: 14 }}>
+            <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save form"}</Btn>
+            <Btn kind="ghost" onClick={() => setMode("list")}>Cancel</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  if (mode === "subs" && viewForm) {
+    const subs = formSubs.filter((s) => s.form_id === viewForm.id);
+    return (
+      <>
+        <PageHead title={viewForm.title + " — Submissions"} sub={`${subs.length} received`} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => { setMode("list"); setViewForm(null); }}>Back</Btn>} />
+        {subs.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No submissions yet.</span></Card>}
+        {subs.map((s) => (
+          <Card key={s.id} style={{ marginBottom: 10 }}>
+            <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <div className="pl-body" style={{ fontWeight: 600, fontSize: 15 }}>{nameOf(s.student_id)}</div>
+                <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>Submitted {fdate(s.submitted_at)}</div>
+                {s.notes && <div className="pl-body" style={{ fontSize: 13, marginTop: 4, color: C.ink }}>{s.notes}</div>}
+              </div>
+              <div className="flex items-center gap-2">
+                {s.file_path && <FileLink path={s.file_path} label="Download" />}
+                <span className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: STATUS_COLOR[s.status] || C.muted, textTransform: "uppercase" }}>{s.status}</span>
+                {s.status !== "accepted" && <Btn small icon={ThumbsUp} onClick={() => markStatus(s.id, "accepted")}>Accept</Btn>}
+                {s.status === "submitted" && <Btn small kind="ghost" onClick={() => markStatus(s.id, "reviewed")}>Mark reviewed</Btn>}
+              </div>
+            </div>
+          </Card>
+        ))}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Forms" sub="Onboarding and registration forms for students." action={<Btn icon={Plus} onClick={startNew}>New form</Btn>} />
+      <div className="flex flex-col gap-3">
+        {forms.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No forms yet. Click New form to create one.</span></Card>}
+        {forms.map((f) => {
+          const count = formSubs.filter((s) => s.form_id === f.id).length;
+          const pending = formSubs.filter((s) => s.form_id === f.id && s.status === "submitted").length;
+          return (
+            <Card key={f.id}>
+              <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{f.title}</span>
+                    {!f.active && <span className="pl-body" style={{ fontSize: 11, color: C.muted, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>Inactive</span>}
+                    {f.required && <span className="pl-body" style={{ fontSize: 11, color: C.rose, background: "#fff1f0", borderRadius: 6, padding: "2px 8px" }}>Required</span>}
+                  </div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+                    {f.type === "pdf" ? "PDF + Upload" : "Upload"} · {f.program === "all" ? "All programs" : f.program} · {count} submitted{pending > 0 ? ` · ${pending} pending review` : ""}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Btn small kind="ghost" icon={Users} onClick={() => { setViewForm(f); setMode("subs"); }}>{count} {count === 1 ? "submission" : "submissions"}</Btn>
+                  <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(f)}>Edit</Btn>
+                  <button onClick={() => remove(f.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STUDENT — FORMS PAGE
+   ═══════════════════════════════════════════════════════════════ */
+function StudentForms({ forms, myFormSubs, profile, refresh }) {
+  const [uploading, setUploading] = useState(null); // form id being submitted
+  const [file, setFile] = useState(null);
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [pdfUrl, setPdfUrl] = useState(null); // signed URL for Adobe viewer
+  const [pdfName, setPdfName] = useState("");
+
+  const visibleForms = forms.filter((f) => f.active && (f.program === "all" || f.program === profile.program));
+  const submittedIds = new Set(myFormSubs.map((s) => s.form_id));
+
+  async function openPdf(f) {
+    try {
+      const url = await db.signedUrl(f.file_path);
+      setPdfUrl(url); setPdfName(f.title);
+    } catch (e) { window.alert(e.message); }
+  }
+
+  async function submit(form_id) {
+    if (!file && !notes.trim()) { window.alert("Please attach a file or add a note before submitting."); return; }
+    setBusy(true);
+    try { await db.submitForm({ form_id, file, notes }); await refresh(); setUploading(null); setFile(null); setNotes(""); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  const STATUS_LABEL = { submitted: "Under review", reviewed: "Reviewed", accepted: "Accepted ✓" };
+  const STATUS_COLOR = { submitted: C.gold, reviewed: C.navy, accepted: C.green };
+
+  // Adobe PDF Embed viewer component (uses API key from env if available)
+  function PdfViewer({ url, name }) {
+    const containerId = "adobe-pdf-viewer";
+    useEffect(() => {
+      if (!url) return;
+      const clientId = typeof import.meta !== "undefined" && import.meta.env?.VITE_ADOBE_CLIENT_ID;
+      if (clientId && window.AdobeDC) {
+        const view = new window.AdobeDC.View({ clientId, divId: containerId });
+        view.previewFile({ content: { location: { url } }, metaData: { fileName: name + ".pdf" } }, { embedMode: "IN_LINE", showDownloadPDF: true, showPrintPDF: true });
+      }
+    }, [url, name]);
+
+    const clientId = typeof import.meta !== "undefined" && import.meta.env?.VITE_ADOBE_CLIENT_ID;
+    return (
+      <div style={{ marginBottom: 24 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+          <span className="pl-body" style={{ fontWeight: 600, color: C.ink }}>{name}</span>
+          <Btn small kind="ghost" icon={X} onClick={() => { setPdfUrl(null); setPdfName(""); }}>Close</Btn>
+        </div>
+        {clientId && window.AdobeDC ? (
+          <div id={containerId} style={{ height: 600, border: `1px solid ${C.line}`, borderRadius: 8 }} />
+        ) : (
+          <div style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: 24, textAlign: "center" }}>
+            <FileText size={32} style={{ color: C.muted, marginBottom: 8 }} />
+            <p className="pl-body" style={{ color: C.muted, marginBottom: 12 }}>Inline viewer requires an Adobe API key. Open the PDF to view and fill it, then upload your completed copy below.</p>
+            <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: C.gold, fontWeight: 600 }}>Open PDF in new tab</a>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Forms" sub="Required and onboarding forms for your program." />
+      {pdfUrl && <PdfViewer url={pdfUrl} name={pdfName} />}
+      <div className="flex flex-col gap-3">
+        {visibleForms.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No forms have been assigned to your program yet.</span></Card>}
+        {visibleForms.map((f) => {
+          const mySub = myFormSubs.find((s) => s.form_id === f.id);
+          const isOpen = uploading === f.id;
+          return (
+            <Card key={f.id}>
+              <div className="flex items-start justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div className="flex items-center gap-2">
+                    <ClipboardList size={16} style={{ color: C.gold }} />
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{f.title}</span>
+                    {f.required && <span className="pl-body" style={{ fontSize: 11, color: C.rose }}>Required</span>}
+                  </div>
+                  {f.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 4 }}>{f.description}</p>}
+                  {mySub && (
+                    <div className="pl-body" style={{ fontSize: 12.5, marginTop: 6, color: STATUS_COLOR[mySub.status] || C.muted, fontWeight: 600 }}>
+                      {STATUS_LABEL[mySub.status] || mySub.status} · Submitted {fdate(mySub.submitted_at)}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                  {f.type === "pdf" && f.file_path && (
+                    <Btn small kind="ghost" icon={FileText} onClick={() => openPdf(f)}>View / Fill PDF</Btn>
+                  )}
+                  {!mySub && (
+                    <Btn small icon={Upload} onClick={() => { setUploading(isOpen ? null : f.id); setFile(null); setNotes(""); }}>
+                      {isOpen ? "Cancel" : "Submit form"}
+                    </Btn>
+                  )}
+                  {mySub && mySub.status !== "accepted" && (
+                    <Btn small kind="ghost" icon={Upload} onClick={() => { setUploading(isOpen ? null : f.id); setFile(null); setNotes(""); }}>
+                      Resubmit
+                    </Btn>
+                  )}
+                </div>
+              </div>
+              {isOpen && (
+                <div style={{ marginTop: 14, borderTop: `1px solid ${C.line}`, paddingTop: 14 }}>
+                  <Field label="Upload completed form (PDF, DOCX, image)">
+                    <input type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onChange={(e) => setFile(e.target.files?.[0])} />
+                  </Field>
+                  <Field label="Notes (optional)">
+                    <textarea style={{ ...inputStyle, minHeight: 60 }} value={notes} placeholder="Any notes for the coordinator…" onChange={(e) => setNotes(e.target.value)} />
+                  </Field>
+                  <Btn icon={Send} kind="gold" onClick={() => submit(f.id)} disabled={busy}>{busy ? "Submitting…" : "Submit"}</Btn>
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN — SURVEY BUILDER
+   ═══════════════════════════════════════════════════════════════ */
+const SURVEY_CATEGORIES = [
+  { key: "lms",        label: "LMS System" },
+  { key: "class",      label: "Class Flow" },
+  { key: "experience", label: "Overall Experience" },
+  { key: "general",    label: "General" },
+];
+const QTYPE_SURVEY = { text: "Open text", rating: "Rating 1–5", choice: "Multiple choice", yesno: "Yes / No" };
+
+function SurveyBuilder({ surveys, surveyResps, profiles, refresh }) {
+  const [mode, setMode] = useState("list"); // "list" | "build" | "results"
+  const [draft, setDraft] = useState(null);
+  const [qs, setQs] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [viewSurvey, setViewSurvey] = useState(null);
+
+  const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
+
+  function startNew() {
+    setDraft({ title: "", description: "", category: "general", program: "all", active: true });
+    setQs([]); setMode("build");
+  }
+  function startEdit(s) {
+    setDraft({ ...s }); setQs(s.questions.map((q) => ({ ...q, options: [...(q.options || [])] }))); setMode("build");
+  }
+
+  function addQ(type) {
+    setQs([...qs, { id: "tmp" + Date.now(), type, prompt: "", options: type === "choice" ? ["", "", ""] : [] }]);
+  }
+  const upQ = (id, patch) => setQs(qs.map((q) => (q.id === id ? { ...q, ...patch } : q)));
+  const delQ = (id) => setQs(qs.filter((q) => q.id !== id));
+
+  async function save() {
+    if (!draft.title.trim()) { window.alert("Give the survey a title."); return; }
+    if (qs.length === 0) { window.alert("Add at least one question."); return; }
+    setBusy(true);
+    try { await db.saveSurvey(draft, qs); await refresh(); setMode("list"); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  async function remove(id) {
+    if (!window.confirm("Delete this survey and all responses?")) return;
+    try { await db.deleteSurvey(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  async function toggleActive(s) {
+    try { await db.saveSurvey({ ...s, active: !s.active }, s.questions); await refresh(); }
+    catch (e) { window.alert(e.message); }
+  }
+
+  if (mode === "build" && draft) {
+    return (
+      <>
+        <PageHead title={draft.id ? "Edit Survey" : "New Survey"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
+        <Card style={{ maxWidth: 720, marginBottom: 16 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></Field>
+          <Field label="Description (optional)"><textarea style={{ ...inputStyle, minHeight: 60 }} value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Category">
+              <select style={inputStyle} value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+                {SURVEY_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+            </Field>
+            <Field label="Program">
+              <select style={inputStyle} value={draft.program} onChange={(e) => setDraft({ ...draft, program: e.target.value })}>
+                <option value="all">All programs</option>
+                {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+              </select>
+            </Field>
+          </div>
+          <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+            <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
+            Active (visible to students)
+          </label>
+        </Card>
+
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>Questions</h3>
+        <div className="flex flex-col gap-3" style={{ marginBottom: 14 }}>
+          {qs.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No questions yet — add one below.</span></Card>}
+          {qs.map((q, i) => (
+            <Card key={q.id}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                <span className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase" }}>Q{i + 1} · {QTYPE_SURVEY[q.type]}</span>
+                <button onClick={() => delQ(q.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
+              </div>
+              <Field label="Question text">
+                <input style={inputStyle} value={q.prompt} onChange={(e) => upQ(q.id, { prompt: e.target.value })} placeholder="Enter your question…" />
+              </Field>
+              {q.type === "choice" && (
+                <div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginBottom: 6 }}>Options (one per line)</div>
+                  {q.options.map((opt, oi) => (
+                    <div key={oi} className="flex items-center gap-2" style={{ marginBottom: 6 }}>
+                      <input style={{ ...inputStyle, flex: 1 }} value={opt} placeholder={`Option ${oi + 1}`}
+                        onChange={(e) => { const o = [...q.options]; o[oi] = e.target.value; upQ(q.id, { options: o }); }} />
+                      <button onClick={() => { const o = q.options.filter((_, x) => x !== oi); upQ(q.id, { options: o }); }}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: C.muted }}><X size={14} /></button>
+                    </div>
+                  ))}
+                  <button className="pl-body" style={{ background: "none", border: "none", color: C.gold, cursor: "pointer", fontSize: 13 }}
+                    onClick={() => upQ(q.id, { options: [...q.options, ""] })}>+ Add option</button>
+                </div>
+              )}
+            </Card>
+          ))}
+        </div>
+        <Card style={{ marginBottom: 14 }}>
+          <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginBottom: 8 }}>Add question:</div>
+          <div className="flex gap-2" style={{ flexWrap: "wrap" }}>
+            {Object.entries(QTYPE_SURVEY).map(([type, label]) => (
+              <Btn key={type} small kind="ghost" icon={Plus} onClick={() => addQ(type)}>{label}</Btn>
+            ))}
+          </div>
+        </Card>
+        <div className="flex gap-2">
+          <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save survey"}</Btn>
+          <Btn kind="ghost" onClick={() => setMode("list")}>Cancel</Btn>
+        </div>
+      </>
+    );
+  }
+
+  if (mode === "results" && viewSurvey) {
+    const resps = surveyResps.filter((r) => r.survey_id === viewSurvey.id);
+    return (
+      <>
+        <PageHead title={viewSurvey.title + " — Results"} sub={`${resps.length} response${resps.length !== 1 ? "s" : ""}`} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => { setMode("list"); setViewSurvey(null); }}>Back</Btn>} />
+        {resps.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No responses yet.</span></Card>}
+
+        {/* Summary per question */}
+        {viewSurvey.questions.map((q, i) => {
+          const answers = resps.map((r) => r.answers?.[q.id]).filter(Boolean);
+          return (
+            <Card key={q.id} style={{ marginBottom: 14 }}>
+              <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase", marginBottom: 4 }}>Q{i + 1} · {QTYPE_SURVEY[q.type]}</div>
+              <p className="pl-body" style={{ fontWeight: 600, marginBottom: 10 }}>{q.prompt}</p>
+              {q.type === "rating" && (
+                <div>
+                  <div className="pl-body" style={{ fontSize: 22, fontWeight: 700, color: C.green }}>
+                    {answers.length ? (answers.reduce((a, v) => a + Number(v), 0) / answers.length).toFixed(1) : "—"} <span style={{ fontSize: 14, color: C.muted }}>avg / 5</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <div key={n} style={{ textAlign: "center" }}>
+                        <div className="pl-body" style={{ fontSize: 18, fontWeight: 700 }}>{answers.filter((a) => Number(a) === n).length}</div>
+                        <div className="pl-body" style={{ fontSize: 11, color: C.muted }}>{n}★</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(q.type === "choice" || q.type === "yesno") && (
+                <div className="flex flex-col gap-2">
+                  {(q.type === "yesno" ? ["Yes", "No"] : q.options).map((opt) => {
+                    const count = answers.filter((a) => a === opt).length;
+                    const pct = answers.length ? Math.round((count / answers.length) * 100) : 0;
+                    return (
+                      <div key={opt}>
+                        <div className="flex items-center justify-between" style={{ marginBottom: 2 }}>
+                          <span className="pl-body" style={{ fontSize: 13.5 }}>{opt}</span>
+                          <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{count} ({pct}%)</span>
+                        </div>
+                        <div style={{ height: 6, background: C.line, borderRadius: 3 }}>
+                          <div style={{ height: 6, background: C.gold, borderRadius: 3, width: pct + "%" }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {q.type === "text" && (
+                <div className="flex flex-col gap-2">
+                  {answers.map((a, j) => (
+                    <div key={j} style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 12px" }}>
+                      <p className="pl-body" style={{ fontSize: 13.5, margin: 0 }}>{a}</p>
+                    </div>
+                  ))}
+                  {answers.length === 0 && <span className="pl-body" style={{ color: C.muted }}>No text responses yet.</span>}
+                </div>
+              )}
+            </Card>
+          );
+        })}
+
+        {/* Individual responses */}
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "20px 0 10px" }}>Individual responses</h3>
+        {resps.map((r) => (
+          <Card key={r.id} style={{ marginBottom: 10 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+              <span className="pl-body" style={{ fontWeight: 600 }}>{nameOf(r.student_id)}</span>
+              <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>{fdate(r.submitted_at)}</span>
+            </div>
+            {viewSurvey.questions.map((q) => (
+              <div key={q.id} style={{ marginBottom: 6 }}>
+                <div className="pl-body" style={{ fontSize: 12, color: C.muted }}>{q.prompt}</div>
+                <div className="pl-body" style={{ fontSize: 13.5 }}>{r.answers?.[q.id] ?? <i style={{ color: C.muted }}>No answer</i>}</div>
+              </div>
+            ))}
+          </Card>
+        ))}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Surveys" sub="Build feedback surveys and review student responses." action={<Btn icon={Plus} onClick={startNew}>New survey</Btn>} />
+      <div className="flex flex-col gap-3">
+        {surveys.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No surveys yet. Click New survey to build one.</span></Card>}
+        {surveys.map((s) => {
+          const count = surveyResps.filter((r) => r.survey_id === s.id).length;
+          const cat = SURVEY_CATEGORIES.find((c) => c.key === s.category);
+          return (
+            <Card key={s.id}>
+              <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{s.title}</span>
+                    {!s.active && <span className="pl-body" style={{ fontSize: 11, color: C.muted, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>Inactive</span>}
+                  </div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+                    {cat?.label || s.category} · {s.questions?.length || 0} questions · {count} {count === 1 ? "response" : "responses"}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Btn small kind="ghost" icon={BarChart2} onClick={() => { setViewSurvey(s); setMode("results"); }}>Results</Btn>
+                  <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(s)}>Edit</Btn>
+                  <button title={s.active ? "Deactivate" : "Activate"} onClick={() => toggleActive(s)}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: s.active ? C.green : C.muted }}>
+                    {s.active ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
+                  </button>
+                  <button onClick={() => remove(s.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STUDENT — SURVEYS PAGE
+   ═══════════════════════════════════════════════════════════════ */
+function StudentSurveys({ surveys, mySurveyResps, profile, refresh }) {
+  const [taking, setTaking] = useState(null); // survey being filled
+  const [answers, setAnswers] = useState({});
+  const [busy, setBusy] = useState(false);
+
+  const completedIds = new Set(mySurveyResps.map((r) => r.survey_id));
+  const visible = surveys.filter((s) => s.active && (s.program === "all" || s.program === profile.program));
+  const available = visible.filter((s) => !completedIds.has(s.id));
+  const completed = visible.filter((s) => completedIds.has(s.id));
+
+  async function submit() {
+    for (const q of taking.questions) {
+      if (!answers[q.id] || String(answers[q.id]).trim() === "") {
+        window.alert("Please answer all questions before submitting."); return;
+      }
+    }
+    setBusy(true);
+    try { await db.submitSurveyResponse(taking.id, answers); await refresh(); setTaking(null); setAnswers({}); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  if (taking) {
+    return (
+      <>
+        <PageHead title={taking.title} sub={taking.description || "Please answer all questions and submit."} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => { setTaking(null); setAnswers({}); }}>Back</Btn>} />
+        {taking.questions.map((q, i) => (
+          <Card key={q.id} style={{ marginBottom: 12 }}>
+            <div className="pl-body" style={{ fontWeight: 600, fontSize: 15, marginBottom: 10 }}>
+              {i + 1}. {q.prompt}
+            </div>
+            {q.type === "text" && (
+              <textarea style={{ ...inputStyle, minHeight: 90 }} value={answers[q.id] || ""} placeholder="Your answer…" onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
+            )}
+            {q.type === "rating" && (
+              <div className="flex gap-3">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button key={n} onClick={() => setAnswers({ ...answers, [q.id]: String(n) })}
+                    style={{ width: 44, height: 44, borderRadius: 10, border: `2px solid ${answers[q.id] === String(n) ? C.gold : C.line}`, background: answers[q.id] === String(n) ? C.gold : "transparent", color: answers[q.id] === String(n) ? "#fff" : C.ink, cursor: "pointer", fontWeight: 700, fontSize: 18 }}>
+                    {n}
+                  </button>
+                ))}
+                <span className="pl-body" style={{ fontSize: 12, color: C.muted, alignSelf: "center" }}>1 = Poor · 5 = Excellent</span>
+              </div>
+            )}
+            {q.type === "yesno" && (
+              <div className="flex gap-3">
+                {["Yes", "No"].map((opt) => (
+                  <button key={opt} onClick={() => setAnswers({ ...answers, [q.id]: opt })}
+                    style={{ padding: "8px 24px", borderRadius: 8, border: `2px solid ${answers[q.id] === opt ? C.gold : C.line}`, background: answers[q.id] === opt ? C.gold : "transparent", color: answers[q.id] === opt ? "#fff" : C.ink, cursor: "pointer", fontWeight: 600, fontSize: 15 }}>
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            )}
+            {q.type === "choice" && (
+              <div className="flex flex-col gap-2">
+                {(q.options || []).map((opt) => (
+                  <button key={opt} onClick={() => setAnswers({ ...answers, [q.id]: opt })}
+                    style={{ textAlign: "left", padding: "10px 14px", borderRadius: 8, border: `2px solid ${answers[q.id] === opt ? C.gold : C.line}`, background: answers[q.id] === opt ? "#fffbf2" : "transparent", cursor: "pointer" }}>
+                    <span className="pl-body" style={{ fontSize: 14, color: answers[q.id] === opt ? C.gold : C.ink, fontWeight: answers[q.id] === opt ? 600 : 400 }}>{opt}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </Card>
+        ))}
+        <div className="flex gap-2">
+          <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : "Submit survey"}</Btn>
+          <Btn kind="ghost" onClick={() => { setTaking(null); setAnswers({}); }}>Cancel</Btn>
+        </div>
+      </>
+    );
+  }
+
+  const cat = (key) => SURVEY_CATEGORIES.find((c) => c.key === key)?.label || key;
+
+  return (
+    <>
+      <PageHead title="Surveys" sub="Share your feedback to help improve the program." />
+      {available.length > 0 && (
+        <>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>Available</h3>
+          <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
+            {available.map((s) => (
+              <Card key={s.id}>
+                <div className="flex items-start justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <MessageSquare size={16} style={{ color: C.gold }} />
+                      <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{s.title}</span>
+                    </div>
+                    <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{cat(s.category)} · {s.questions?.length || 0} questions</div>
+                    {s.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 4 }}>{s.description}</p>}
+                  </div>
+                  <Btn icon={ChevronRight} onClick={() => { setTaking(s); setAnswers({}); }}>Take survey</Btn>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+      {available.length === 0 && completed.length === 0 && (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No surveys available right now. Check back later.</span></Card>
+      )}
+      {completed.length > 0 && (
+        <>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>Completed</h3>
+          <div className="flex flex-col gap-3">
+            {completed.map((s) => {
+              const myResp = mySurveyResps.find((r) => r.survey_id === s.id);
+              return (
+                <Card key={s.id} style={{ opacity: 0.75 }}>
+                  <div className="flex items-center gap-2">
+                    <ThumbsUp size={16} style={{ color: C.green }} />
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15 }}>{s.title}</span>
+                    <span className="pl-body" style={{ fontSize: 12.5, color: C.green }}>Completed {myResp ? fdate(myResp.submitted_at) : ""}</span>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        </>
+      )}
     </>
   );
 }
