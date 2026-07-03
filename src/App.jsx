@@ -900,9 +900,15 @@ function MessagesView({ messages, students, profile, canSend, refresh }) {
     if (!form.subject.trim()) return;
     setBusy(true);
     try {
-      await db.sendMessage({ recipient: form.recipient, subject: form.subject, body: form.body, sender_name: profile.full_name });
-      const emails = form.recipient === "all" ? students.map((s) => s.email).filter(Boolean) : [students.find((s) => s.id === form.recipient)?.email].filter(Boolean);
-      if (emails.length) await db.sendEmail({ to: emails, subject: form.subject, html: `<p>${(form.body || "").replace(/\n/g, "<br/>")}</p><hr/><p style="color:#777">Sent from ${BRAND.name}</p>` });
+      if (canSend) {
+        // Admin / instructor composing to students
+        await db.sendMessage({ recipient: form.recipient, subject: form.subject, body: form.body, sender_name: profile.full_name });
+        const emails = form.recipient === "all" ? students.map((s) => s.email).filter(Boolean) : [students.find((s) => s.id === form.recipient)?.email].filter(Boolean);
+        if (emails.length) await db.sendEmail({ to: emails, subject: form.subject, html: `<p>${(form.body || "").replace(/\n/g, "<br/>")}</p><hr/><p style="color:#777">Sent from ${BRAND.name}</p>` });
+      } else {
+        // Student composing a new message to the office/admin
+        await db.sendMessage({ recipient: "office", subject: form.subject, body: form.body, sender_name: profile.full_name });
+      }
       await refresh();
       setForm({ recipient: "all", subject: "", body: "" }); setCompose(false);
     } catch (e) { window.alert(e.message); }
@@ -941,7 +947,7 @@ function MessagesView({ messages, students, profile, canSend, refresh }) {
   const repliesFor = (rootId) => messages.filter((m) => m.parent_id === rootId)
     .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
-  // For students: show threads where they are sender or recipient
+  // For students: show threads where they are sender or recipient (incl. office messages they sent)
   const visibleRoots = canSend ? roots : roots.filter((m) =>
     m.recipient === "all" || m.recipient === profile.id || m.sender_id === profile.id
   );
@@ -974,17 +980,23 @@ function MessagesView({ messages, students, profile, canSend, refresh }) {
 
   return (
     <>
-      <PageHead title={canSend ? "Messages" : "Inbox"} sub={canSend ? "Email students and post announcements." : "Messages from your instructor."} action={canSend && <Btn icon={PencilLine} onClick={() => setCompose(true)}>Compose</Btn>} />
+      <PageHead title={canSend ? "Messages" : "Inbox"} sub={canSend ? "Email students and post announcements." : "Messages from your instructor — reply or start a new message to the office."} action={<Btn icon={PencilLine} onClick={() => setCompose(true)}>{canSend ? "Compose" : "New message"}</Btn>} />
       {compose && (
         <Card style={{ marginBottom: 18 }}>
-          <Field label="To">
-            <select style={inputStyle} value={form.recipient} onChange={(e) => setForm({ ...form, recipient: e.target.value })}>
-              <option value="all">All students</option>
-              {students.map((s) => <option key={s.id} value={s.id}>{s.full_name || s.email}</option>)}
-            </select>
-          </Field>
-          <Field label="Subject"><input style={inputStyle} value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} /></Field>
-          <Field label="Message"><textarea style={{ ...inputStyle, minHeight: 110 }} value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} /></Field>
+          {canSend ? (
+            <Field label="To">
+              <select style={inputStyle} value={form.recipient} onChange={(e) => setForm({ ...form, recipient: e.target.value })}>
+                <option value="all">All students</option>
+                {students.map((s) => <option key={s.id} value={s.id}>{s.full_name || s.email}</option>)}
+              </select>
+            </Field>
+          ) : (
+            <div className="pl-body" style={{ fontSize: 12.5, color: C.gold, fontWeight: 600, marginBottom: 10 }}>
+              <MessageSquare size={13} style={{ marginRight: 4, verticalAlign: "middle" }} />New message to the school office
+            </div>
+          )}
+          <Field label="Subject"><input style={inputStyle} value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} placeholder={canSend ? "" : "What is your message about?"} /></Field>
+          <Field label="Message"><textarea style={{ ...inputStyle, minHeight: 110 }} value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} placeholder={canSend ? "" : "Type your message to the office…"} /></Field>
           <div className="flex gap-2">
             <Btn icon={Send} kind="gold" onClick={send} disabled={busy}>{busy ? "Sending…" : "Send"}</Btn>
             <Btn kind="ghost" onClick={() => setCompose(false)}>Cancel</Btn>
@@ -1010,7 +1022,7 @@ function MessagesView({ messages, students, profile, canSend, refresh }) {
         {visibleRoots.map((m) => {
           const replies = repliesFor(m.id);
           const isExpanded = expanded[m.id] !== false; // default expanded
-          const recipientLabel = m.recipient === "all" ? "All students" : canSend ? nameFor(m.recipient) : "You";
+          const recipientLabel = m.recipient === "all" ? "All students" : m.recipient === "office" ? "School Office" : canSend ? nameFor(m.recipient) : "You";
           return (
             <Card key={m.id}>
               <div className="flex items-start gap-3">
