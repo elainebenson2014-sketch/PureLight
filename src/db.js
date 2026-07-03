@@ -463,10 +463,11 @@ export async function listLedger() {
   return data;
 }
 
-export async function addLedgerEntry({ student_id, kind, description, amount, date, method }) {
+export async function addLedgerEntry({ student_id, kind, description, amount, date, method, course_id }) {
   const { data: { user } } = await supabase.auth.getUser();
   const rec = { student_id, kind, description: description || "", amount: Number(amount) || 0, method: method || "", recorded_by: user.id };
   if (date) rec.date = date;
+  if (course_id) rec.course_id = course_id;
   const { error } = await supabase.from("pl_ledger").insert(rec);
   if (error) throw error;
 }
