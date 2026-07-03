@@ -604,3 +604,140 @@ export async function startTuitionCheckout(tuition_level, bucket, plan) {
   if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
   return j.url;
 }
+
+/* ═══════════════ MESSAGE THREADING ═══════════════════════════════ */
+
+export async function replyMessage({ parent_id, subject, body, recipient, sender_name }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_messages").insert({
+    sender_id: user.id, sender_name, recipient, subject, body, parent_id,
+  });
+  if (error) throw error;
+}
+
+export async function markMessageRead(id) {
+  const { error } = await supabase.from("pl_messages")
+    .update({ read_at: new Date().toISOString() }).eq("id", id).is("read_at", null);
+  if (error) throw error;
+}
+
+/* ═══════════════ FORMS (ONBOARDING HUB) ══════════════════════════ */
+
+export async function listForms() {
+  const { data, error } = await supabase.from("pl_forms")
+    .select("*").order("sort_order").order("created_at");
+  if (error) throw error;
+  return data || [];
+}
+
+export async function saveForm(form) {
+  const { data: { user } } = await supabase.auth.getUser();
+  let file_path = form.file_path || null;
+  if (form._file) file_path = await uploadFile("forms", form._file);
+  const rec = {
+    title: form.title, description: form.description || null,
+    type: form.type || "upload", file_path,
+    program: form.program || "all", required: form.required !== false,
+    sort_order: Number(form.sort_order) || 0, active: form.active !== false,
+  };
+  if (form.id) {
+    const { error } = await supabase.from("pl_forms").update(rec).eq("id", form.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("pl_forms").insert({ ...rec, created_by: user.id });
+    if (error) throw error;
+  }
+}
+
+export async function deleteForm(id) {
+  const { error } = await supabase.from("pl_forms").delete().eq("id", id);
+  if (error) throw error;
+}
+
+export async function listFormSubmissions() {
+  const { data, error } = await supabase.from("pl_form_submissions")
+    .select("*").order("submitted_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function submitForm({ form_id, file, notes }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  let file_path = null;
+  if (file) file_path = await uploadFile("form-submissions", file);
+  const { error } = await supabase.from("pl_form_submissions").insert({
+    form_id, student_id: user.id, file_path, notes: notes || null,
+  });
+  if (error) throw error;
+}
+
+export async function reviewFormSubmission(id, status) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_form_submissions").update({
+    status, reviewed_at: new Date().toISOString(), reviewed_by: user.id,
+  }).eq("id", id);
+  if (error) throw error;
+}
+
+/* ═══════════════ SURVEYS ════════════════════════════════════════ */
+
+export async function listSurveys() {
+  const { data, error } = await supabase.from("pl_surveys")
+    .select("*, pl_survey_questions(*)")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map((s) => ({
+    ...s,
+    questions: (s.pl_survey_questions || []).sort((a, b) => a.position - b.position),
+  }));
+}
+
+export async function saveSurvey(survey, questions) {
+  const { data: { user } } = await supabase.auth.getUser();
+  let surveyId = survey.id;
+  const rec = {
+    title: survey.title, description: survey.description || null,
+    category: survey.category || "general", program: survey.program || "all",
+    active: survey.active !== false,
+  };
+  if (surveyId) {
+    const { error } = await supabase.from("pl_surveys").update(rec).eq("id", surveyId);
+    if (error) throw error;
+    await supabase.from("pl_survey_questions").delete().eq("survey_id", surveyId);
+  } else {
+    const { data, error } = await supabase.from("pl_surveys")
+      .insert({ ...rec, created_by: user.id }).select("id").single();
+    if (error) throw error;
+    surveyId = data.id;
+  }
+  if (questions && questions.length) {
+    const rows = questions.map((q, i) => ({
+      survey_id: surveyId, position: i,
+      type: q.type || "text", prompt: q.prompt,
+      options: q.options || [],
+    }));
+    const { error } = await supabase.from("pl_survey_questions").insert(rows);
+    if (error) throw error;
+  }
+  return surveyId;
+}
+
+export async function deleteSurvey(id) {
+  const { error } = await supabase.from("pl_surveys").delete().eq("id", id);
+  if (error) throw error;
+}
+
+export async function listSurveyResponses() {
+  const { data, error } = await supabase.from("pl_survey_responses")
+    .select("*").order("submitted_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function submitSurveyResponse(survey_id, answers) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_survey_responses").insert({
+    survey_id, student_id: user.id, answers,
+  });
+  if (error) throw error;
+}
