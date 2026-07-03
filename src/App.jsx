@@ -2849,8 +2849,8 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
   const certBalance = certCharged - certPaid;
   const certEs = [...certEntries].sort((a, b) => (a.date < b.date ? -1 : 1));
 
-  async function pay(c, half) {
-    try { const url = await db.startCertCheckout(c.id, half); window.location.href = url; }
+  async function pay(c, plan) {
+    try { const url = await db.startCertCheckout(c.id, plan); window.location.href = url; }
     catch (e) { window.alert(e.message); }
   }
 
@@ -2886,8 +2886,13 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
                     <span className="pl-body" style={{ fontSize: 13, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={15} /> Paid</span>
                   ) : (
                     <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
-                      {canHalf && <Btn small kind="ghost" icon={Receipt} onClick={() => pay(c, true)}>Pay half {money(halfAmt)}</Btn>}
-                      <Btn small icon={Receipt} onClick={() => pay(c, false)}>Pay {money(cRemaining)}</Btn>
+                      {weeks >= 12 && cRemaining > Math.round((fee / 4) * 100) / 100 + 0.005 && (
+                        <Btn small kind="ghost" icon={Receipt} onClick={() => pay(c, "quarter")}>Pay 1 of 4 {money(Math.min(Math.round((fee / 4) * 100) / 100, cRemaining))}</Btn>
+                      )}
+                      {weeks >= 12 && cRemaining > Math.round((fee / 2) * 100) / 100 + 0.005 && (
+                        <Btn small kind="ghost" icon={Receipt} onClick={() => pay(c, "half")}>Pay half {money(Math.min(Math.round((fee / 2) * 100) / 100, cRemaining))}</Btn>
+                      )}
+                      <Btn small icon={Receipt} onClick={() => pay(c, "full")}>Pay {money(cRemaining)}</Btn>
                     </div>
                   )}
                 </div>
