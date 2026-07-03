@@ -743,3 +743,37 @@ export async function submitSurveyResponse(survey_id, answers) {
   });
   if (error) throw error;
 }
+
+/* ═══════════════ RESOURCES (INSTRUCTIONS & POLICY MANUALS) ══════ */
+
+export async function listResources() {
+  const { data, error } = await supabase.from("pl_resources")
+    .select("*").order("sort_order").order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function saveResource(res) {
+  const { data: { user } } = await supabase.auth.getUser();
+  let file_path = res.file_path || null;
+  if (res._file) file_path = await uploadFile("homework-submissions", res._file);
+  const rec = {
+    title: res.title, description: res.description || null,
+    category: res.category || "instructions",
+    file_path, link_url: res.link_url || null,
+    program: res.program || "all",
+    sort_order: Number(res.sort_order) || 0, active: res.active !== false,
+  };
+  if (res.id) {
+    const { error } = await supabase.from("pl_resources").update(rec).eq("id", res.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("pl_resources").insert({ ...rec, created_by: user.id });
+    if (error) throw error;
+  }
+}
+
+export async function deleteResource(id) {
+  const { error } = await supabase.from("pl_resources").delete().eq("id", id);
+  if (error) throw error;
+}
