@@ -316,20 +316,21 @@ function InstructorPortal({ profile, onLogout }) {
   const [formSubs, setFormSubs] = useState([]);
   const [surveys, setSurveys] = useState([]);
   const [surveyResps, setSurveyResps] = useState([]);
+  const [resources, setResources] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen, tu, fr, fs, sv, sr] = await Promise.all([
+      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen, tu, fr, fs, sv, sr, rs] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
         db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listInstructorCourses(), db.listSessions(),
         db.listCertEnrollments(), db.listTuition(),
-        db.listForms(), db.listFormSubmissions(), db.listSurveys(), db.listSurveyResponses(),
+        db.listForms(), db.listFormSubmissions(), db.listSurveys(), db.listSurveyResponses(), db.listResources(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
       setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setAssignments(ic); setSessions(se);
       setCertEnrollments(cen); setTuition(tu);
-      setForms(fr); setFormSubs(fs); setSurveys(sv); setSurveyResps(sr);
+      setForms(fr); setFormSubs(fs); setSurveys(sv); setSurveyResps(sr); setResources(rs);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -360,6 +361,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "cehours",     label: "CE Hours",     icon: Clock,           show: FEATURES.ce_hours },
     { key: "forms",       label: "Forms",        icon: FileCheck,       show: true },
     { key: "surveys",     label: "Surveys",      icon: BarChart2,       show: true },
+    { key: "resources",   label: "Resources",    icon: BookOpen,        show: true },
     { key: "messages",    label: "Messages",     icon: Mail,            show: FEATURES.messages },
   ].filter((n) => n.show);
   // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
@@ -398,6 +400,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "cehours" && profile.role === "admin" && <CEHoursDashboard students={students} courses={courses} subs={subs} tests={tests} certificates={certificates} refresh={refresh} />}
           {active === "forms" && <FormsManager forms={forms} formSubs={formSubs} profiles={profiles} refresh={refresh} />}
           {active === "surveys" && <SurveyBuilder surveys={surveys} surveyResps={surveyResps} profiles={profiles} refresh={refresh} />}
+          {active === "resources" && <ResourcesManager resources={resources} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
         </>
       )}
@@ -1076,21 +1079,23 @@ function StudentPortal({ profile, onLogout }) {
   const [myFormSubs, setMyFormSubs] = useState([]);
   const [surveys, setSurveys] = useState([]);
   const [mySurveyResps, setMySurveyResps] = useState([]);
+  const [resources, setResources] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen, tu, fr, fs, sv, sr] = await Promise.all([
+      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen, tu, fr, fs, sv, sr, rs] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listMessages(),
         db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listSessions(),
         db.listCertEnrollments(), db.listTuition(),
-        db.listForms(), db.listFormSubmissions(), db.listSurveys(), db.listSurveyResponses(),
+        db.listForms(), db.listFormSubmissions(), db.listSurveys(), db.listSurveyResponses(), db.listResources(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setMessages(m);
       setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setSessions(se);
       setCertEnrollments(cen); setTuition(tu);
       setForms(fr); setMyFormSubs(fs.filter((x) => x.student_id === profile.id));
       setSurveys(sv); setMySurveyResps(sr.filter((x) => x.student_id === profile.id));
+      setResources(rs);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -1141,6 +1146,7 @@ function StudentPortal({ profile, onLogout }) {
     { key: "tuition",     label: "Tuition",     icon: Receipt,         show: FEATURES.tuition },
     { key: "forms",       label: "Forms",       icon: FileCheck,       show: true },
     { key: "surveys",     label: "Surveys",     icon: BarChart2,       show: true },
+    { key: "resources",   label: "Resources",   icon: BookOpen,        show: true },
     { key: "inbox",       label: "Inbox",       icon: Mail,            show: FEATURES.messages },
   ].filter((n) => n.show);
 
@@ -1163,6 +1169,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} tuition={tuition} profile={profile} />}
           {active === "forms" && <StudentForms forms={forms} myFormSubs={myFormSubs} profile={profile} refresh={refresh} />}
           {active === "surveys" && <StudentSurveys surveys={surveys} mySurveyResps={mySurveyResps} profile={profile} refresh={refresh} />}
+          {active === "resources" && <StudentResources resources={resources} profile={profile} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
         </>
       )}
@@ -4385,6 +4392,154 @@ function StudentSurveys({ surveys, mySurveyResps, profile, refresh }) {
           </div>
         </>
       )}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN — RESOURCES MANAGER (instructions & policy manuals)
+   ═══════════════════════════════════════════════════════════════ */
+const RESOURCE_CATEGORIES = [
+  { key: "instructions", label: "Instructions & Guides" },
+  { key: "policy",       label: "Policy Manuals" },
+  { key: "handbook",     label: "Handbooks" },
+  { key: "other",        label: "Other" },
+];
+
+function ResourcesManager({ resources, refresh }) {
+  const [draft, setDraft] = useState(null);
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  function startNew() {
+    setDraft({ title: "", description: "", category: "instructions", file_path: null, link_url: "", program: "all", sort_order: 0, active: true });
+    setFile(null);
+  }
+  function startEdit(r) { setDraft({ ...r }); setFile(null); }
+
+  async function save() {
+    if (!draft.title.trim()) { window.alert("Give the resource a title."); return; }
+    if (!file && !draft.file_path && !draft.link_url) { window.alert("Attach a file or add a link."); return; }
+    setBusy(true);
+    try { await db.saveResource({ ...draft, _file: file }); await refresh(); setDraft(null); setFile(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this resource?")) return;
+    try { await db.deleteResource(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  if (draft) {
+    return (
+      <>
+        <PageHead title={draft.id ? "Edit Resource" : "New Resource"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setDraft(null)}>Back</Btn>} />
+        <Card style={{ maxWidth: 680 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Student Handbook 2026" /></Field>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 70 }} value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What is this document about?" /></Field>
+          <Field label="Category">
+            <select style={inputStyle} value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+              {RESOURCE_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </Field>
+          <Field label="Upload a document (PDF, DOCX)">
+            <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setFile(e.target.files?.[0])} />
+            {draft.file_path && !file && <FileLink path={draft.file_path} label="Current file" />}
+          </Field>
+          <Field label="…or link to an external document (optional)">
+            <input style={inputStyle} value={draft.link_url || ""} onChange={(e) => setDraft({ ...draft, link_url: e.target.value })} placeholder="https://…" />
+          </Field>
+          <Field label="Program">
+            <select style={inputStyle} value={draft.program} onChange={(e) => setDraft({ ...draft, program: e.target.value })}>
+              <option value="all">All programs</option>
+              {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </Field>
+          <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+            <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
+            Active (visible to students)
+          </label>
+          <div className="flex gap-2" style={{ marginTop: 14 }}>
+            <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save resource"}</Btn>
+            <Btn kind="ghost" onClick={() => setDraft(null)}>Cancel</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  const byCat = RESOURCE_CATEGORIES.map((c) => ({ ...c, items: resources.filter((r) => r.category === c.key) })).filter((c) => c.items.length);
+
+  return (
+    <>
+      <PageHead title="Resources" sub="Instruction guides and policy manuals for students." action={<Btn icon={Plus} onClick={startNew}>New resource</Btn>} />
+      {resources.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No resources yet. Click New resource to post an instruction guide or policy manual.</span></Card>}
+      {byCat.map((cat) => (
+        <div key={cat.key} style={{ marginBottom: 22 }}>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>{cat.label}</h3>
+          <div className="flex flex-col gap-3">
+            {cat.items.map((r) => (
+              <Card key={r.id}>
+                <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{r.title}</span>
+                      {!r.active && <span className="pl-body" style={{ fontSize: 11, color: C.muted, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>Inactive</span>}
+                    </div>
+                    {r.description && <p className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{r.description}</p>}
+                    <div className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{r.program === "all" ? "All programs" : programLabel(r.program)}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {r.file_path && <FileLink path={r.file_path} label="View" />}
+                    {r.link_url && <Btn small kind="ghost" icon={ExternalLink} onClick={() => window.open(r.link_url, "_blank")}>Open link</Btn>}
+                    <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(r)}>Edit</Btn>
+                    <button onClick={() => remove(r.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STUDENT — RESOURCES PAGE (read / download only)
+   ═══════════════════════════════════════════════════════════════ */
+function StudentResources({ resources, profile }) {
+  const visible = resources.filter((r) => r.active && (r.program === "all" || r.program === profile.program));
+  const byCat = RESOURCE_CATEGORIES.map((c) => ({ ...c, items: visible.filter((r) => r.category === c.key) })).filter((c) => c.items.length);
+
+  return (
+    <>
+      <PageHead title="Resources" sub="Instruction guides, handbooks, and policy manuals. View or download anytime." />
+      {visible.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No resources have been posted yet. Check back soon.</span></Card>}
+      {byCat.map((cat) => (
+        <div key={cat.key} style={{ marginBottom: 22 }}>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>{cat.label}</h3>
+          <div className="flex flex-col gap-3">
+            {cat.items.map((r) => (
+              <Card key={r.id}>
+                <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                  <div className="flex items-start gap-3" style={{ flex: 1 }}>
+                    <div className="inline-flex items-center justify-center" style={{ width: 38, height: 38, borderRadius: 10, background: C.paper2, color: C.gold, flexShrink: 0 }}><BookOpen size={18} /></div>
+                    <div>
+                      <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{r.title}</span>
+                      {r.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 2, lineHeight: 1.5 }}>{r.description}</p>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {r.file_path && <FileLink path={r.file_path} label="View / Download" />}
+                    {r.link_url && <Btn small kind="ghost" icon={ExternalLink} onClick={() => window.open(r.link_url, "_blank")}>Open</Btn>}
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      ))}
     </>
   );
 }
