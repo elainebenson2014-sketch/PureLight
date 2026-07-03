@@ -553,13 +553,14 @@ export async function unenrollCertClass(id) {
   if (error) throw error;
 }
 
-/* Start a Stripe Checkout for a certificate class fee; returns the URL to redirect to. */
-export async function startCertCheckout(course_id, half) {
+/* Start a Stripe Checkout for a certificate class fee; returns the URL to redirect to.
+   plan = "full" | "half" | "quarter"  — only half and quarter apply to 12-week classes. */
+export async function startCertCheckout(course_id, plan) {
   const { data: { user } } = await supabase.auth.getUser();
   const r = await fetch("/api/create-checkout-session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ course_id, half: !!half, student_id: user.id, student_email: user.email, origin: window.location.origin }),
+    body: JSON.stringify({ course_id, plan: plan || "full", student_id: user.id, student_email: user.email, origin: window.location.origin }),
   });
   const j = await r.json();
   if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
@@ -633,7 +634,7 @@ export async function listForms() {
 export async function saveForm(form) {
   const { data: { user } } = await supabase.auth.getUser();
   let file_path = form.file_path || null;
-  if (form._file) file_path = await uploadFile("forms", form._file);
+  if (form._file) file_path = await uploadFile("homework-submissions", form._file);
   const rec = {
     title: form.title, description: form.description || null,
     type: form.type || "upload", file_path,
@@ -664,7 +665,7 @@ export async function listFormSubmissions() {
 export async function submitForm({ form_id, file, notes }) {
   const { data: { user } } = await supabase.auth.getUser();
   let file_path = null;
-  if (file) file_path = await uploadFile("form-submissions", file);
+  if (file) file_path = await uploadFile("homework-submissions", file);
   const { error } = await supabase.from("pl_form_submissions").insert({
     form_id, student_id: user.id, file_path, notes: notes || null,
   });
