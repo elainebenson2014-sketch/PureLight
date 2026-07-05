@@ -1767,6 +1767,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
   const [csvNote, setCsvNote] = useState(null);
+  const [progFilter, setProgFilter] = useState("all");
   const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
   const titleOf = (id) => homework.find((h) => h.id === id)?.title || "Homework";
 
@@ -1997,25 +1998,45 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
         <input type="file" accept=".csv,text/csv" onChange={(e) => importCsv(e.target.files?.[0])} className="pl-body" style={{ fontSize: 13 }} />
         {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
       </Card>
-      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Assignments</h3>
-      <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
-        {homework.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No assignments yet.</span></Card>}
-        {homework.map((h) => (
-          <Card key={h.id}>
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
-                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(h.program)} · {h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""} · {hwSubs.filter((s) => s.homework_id === h.id).length} submitted</div>
-              </div>
-              <div className="flex items-center gap-2">
-                {h.file_path && <FileLink path={h.file_path} label="Attachment" />}
-                <Btn small kind="ghost" icon={PencilLine} onClick={() => editHw(h)}>Edit</Btn>
-                <button onClick={() => removeHw(h.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
-              </div>
-            </div>
-          </Card>
-        ))}
+      <div className="flex items-center justify-between" style={{ marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+        <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, margin: 0 }}>Assignments</h3>
+        <select style={{ ...inputStyle, maxWidth: 220 }} value={progFilter} onChange={(e) => setProgFilter(e.target.value)}>
+          <option value="all">All programs</option>
+          {PROGRAMS.filter((p) => p.key !== "all").map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        </select>
       </div>
+      {homework.length === 0 && <Card style={{ marginBottom: 24 }}><span className="pl-body" style={{ color: C.muted }}>No assignments yet.</span></Card>}
+      {(() => {
+        // Group assignments by program, in the PROGRAMS order, then render each group with a heading.
+        const visible = progFilter === "all" ? homework : homework.filter((h) => (h.program || "all") === progFilter);
+        const order = ["all", ...PROGRAMS.filter((p) => p.key !== "all").map((p) => p.key)];
+        const groups = order
+          .map((key) => ({ key, label: key === "all" ? "All programs" : programLabel(key), items: visible.filter((h) => (h.program || "all") === key).sort((a, b) => a.title.localeCompare(b.title)) }))
+          .filter((g) => g.items.length);
+        if (visible.length === 0) return <Card style={{ marginBottom: 24 }}><span className="pl-body" style={{ color: C.muted }}>No assignments for this program.</span></Card>;
+        return groups.map((g) => (
+          <div key={g.key} style={{ marginBottom: 22 }}>
+            <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>{g.label} · {g.items.length}</div>
+            <div className="flex flex-col gap-3">
+              {g.items.map((h) => (
+                <Card key={h.id}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
+                      <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(h.program)} · {h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""} · {hwSubs.filter((s) => s.homework_id === h.id).length} submitted</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {h.file_path && <FileLink path={h.file_path} label="Attachment" />}
+                      <Btn small kind="ghost" icon={PencilLine} onClick={() => editHw(h)}>Edit</Btn>
+                      <button onClick={() => removeHw(h.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </div>
+        ));
+      })()}
 
       <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Awaiting grading</h3>
       <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
