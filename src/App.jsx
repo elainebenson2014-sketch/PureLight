@@ -321,17 +321,18 @@ function InstructorPortal({ profile, onLogout }) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
+    const safe = (p) => p.then((v) => v).catch((e) => { console.error(e); return undefined; });
     try {
       const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen, tu, fr, fs, sv, sr, rs, an] = await Promise.all([
-        db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listInstructorCourses(), db.listSessions(),
-        db.listCertEnrollments(), db.listTuition(),
-        db.listForms(), db.listFormSubmissions(), db.listSurveys(), db.listSurveyResponses(), db.listResources(), db.listAnnouncements(),
+        safe(db.listBooks()), safe(db.listTests()), safe(db.listSubmissions()), safe(db.listProfiles()), safe(db.listMessages()),
+        safe(db.listSyllabi()), safe(db.listHomework()), safe(db.listHomeworkSubmissions()), safe(db.listCourses()), safe(db.listAttendance()), safe(db.listCertificates()), safe(db.listLedger()), safe(db.listInstructorCourses()), safe(db.listSessions()),
+        safe(db.listCertEnrollments()), safe(db.listTuition()),
+        safe(db.listForms()), safe(db.listFormSubmissions()), safe(db.listSurveys()), safe(db.listSurveyResponses()), safe(db.listResources()), safe(db.listAnnouncements()),
       ]);
-      setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setAssignments(ic); setSessions(se);
-      setCertEnrollments(cen); setTuition(tu);
-      setForms(fr); setFormSubs(fs); setSurveys(sv); setSurveyResps(sr); setResources(rs); setAnnouncements(an);
+      if (b) setBooks(b); if (t) setTests(t); if (s) setSubs(s); if (p) setProfiles(p); if (m) setMessages(m);
+      if (sy) setSyllabi(sy); if (hw) setHomework(hw); if (hs) setHwSubs(hs); if (co) setCourses(co); if (at) setAttendance(at); if (ce) setCertificates(ce); if (lg) setLedger(lg); if (ic) setAssignments(ic); if (se) setSessions(se);
+      if (cen) setCertEnrollments(cen); if (tu) setTuition(tu);
+      if (fr) setForms(fr); if (fs) setFormSubs(fs); if (sv) setSurveys(sv); if (sr) setSurveyResps(sr); if (rs) setResources(rs); if (an) setAnnouncements(an);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -1087,19 +1088,20 @@ function StudentPortal({ profile, onLogout }) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
+    const safe = (p) => p.then((v) => v).catch((e) => { console.error(e); return undefined; });
     try {
       const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen, tu, fr, fs, sv, sr, rs, an] = await Promise.all([
-        db.listBooks(), db.listTests(), db.listSubmissions(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listSessions(),
-        db.listCertEnrollments(), db.listTuition(),
-        db.listForms(), db.listFormSubmissions(), db.listSurveys(), db.listSurveyResponses(), db.listResources(), db.listAnnouncements(),
+        safe(db.listBooks()), safe(db.listTests()), safe(db.listSubmissions()), safe(db.listMessages()),
+        safe(db.listSyllabi()), safe(db.listHomework()), safe(db.listHomeworkSubmissions()), safe(db.listCourses()), safe(db.listAttendance()), safe(db.listCertificates()), safe(db.listLedger()), safe(db.listSessions()),
+        safe(db.listCertEnrollments()), safe(db.listTuition()),
+        safe(db.listForms()), safe(db.listFormSubmissions()), safe(db.listSurveys()), safe(db.listSurveyResponses()), safe(db.listResources()), safe(db.listAnnouncements()),
       ]);
-      setBooks(b); setTests(t); setSubs(s); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setSessions(se);
-      setCertEnrollments(cen); setTuition(tu);
-      setForms(fr); setMyFormSubs(fs.filter((x) => x.student_id === profile.id));
-      setSurveys(sv); setMySurveyResps(sr.filter((x) => x.student_id === profile.id));
-      setResources(rs); setAnnouncements(an);
+      if (b) setBooks(b); if (t) setTests(t); if (s) setSubs(s); if (m) setMessages(m);
+      if (sy) setSyllabi(sy); if (hw) setHomework(hw); if (hs) setHwSubs(hs); if (co) setCourses(co); if (at) setAttendance(at); if (ce) setCertificates(ce); if (lg) setLedger(lg); if (se) setSessions(se);
+      if (cen) setCertEnrollments(cen); if (tu) setTuition(tu);
+      if (fr) setForms(fr); if (fs) setMyFormSubs(fs.filter((x) => x.student_id === profile.id));
+      if (sv) setSurveys(sv); if (sr) setMySurveyResps(sr.filter((x) => x.student_id === profile.id));
+      if (rs) setResources(rs); if (an) setAnnouncements(an);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -3470,8 +3472,14 @@ function StudentTuition({ ledger, tuition, profile }) {
 
 /* ---------- GRADE REPORT (instructor) ---------- */
 function Gradebook({ students, subs, tests, hwSubs, homework, courses }) {
-  const withCode = (courses || []).slice().sort((a, b) => (a.code || a.title || "").localeCompare(b.code || b.title || ""));
-  const [courseId, setCourseId] = useState(withCode[0]?.id || "");
+  const [progFilter, setProgFilter] = useState("all");
+  const filteredCourses = (courses || []).filter((c) => progFilter === "all" || (c.program || "all") === progFilter);
+  const withCode = filteredCourses.slice().sort((a, b) => (a.code || a.title || "").localeCompare(b.code || b.title || ""));
+  const [courseId, setCourseId] = useState("");
+  // If the current course isn't in the filtered list, clear the selection.
+  useEffect(() => {
+    if (courseId && !filteredCourses.some((c) => c.id === courseId)) setCourseId("");
+  }, [progFilter]); // eslint-disable-line
   const course = courses.find((c) => c.id === courseId);
 
   const cols = course ? [
@@ -3516,12 +3524,19 @@ function Gradebook({ students, subs, tests, hwSubs, homework, courses }) {
     <>
       <PageHead title="Gradebook" sub="Every grade for a course on one screen." action={course && cols.length > 0 ? <Btn icon={ExternalLink} onClick={exportCsv}>Export CSV</Btn> : null} />
       <Card style={{ marginBottom: 18, maxWidth: 520 }}>
+        <Field label="Program">
+          <select style={inputStyle} value={progFilter} onChange={(e) => setProgFilter(e.target.value)}>
+            <option value="all">All programs</option>
+            {PROGRAMS.filter((p) => p.key !== "all").map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+        </Field>
         <Field label="Course">
           <select style={inputStyle} value={courseId} onChange={(e) => setCourseId(e.target.value)}>
             <option value="">— Choose a course —</option>
             {withCode.map((c) => <option key={c.id} value={c.id}>{c.code ? `${c.code} — ` : ""}{c.title}</option>)}
           </select>
         </Field>
+        <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{withCode.length} course{withCode.length === 1 ? "" : "s"}{progFilter !== "all" ? ` in ${programLabel(progFilter)}` : ""}</div>
       </Card>
 
       {!course ? (
