@@ -2162,23 +2162,73 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
   const [response, setResponse] = useState("");
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [savedNote, setSavedNote] = useState(false);
   const titleOf = (id) => homework.find((h) => h.id === id)?.title || "Homework";
 
-  function start(h) { setDoing(h); setAnswers({}); setResponse(""); setFile(null); }
+  const draftKey = (id) => `pl_hw_draft_${id}`;
+
+  function loadDraft(id) {
+    try {
+      const raw = window.localStorage.getItem(draftKey(id));
+      if (raw) return JSON.parse(raw);
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  function start(h) {
+    const draft = loadDraft(h.id);
+    setDoing(h);
+    setAnswers(draft?.answers || {});
+    setResponse(draft?.response || "");
+    setFile(null); // files can't be restored from a draft; student re-attaches if needed
+  }
+
+  // Auto-save the draft whenever answers or response change (while an assignment is open)
+  useEffect(() => {
+    if (!doing) return;
+    try {
+      window.localStorage.setItem(draftKey(doing.id), JSON.stringify({ answers, response, savedAt: Date.now() }));
+      setSavedNote(true);
+      const t = setTimeout(() => setSavedNote(false), 1500);
+      return () => clearTimeout(t);
+    } catch (e) { /* storage may be full/blocked; submitting still works */ }
+  }, [answers, response, doing]);
+
+  function clearDraft(id) {
+    try { window.localStorage.removeItem(draftKey(id)); } catch (e) { /* ignore */ }
+  }
 
   async function submit() {
     const maxPts = doing.questions.length ? sumPoints(doing.questions) : doing.points;
     setBusy(true);
-    try { await db.submitHomework({ homework_id: doing.id, answers, response, file, max_points: maxPts }); await refresh(); setDoing(null); setAnswers({}); setResponse(""); setFile(null); }
+    try {
+      await db.submitHomework({ homework_id: doing.id, answers, response, file, max_points: maxPts });
+      clearDraft(doing.id);
+      await refresh();
+      setDoing(null); setAnswers({}); setResponse(""); setFile(null);
+    }
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
 
+  function saveAndExit() {
+    // Draft is already auto-saved; just confirm and leave.
+    try { window.localStorage.setItem(draftKey(doing.id), JSON.stringify({ answers, response, savedAt: Date.now() })); } catch (e) { /* ignore */ }
+    setDoing(null); setAnswers({}); setResponse(""); setFile(null);
+  }
+
   if (doing) {
     const qs = doing.questions || [];
+    const hasDraftProgress = Object.keys(answers).length > 0 || response.trim().length > 0;
     return (
       <>
-        <PageHead title={doing.title} sub={doing.due_date ? `Due ${fdate(doing.due_date)}` : ""} action={<Btn kind="ghost" icon={X} onClick={() => setDoing(null)}>Exit</Btn>} />
+        <PageHead title={doing.title} sub={doing.due_date ? `Due ${fdate(doing.due_date)}` : ""} action={<div className="flex items-center gap-2">{savedNote && <span className="pl-body" style={{ fontSize: 12.5, color: C.green, fontWeight: 600 }}><Check size={13} style={{ verticalAlign: "middle", marginRight: 3 }} />Draft saved</span>}<Btn kind="ghost" icon={X} onClick={saveAndExit}>Save & exit</Btn></div>} />
+        <Card style={{ marginBottom: 12, background: "#fffaf0", border: `1px solid ${C.gold}` }}>
+          <div className="pl-body" style={{ fontSize: 13, color: C.ink }}>
+            <Sparkles size={13} style={{ color: C.gold, verticalAlign: "middle", marginRight: 4 }} />
+            Your answers save automatically as you type. You can leave and come back anytime — just click <b>Start</b> on this assignment again to pick up where you left off. Your work is saved on this device.
+          </div>
+        </Card>
         <Card style={{ marginBottom: 12 }}>
           <p className="pl-body" style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: "pre-wrap", margin: 0 }}>{doing.instructions}</p>
           {doing.file_path && <div style={{ marginTop: 10 }}><FileLink path={doing.file_path} label="Open attachment" /></div>}
@@ -2211,7 +2261,10 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
               <input type="file" style={{ display: "none" }} onChange={(e) => setFile(e.target.files[0])} />
             </label>
           </Field>
-          <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : "Submit homework"}</Btn>
+          <div className="flex items-center gap-2">
+            <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : "Submit homework"}</Btn>
+            <Btn kind="ghost" icon={Clock} onClick={saveAndExit}>Save & finish later</Btn>
+          </div>
         </Card>
       </>
     );
@@ -2226,17 +2279,24 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
         <Grouped items={availableHw} courses={courses}>
           {(items) => (
             <div className="flex flex-col gap-3">
-              {items.map((h) => (
+              {items.map((h) => {
+                let hasDraft = false;
+                try { hasDraft = !!window.localStorage.getItem(`pl_hw_draft_${h.id}`); } catch (e) { /* ignore */ }
+                return (
                 <Card key={h.id}>
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
+                      <div className="flex items-center gap-2">
+                        <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
+                        {hasDraft && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: "#fffaf0", border: `1px solid ${C.gold}`, borderRadius: 6, padding: "2px 8px" }}>In progress</span>}
+                      </div>
                       <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""}</div>
                     </div>
-                    <Btn icon={PencilLine} onClick={() => start(h)}>Start</Btn>
+                    <Btn icon={hasDraft ? Clock : PencilLine} onClick={() => start(h)}>{hasDraft ? "Resume" : "Start"}</Btn>
                   </div>
                 </Card>
-              ))}
+                );
+              })}
             </div>
           )}
         </Grouped>
