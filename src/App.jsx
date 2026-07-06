@@ -317,20 +317,21 @@ function InstructorPortal({ profile, onLogout }) {
   const [surveys, setSurveys] = useState([]);
   const [surveyResps, setSurveyResps] = useState([]);
   const [resources, setResources] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen, tu, fr, fs, sv, sr, rs] = await Promise.all([
+      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen, tu, fr, fs, sv, sr, rs, an] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
         db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listInstructorCourses(), db.listSessions(),
         db.listCertEnrollments(), db.listTuition(),
-        db.listForms(), db.listFormSubmissions(), db.listSurveys(), db.listSurveyResponses(), db.listResources(),
+        db.listForms(), db.listFormSubmissions(), db.listSurveys(), db.listSurveyResponses(), db.listResources(), db.listAnnouncements(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
       setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setAssignments(ic); setSessions(se);
       setCertEnrollments(cen); setTuition(tu);
-      setForms(fr); setFormSubs(fs); setSurveys(sv); setSurveyResps(sr); setResources(rs);
+      setForms(fr); setFormSubs(fs); setSurveys(sv); setSurveyResps(sr); setResources(rs); setAnnouncements(an);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -362,6 +363,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "forms",       label: "Forms",        icon: FileCheck,       show: true },
     { key: "surveys",     label: "Surveys",      icon: BarChart2,       show: true },
     { key: "resources",   label: "Resources",    icon: BookOpen,        show: true },
+    { key: "announce",    label: "Announcements",icon: Sparkles,        show: true },
     { key: "messages",    label: "Messages",     icon: Mail,            show: FEATURES.messages },
   ].filter((n) => n.show);
   // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
@@ -401,6 +403,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "forms" && <FormsManager forms={forms} formSubs={formSubs} profiles={profiles} refresh={refresh} />}
           {active === "surveys" && <SurveyBuilder surveys={surveys} surveyResps={surveyResps} profiles={profiles} refresh={refresh} />}
           {active === "resources" && <ResourcesManager resources={resources} refresh={refresh} />}
+          {active === "announce" && <AnnouncementsManager announcements={announcements} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
         </>
       )}
@@ -1080,22 +1083,23 @@ function StudentPortal({ profile, onLogout }) {
   const [surveys, setSurveys] = useState([]);
   const [mySurveyResps, setMySurveyResps] = useState([]);
   const [resources, setResources] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
-      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen, tu, fr, fs, sv, sr, rs] = await Promise.all([
+      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen, tu, fr, fs, sv, sr, rs, an] = await Promise.all([
         db.listBooks(), db.listTests(), db.listSubmissions(), db.listMessages(),
         db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listSessions(),
         db.listCertEnrollments(), db.listTuition(),
-        db.listForms(), db.listFormSubmissions(), db.listSurveys(), db.listSurveyResponses(), db.listResources(),
+        db.listForms(), db.listFormSubmissions(), db.listSurveys(), db.listSurveyResponses(), db.listResources(), db.listAnnouncements(),
       ]);
       setBooks(b); setTests(t); setSubs(s); setMessages(m);
       setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setSessions(se);
       setCertEnrollments(cen); setTuition(tu);
       setForms(fr); setMyFormSubs(fs.filter((x) => x.student_id === profile.id));
       setSurveys(sv); setMySurveyResps(sr.filter((x) => x.student_id === profile.id));
-      setResources(rs);
+      setResources(rs); setAnnouncements(an);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -1154,11 +1158,11 @@ function StudentPortal({ profile, onLogout }) {
     <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ tests: available.length, homework: availableHw.length }}>
       {loading ? <Spinner /> : (
         <>
-          {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, tests, attendance, setActive }} />}
+          {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, tests, attendance, announcements, setActive }} />}
           {active === "courses" && <StudentCourses courses={courses} profile={profile} />}
           {active === "schedule" && <StudentSchedule sessions={sessions} homework={visHw} tests={visTests} courses={courses} profile={profile} />}
           {active === "library" && <StudentLibrary books={visBooks} courses={courses} />}
-          {active === "syllabus" && <StudentSyllabus syllabi={syllabi} />}
+          {active === "syllabus" && <StudentSyllabus syllabi={syllabi} profile={profile} />}
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} refresh={refresh} />}
           {active === "grades" && <StudentGrades mySubs={mySubs} tests={degTests} myHwSubs={myHwSubs} homework={degHw} courses={courses} profile={profile} />}
@@ -1177,14 +1181,29 @@ function StudentPortal({ profile, onLogout }) {
   );
 }
 
-function StudentDash({ profile, books, available, mySubs, tests, attendance, setActive }) {
+function StudentDash({ profile, books, available, mySubs, tests, attendance, announcements, setActive }) {
   const graded = mySubs.filter((s) => s.status === "graded" && s.max_score);
   const avg = graded.length ? Math.round(graded.reduce((a, s) => a + (s.score / s.max_score) * 100, 0) / graded.length) : null;
   const att = attendance || [];
   const attPct = att.length ? Math.round((att.filter((a) => a.status !== "absent").length / att.length) * 100) : null;
+  const myAnnounce = (announcements || []).filter((a) => a.active && (a.program === "all" || a.program === profile.program));
   return (
     <>
       <PageHead title={`Welcome, ${(profile.full_name || "Student").split(" ")[0]}`} sub="Your studies at a glance." />
+      {myAnnounce.length > 0 && (
+        <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
+          {myAnnounce.map((a) => (
+            <div key={a.id} style={{ background: "#fffaf0", border: `1px solid ${C.gold}`, borderLeft: `4px solid ${C.gold}`, borderRadius: 10, padding: "14px 18px" }}>
+              <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+                <Sparkles size={16} style={{ color: C.gold }} />
+                <span className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink }}>{a.title}</span>
+              </div>
+              <p className="pl-body" style={{ fontSize: 14, color: C.ink, margin: 0, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{a.body}</p>
+              <div className="pl-body" style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>{fdate(a.created_at)}</div>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="grid grid-cols-4 gap-4" style={{ marginBottom: 24 }}>
         <Stat icon={BookOpen} label="Lessons available" value={books.length} />
         <Stat icon={FileText} label="Tests to take" value={available.length} tone={C.gold} />
@@ -1680,74 +1699,129 @@ function FileLink({ path, label = "Open file" }) {
 
 /* ---------- SYLLABUS (instructor) ---------- */
 function SyllabusManager({ syllabi, refresh }) {
+  const [editing, setEditing] = useState(null); // syllabus object or {new:true}
+
+  function startNew() { setEditing({ program: "all", title: "", content: "", term: "" }); }
+
+  async function remove(id) {
+    if (!window.confirm("Delete this syllabus?")) return;
+    try { await db.deleteSyllabus(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  if (editing) {
+    return <SyllabusEditor entry={editing} onDone={() => setEditing(null)} refresh={refresh} />;
+  }
+
   return (
     <>
-      <PageHead title="Syllabus" sub="Post your Fall and Spring syllabus for students." />
-      <div className="grid grid-cols-2 gap-4">
-        <TermEditor term="fall" label="Fall Term" data={syllabi.find((s) => s.term === "fall")} refresh={refresh} />
-        <TermEditor term="spring" label="Spring Term" data={syllabi.find((s) => s.term === "spring")} refresh={refresh} />
+      <PageHead title="Syllabus" sub="Post a syllabus for each program. Students see the one matching their program." action={<Btn icon={Plus} onClick={startNew}>New syllabus</Btn>} />
+      <div className="flex flex-col gap-3">
+        {(!syllabi || syllabi.length === 0) && <Card><span className="pl-body" style={{ color: C.muted }}>No syllabus posted yet. Click New syllabus to add one for a program.</span></Card>}
+        {(syllabi || []).map((s) => (
+          <Card key={s.id}>
+            <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+              <div className="flex items-center gap-2" style={{ flex: 1 }}>
+                <ScrollText size={18} color={C.gold} />
+                <div>
+                  <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{s.title || `${programLabel(s.program)} Syllabus`}</div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.gold, fontWeight: 600 }}>{s.program === "all" ? "All programs" : programLabel(s.program)}{s.term ? ` · ${s.term}` : ""}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {s.file_path && <FileLink path={s.file_path} label="PDF" />}
+                <Btn small kind="ghost" icon={PencilLine} onClick={() => setEditing(s)}>Edit</Btn>
+                <button onClick={() => remove(s.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+              </div>
+            </div>
+          </Card>
+        ))}
       </div>
     </>
   );
 }
 
-function TermEditor({ term, label, data, refresh }) {
-  const [title, setTitle] = useState(data?.title || "");
-  const [content, setContent] = useState(data?.content || "");
+function SyllabusEditor({ entry, onDone, refresh }) {
+  const [program, setProgram] = useState(entry.program || "all");
+  const [title, setTitle] = useState(entry.title || "");
+  const [content, setContent] = useState(entry.content || "");
+  const [term, setTerm] = useState(entry.term || "");
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
-  useEffect(() => { setTitle(data?.title || ""); setContent(data?.content || ""); }, [data]);
 
   async function save() {
-    setBusy(true); setSaved(false);
-    try { await db.saveSyllabus({ term, title, content, file }); await refresh(); setFile(null); setSaved(true); }
-    catch (e) { window.alert(e.message); }
+    setBusy(true);
+    try {
+      await db.saveSyllabus({ id: entry.id, program, term, title, content, file });
+      await refresh();
+      onDone();
+    } catch (e) { window.alert(e.message); }
     setBusy(false);
   }
 
   return (
-    <Card>
-      <div className="flex items-center gap-2" style={{ marginBottom: 12 }}>
-        <ScrollText size={18} color={C.gold} />
-        <h3 className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.ink, margin: 0 }}>{label}</h3>
-      </div>
-      <Field label="Title"><input style={inputStyle} value={title} onChange={(e) => setTitle(e.target.value)} placeholder={`${label} Syllabus`} /></Field>
-      <Field label="Syllabus text"><textarea style={{ ...inputStyle, minHeight: 160 }} value={content} onChange={(e) => setContent(e.target.value)} placeholder="Course outline, schedule, expectations, grading policy…" /></Field>
-      <Field label="Attach PDF (optional)">
-        <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
-          <Upload size={16} color={C.muted} />
-          <span className="pl-body" style={{ fontSize: 14, color: file ? C.text : C.muted }}>{file ? file.name : (data?.file_path ? "Replace current PDF…" : "Choose a file…")}</span>
-          <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => setFile(e.target.files[0])} />
-        </label>
-      </Field>
-      <div className="flex items-center gap-2">
-        <Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Btn>
-        {data?.file_path && <FileLink path={data.file_path} label="View PDF" />}
-        {saved && <span className="pl-body" style={{ color: C.green, fontSize: 13 }}>Saved</span>}
-      </div>
-    </Card>
+    <>
+      <PageHead title={entry.id ? "Edit Syllabus" : "New Syllabus"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={onDone}>Back</Btn>} />
+      <Card style={{ maxWidth: 720 }}>
+        <div className="flex items-center gap-2" style={{ marginBottom: 12 }}>
+          <ScrollText size={18} color={C.gold} />
+          <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>Syllabus details</h3>
+        </div>
+        <Field label="Program">
+          <select style={inputStyle} value={program} onChange={(e) => setProgram(e.target.value)}>
+            <option value="all">All programs</option>
+            {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Term (optional)">
+          <select style={inputStyle} value={term} onChange={(e) => setTerm(e.target.value)}>
+            <option value="">No specific term</option>
+            <option value="fall">Fall</option>
+            <option value="spring">Spring</option>
+            <option value="summer">Summer</option>
+          </select>
+        </Field>
+        <Field label="Title"><input style={inputStyle} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Fully Known — Certificate Syllabus" /></Field>
+        <Field label="Syllabus text"><textarea style={{ ...inputStyle, minHeight: 180 }} value={content} onChange={(e) => setContent(e.target.value)} placeholder="Course outline, schedule, expectations, grading policy…" /></Field>
+        <Field label="Attach PDF (optional)">
+          <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
+            <Upload size={16} color={C.muted} />
+            <span className="pl-body" style={{ fontSize: 14, color: file ? C.text : C.muted }}>{file ? file.name : (entry?.file_path ? "Replace current PDF…" : "Choose a file…")}</span>
+            <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => setFile(e.target.files[0])} />
+          </label>
+        </Field>
+        <div className="flex items-center gap-2">
+          <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save syllabus"}</Btn>
+          {entry?.file_path && <FileLink path={entry.file_path} label="View current PDF" />}
+          <Btn kind="ghost" onClick={onDone}>Cancel</Btn>
+        </div>
+      </Card>
+    </>
   );
 }
 
 /* ---------- SYLLABUS (student) ---------- */
-function StudentSyllabus({ syllabi }) {
-  const items = ["fall", "spring"].map((t) => syllabi.find((s) => s.term === t)).filter(Boolean);
+function StudentSyllabus({ syllabi, profile }) {
+  // Show syllabi for the student's program, plus any marked "all programs".
+  const prog = profile?.program;
+  const items = (syllabi || []).filter((s) => s.program === "all" || s.program === prog);
   return (
     <>
-      <PageHead title="Syllabus" sub="Course outlines for the year." />
-      {items.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No syllabus posted yet.</span></Card> :
+      <PageHead title="Syllabus" sub="Course outline for your program." />
+      {items.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No syllabus posted for your program yet.</span></Card> :
         <div className="flex flex-col gap-4">
           {items.map((s) => (
-            <Card key={s.term}>
+            <Card key={s.id}>
               <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
                 <div className="flex items-center gap-2">
                   <ScrollText size={18} color={C.gold} />
-                  <h3 className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.ink, margin: 0, textTransform: "capitalize" }}>{s.title || `${s.term} Syllabus`}</h3>
+                  <div>
+                    <h3 className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.ink, margin: 0 }}>{s.title || `${programLabel(s.program)} Syllabus`}</h3>
+                    {s.program !== "all" && <div className="pl-body" style={{ fontSize: 12, color: C.gold, fontWeight: 600 }}>{programLabel(s.program)}{s.term ? ` · ${s.term}` : ""}</div>}
+                  </div>
                 </div>
                 {s.file_path && <FileLink path={s.file_path} label="Download PDF" />}
               </div>
-              <p className="pl-body" style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: "pre-wrap", margin: 0 }}>{s.content}</p>
+              {s.content && <p className="pl-body" style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: "pre-wrap", margin: 0 }}>{s.content}</p>}
             </Card>
           ))}
         </div>}
@@ -4561,6 +4635,90 @@ function StudentResources({ resources, profile }) {
           </div>
         </div>
       ))}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN — ANNOUNCEMENTS MANAGER
+   ═══════════════════════════════════════════════════════════════ */
+function AnnouncementsManager({ announcements, refresh }) {
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  function startNew() { setDraft({ title: "", body: "", program: "all", active: true }); }
+  function startEdit(a) { setDraft({ ...a }); }
+
+  async function save() {
+    if (!draft.title.trim() || !draft.body.trim()) { window.alert("Add a title and message."); return; }
+    setBusy(true);
+    try { await db.saveAnnouncement(draft); await refresh(); setDraft(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this announcement?")) return;
+    try { await db.deleteAnnouncement(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function toggle(a) {
+    try { await db.saveAnnouncement({ ...a, active: !a.active }); await refresh(); }
+    catch (e) { window.alert(e.message); }
+  }
+
+  if (draft) {
+    return (
+      <>
+        <PageHead title={draft.id ? "Edit Announcement" : "New Announcement"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setDraft(null)}>Back</Btn>} />
+        <Card style={{ maxWidth: 640 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Class canceled this Thursday" /></Field>
+          <Field label="Message"><textarea style={{ ...inputStyle, minHeight: 120 }} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} placeholder="Write your announcement…" /></Field>
+          <Field label="Who sees this?">
+            <select style={inputStyle} value={draft.program} onChange={(e) => setDraft({ ...draft, program: e.target.value })}>
+              <option value="all">All students</option>
+              {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label} students only</option>)}
+            </select>
+          </Field>
+          <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+            <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
+            Active (showing on dashboards now)
+          </label>
+          <div className="flex gap-2" style={{ marginTop: 14 }}>
+            <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Post announcement"}</Btn>
+            <Btn kind="ghost" onClick={() => setDraft(null)}>Cancel</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Announcements" sub="Posted to the top of student dashboards." action={<Btn icon={Plus} onClick={startNew}>New announcement</Btn>} />
+      <div className="flex flex-col gap-3">
+        {announcements.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No announcements yet. Click New announcement to post one to student dashboards.</span></Card>}
+        {announcements.map((a) => (
+          <Card key={a.id} style={{ borderLeft: a.active ? `4px solid ${C.gold}` : `4px solid ${C.line}` }}>
+            <div className="flex items-start justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+              <div style={{ flex: 1 }}>
+                <div className="flex items-center gap-2">
+                  <span className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink }}>{a.title}</span>
+                  {!a.active && <span className="pl-body" style={{ fontSize: 11, color: C.muted, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>Hidden</span>}
+                  <span className="pl-body" style={{ fontSize: 11, color: C.gold, fontWeight: 600 }}>{a.program === "all" ? "All students" : programLabel(a.program)}</span>
+                </div>
+                <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 4, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{a.body}</p>
+                <div className="pl-body" style={{ fontSize: 11.5, color: C.muted, marginTop: 4 }}>{fdate(a.created_at)}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button title={a.active ? "Hide" : "Show"} onClick={() => toggle(a)} style={{ background: "none", border: "none", cursor: "pointer", color: a.active ? C.green : C.muted }}>
+                  {a.active ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
+                </button>
+                <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(a)}>Edit</Btn>
+                <button onClick={() => remove(a.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
     </>
   );
 }
