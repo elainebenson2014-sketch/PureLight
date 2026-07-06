@@ -186,16 +186,27 @@ export async function sendEmail({ to, bcc, subject, html }) {
 
 /* ---------------- SYLLABI ---------------- */
 export async function listSyllabi() {
-  const { data, error } = await supabase.from("pl_syllabi").select("*");
+  const { data, error } = await supabase.from("pl_syllabi").select("*").order("program");
   if (error) throw error;
   return data;
 }
 
-export async function saveSyllabus({ term, title, content, file }) {
+export async function saveSyllabus({ id, program, term, title, content, file }) {
   const { data: { user } } = await supabase.auth.getUser();
-  const patch = { term, title, content, created_by: user.id, updated_at: new Date().toISOString() };
+  const patch = { program: program || "all", term: term || null, title, content, created_by: user.id, updated_at: new Date().toISOString() };
   if (file) patch.file_path = await uploadFile("syllabi", file);
-  const { error } = await supabase.from("pl_syllabi").upsert(patch, { onConflict: "term" });
+  if (id) {
+    const { error } = await supabase.from("pl_syllabi").update(patch).eq("id", id);
+    if (error) throw error;
+  } else {
+    // Upsert on (program, term) so re-saving the same program updates in place
+    const { error } = await supabase.from("pl_syllabi").upsert(patch, { onConflict: "program,term" });
+    if (error) throw error;
+  }
+}
+
+export async function deleteSyllabus(id) {
+  const { error } = await supabase.from("pl_syllabi").delete().eq("id", id);
   if (error) throw error;
 }
 
@@ -775,5 +786,31 @@ export async function saveResource(res) {
 
 export async function deleteResource(id) {
   const { error } = await supabase.from("pl_resources").delete().eq("id", id);
+  if (error) throw error;
+}
+
+/* ═══════════════ ANNOUNCEMENTS (dashboard notices) ══════════════ */
+
+export async function listAnnouncements() {
+  const { data, error } = await supabase.from("pl_announcements")
+    .select("*").order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function saveAnnouncement(a) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const rec = { title: a.title, body: a.body, program: a.program || "all", active: a.active !== false };
+  if (a.id) {
+    const { error } = await supabase.from("pl_announcements").update(rec).eq("id", a.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("pl_announcements").insert({ ...rec, created_by: user.id });
+    if (error) throw error;
+  }
+}
+
+export async function deleteAnnouncement(id) {
+  const { error } = await supabase.from("pl_announcements").delete().eq("id", id);
   if (error) throw error;
 }
