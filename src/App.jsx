@@ -14,9 +14,9 @@ import {
 const sumPoints = (questions) => (questions || []).reduce((a, q) => a + (Number(q.points) || 0), 0);
 const money = (n) => "$" + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Program-aware document masthead. Both names always appear, but the primary
-// (large) name flips: NCTS Pure Light leads for DEGREE programs; The Healed
-// Place leads for the CERTIFICATE program. Degree docs show no "Fully Known" tagline.
+// Program-aware document masthead. For the CERTIFICATE program, both names
+// appear with The Healed Place leading and the Fully Known tagline. For DEGREE
+// programs, only NCTS Pure Light School of Ministry appears (no Healed Place, no tagline).
 function docMastheadHtml(program) {
   const isCert = program === "certificate" || /cert/i.test(String(program || ""));
   if (isCert) {
@@ -27,7 +27,6 @@ function docMastheadHtml(program) {
     </div>`;
   }
   return `<div class="mast">
-    <div class="school">THE HEALED PLACE</div>
     <div class="brand">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
   </div>`;
 }
@@ -3228,6 +3227,8 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
     const stmtMonth = now.toLocaleString(undefined, { month: "long", year: "numeric" });
     const stmtNo = `STM-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}-${String(student.id).slice(0, 4).toUpperCase()}`;
     const progLabel = student.program ? programLabel(student.program) : "—";
+    const stmtIsCert = student.program === "certificate" || /cert/i.test(String(student.program || ""));
+    const schoolName = stmtIsCert ? "The Healed Place" : "NCTS Pure Light School of Ministry";
     let running = 0;
     const rows = es.map((e) => {
       const isCharge = e.kind === "charge";
@@ -3283,7 +3284,7 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
   <table class="meta">
     <tr><td class="lbl">Statement</td><td>${stmtNo}</td><td class="lbl">Date</td><td>${fdate(now.toISOString())}</td></tr>
     <tr><td class="lbl">Student</td><td>${nameOf(student.id).replace(/</g, "&lt;")}</td><td class="lbl">Program</td><td>${progLabel}</td></tr>
-    <tr><td class="lbl">Email</td><td>${(student.email || "—").replace(/</g, "&lt;")}</td><td class="lbl">School</td><td>The Healed Place</td></tr>
+    <tr><td class="lbl">Email</td><td>${(student.email || "—").replace(/</g, "&lt;")}</td><td class="lbl">School</td><td>${schoolName}</td></tr>
   </table>
   <table class="ledger">
     <thead><tr><th>Date</th><th>Description</th><th class="r">Charges</th><th class="r">Payments</th><th class="r">Balance</th></tr></thead>
@@ -3402,7 +3403,7 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
   <div class="sub">Document No. ${invNo} &bull; Issued ${fdate(now.toISOString())}</div>
   <table class="meta">
     <tr><td class="lbl">Student</td><td>${nameOf(student.id).replace(/</g, "&lt;")}</td><td class="lbl">Program</td><td>${progLabel}</td></tr>
-    <tr><td class="lbl">Email</td><td>${(student.email || "—").replace(/</g, "&lt;")}</td><td class="lbl">School</td><td>The Healed Place</td></tr>
+    <tr><td class="lbl">Email</td><td>${(student.email || "—").replace(/</g, "&lt;")}</td><td class="lbl">School</td><td>${isCert ? "The Healed Place" : "NCTS Pure Light School of Ministry"}</td></tr>
   </table>
   <table class="bill">
     <thead><tr><th>Billing Summary</th><th class="r">Charged</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
