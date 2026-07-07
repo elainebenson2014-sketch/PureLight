@@ -383,6 +383,11 @@ export async function setStudentProgram(id, program) {
   }
 }
 
+export async function setStudentStatus(id, status) {
+  const { error } = await supabase.from("pl_profiles").update({ status: status || "active" }).eq("id", id);
+  if (error) throw error;
+}
+
 /* ---------------- COURSES ---------------- */
 export async function listCourses() {
   const { data, error } = await supabase.from("pl_courses").select("*").order("created_at", { ascending: true });
