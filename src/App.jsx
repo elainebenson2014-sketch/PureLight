@@ -396,7 +396,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
-          {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} courses={courses} refresh={refresh} />}
+          {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} courses={courses} tuition={tuition} refresh={refresh} />}
           {active === "tuition" && profile.role === "admin" && <TuitionManager tuition={tuition} refresh={refresh} />}
           {active === "certificates" && profile.role === "admin" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
           {active === "certprograms" && profile.role === "admin" && <CertClassesManager courses={courses} students={students} profiles={profiles} tests={tests} homework={homework} subs={subs} hwSubs={hwSubs} certificates={certificates} enrollments={certEnrollments} ledger={ledger} refresh={refresh} />}
@@ -3184,7 +3184,7 @@ function parseCSV(text) {
 }
 
 /* ---------- BILLING (instructor) ---------- */
-function BillingManager({ students, ledger, courses, refresh }) {
+function BillingManager({ students, ledger, courses, tuition, refresh }) {
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
   const [csvNote, setCsvNote] = useState(null);
@@ -3293,6 +3293,7 @@ function BillingManager({ students, ledger, courses, refresh }) {
   }
 
   // Build a printable INVOICE (request for payment) for one student.
+  // Installment options divide only the TUITION portion (not registration/books).
   function makeInvoiceHtml(student, amountDue) {
     const t = totals(student.id);
     const now = new Date();
@@ -3300,11 +3301,26 @@ function BillingManager({ students, ledger, courses, refresh }) {
     const progLabel = student.program ? programLabel(student.program) : "—";
     const isCert = student.program === "certificate" || /cert/i.test(progLabel);
     const due = Number(amountDue) || 0;
-    // Payment options: certificate uses full/half/quarter; degree uses full/half/4/7.
+
+    // Find this student's tuition portion (total − registration − books) for their level.
+    let tuitionPortion = due; // fallback for cert / unknown levels
+    if (!isCert && student.program) {
+      const lvl = (tuition || []).find((x) => x.program === student.program);
+      if (lvl) {
+        const total = Number(lvl.amount) || 0, reg = Number(lvl.registration) || 0, bk = Number(lvl.books) || 0;
+        tuitionPortion = Math.max(0, Math.round((total - reg - bk) * 100) / 100);
+      }
+    }
+
+    // Certificate: installments on the amount due. Degree: installments on tuition portion.
+    const splitBase = isCert ? due : tuitionPortion;
     const options = isCert
-      ? [["Pay in Full", due], ["Pay Half", due / 2], ["Pay 1 of 4", due / 4]]
-      : [["Pay in Full", due], ["Pay Half", due / 2], ["Pay 1 of 4", due / 4], ["Pay 1 of 7", due / 7]];
+      ? [["Pay in Full", due], ["Pay Half", splitBase / 2], ["Pay 1 of 4", splitBase / 4]]
+      : [["Pay in Full", due], ["Pay Half (tuition)", splitBase / 2], ["Pay 1 of 4 (tuition)", splitBase / 4], ["Pay 1 of 7 (tuition)", splitBase / 7]];
     const optRows = options.map(([label, amt]) => `<tr><td>${label}</td><td class="r">${money(Math.round(amt * 100) / 100)}</td></tr>`).join("");
+    const noteLine = isCert
+      ? "Certificate tuition may be paid in full, half, or in four installments."
+      : "Registration and Books are paid separately. Only the tuition portion may be split into half, four, or seven installments.";
 
     return `<!doctype html><html><head><meta charset="utf-8"><title>Invoice — ${nameOf(student.id)}</title>
 <style>
@@ -3326,7 +3342,7 @@ function BillingManager({ students, ledger, courses, refresh }) {
   table.bill th.r, table.bill td.r { text-align: right; }
   table.bill td { padding: 9px 10px; border-bottom: 1px solid #eee; }
   .due { background: #1B3A6B; color: #fff; text-align: center; padding: 12px; font-size: 17px; font-weight: bold; font-family: Arial, sans-serif; letter-spacing: 1px; margin: 16px 0; border-radius: 4px; }
-  .opts { width: 320px; margin-left: auto; border-collapse: collapse; font-size: 13px; border: 1px solid #ddd; }
+  .opts { width: 340px; margin-left: auto; border-collapse: collapse; font-size: 13px; border: 1px solid #ddd; }
   .opts caption { text-align: left; font-family: Arial, sans-serif; font-weight: bold; color: #1B3A6B; font-size: 12px; padding: 6px 0; }
   .opts td { padding: 7px 12px; border-bottom: 1px solid #eee; }
   .opts .r { text-align: right; font-weight: bold; }
@@ -3359,7 +3375,7 @@ function BillingManager({ students, ledger, courses, refresh }) {
   </table>
   <div class="due">AMOUNT DUE: ${money(due)}</div>
   <table class="opts"><caption>Payment Options</caption><tbody>${optRows}</tbody></table>
-  <div class="pay"><b>How to pay:</b> Pay online through your student portal (${isCert ? "Cert Classes" : "Tuition"} tab), or contact the office to arrange payment. Thank you!</div>
+  <div class="pay"><b>How to pay:</b> Pay online through your student portal (${isCert ? "Cert Classes" : "Tuition"} tab), or contact the office to arrange payment. ${noteLine} Thank you!</div>
   <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
 </body></html>`;
   }
