@@ -1227,7 +1227,7 @@ function StudentPortal({ profile, onLogout }) {
     <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ tests: available.length, homework: availableHw.length }}>
       {loading ? <Spinner /> : (
         <>
-          {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, tests, attendance, announcements, setActive }} />}
+          {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, myHwSubs, homework, tests, attendance, announcements, setActive }} />}
           {active === "courses" && <StudentCourses courses={courses} profile={profile} />}
           {active === "schedule" && <StudentSchedule sessions={sessions} homework={visHw} tests={visTests} courses={courses} profile={profile} />}
           {active === "library" && <StudentLibrary books={visBooks} courses={courses} />}
@@ -1250,15 +1250,28 @@ function StudentPortal({ profile, onLogout }) {
   );
 }
 
-function StudentDash({ profile, books, available, mySubs, tests, attendance, announcements, setActive }) {
+function StudentDash({ profile, books, available, mySubs, myHwSubs, homework, tests, attendance, announcements, setActive }) {
   const graded = mySubs.filter((s) => s.status === "graded" && s.max_score);
   const avg = graded.length ? Math.round(graded.reduce((a, s) => a + (s.score / s.max_score) * 100, 0) / graded.length) : null;
   const att = attendance || [];
   const attPct = att.length ? Math.round((att.filter((a) => a.status !== "absent").length / att.length) * 100) : null;
   const myAnnounce = (announcements || []).filter((a) => a.active && (a.program === "all" || a.program === profile.program));
+  const returnedHw = (myHwSubs || []).filter((s) => s.status === "returned");
+  const hwTitle = (id) => (homework || []).find((h) => h.id === id)?.title || "an assignment";
   return (
     <>
       <PageHead title={`Welcome, ${(profile.full_name || "Student").split(" ")[0]}`} sub="Your studies at a glance." />
+      {returnedHw.length > 0 && (
+        <div style={{ background: "#fef6f6", border: `1px solid ${C.rose}`, borderLeft: `4px solid ${C.rose}`, borderRadius: 10, padding: "14px 18px", marginBottom: 16, cursor: "pointer" }} onClick={() => setActive("homework")}>
+          <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+            <RotateCcw size={16} style={{ color: C.rose }} />
+            <span className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink }}>{returnedHw.length === 1 ? "Homework returned for revision" : `${returnedHw.length} assignments returned for revision`}</span>
+          </div>
+          <p className="pl-body" style={{ fontSize: 14, color: C.ink, margin: 0, lineHeight: 1.55 }}>
+            Your instructor sent {returnedHw.length === 1 ? <b>{hwTitle(returnedHw[0].homework_id)}</b> : "some work"} back with notes. Tap here to open your Homework and resubmit.
+          </p>
+        </div>
+      )}
       {myAnnounce.length > 0 && (
         <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
           {myAnnounce.map((a) => (
@@ -2396,17 +2409,20 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
               {items.map((h) => {
                 let hasDraft = false;
                 try { hasDraft = !!window.localStorage.getItem(`pl_hw_draft_${h.id}`); } catch (e) { /* ignore */ }
+                const returned = myHwSubs.find((s) => s.homework_id === h.id && s.status === "returned");
                 return (
-                <Card key={h.id}>
+                <Card key={h.id} style={returned ? { border: `1px solid ${C.rose}`, borderLeft: `4px solid ${C.rose}` } : undefined}>
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
                         <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
-                        {hasDraft && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: "#fffaf0", border: `1px solid ${C.gold}`, borderRadius: 6, padding: "2px 8px" }}>In progress</span>}
+                        {returned && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.rose, background: "#fef6f6", border: `1px solid ${C.rose}`, borderRadius: 6, padding: "2px 8px" }}><RotateCcw size={11} style={{ verticalAlign: "middle", marginRight: 3 }} />Returned — needs revision</span>}
+                        {!returned && hasDraft && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: "#fffaf0", border: `1px solid ${C.gold}`, borderRadius: 6, padding: "2px 8px" }}>In progress</span>}
                       </div>
+                      {returned && returned.feedback && <div className="pl-body" style={{ fontSize: 13, color: C.rose, marginTop: 4, lineHeight: 1.5 }}><b>Instructor note:</b> {returned.feedback}</div>}
                       <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""}</div>
                     </div>
-                    <Btn icon={hasDraft ? Clock : PencilLine} onClick={() => start(h)}>{hasDraft ? "Resume" : "Start"}</Btn>
+                    <Btn icon={returned ? RotateCcw : (hasDraft ? Clock : PencilLine)} kind={returned ? "gold" : undefined} onClick={() => start(h)}>{returned ? "Revise & resubmit" : (hasDraft ? "Resume" : "Start")}</Btn>
                   </div>
                 </Card>
                 );
