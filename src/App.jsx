@@ -3202,6 +3202,112 @@ function BillingManager({ students, ledger, courses, refresh }) {
   };
   const nameOf = (id) => students.find((s) => s.id === id)?.full_name || "Student";
 
+  // Build a printable monthly statement (HTML) for one student and open it.
+  function makeStatementHtml(student) {
+    const es = entriesFor(student.id).slice().sort((a, b) => String(a.date || a.created_at || "").localeCompare(String(b.date || b.created_at || "")));
+    const t = totals(student.id);
+    const now = new Date();
+    const stmtMonth = now.toLocaleString(undefined, { month: "long", year: "numeric" });
+    const stmtNo = `STM-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}-${String(student.id).slice(0, 4).toUpperCase()}`;
+    const progLabel = student.program ? programLabel(student.program) : "—";
+    let running = 0;
+    const rows = es.map((e) => {
+      const isCharge = e.kind === "charge";
+      const amt = Number(e.amount) || 0;
+      running += isCharge ? amt : -amt;
+      return `<tr>
+        <td>${fdate(e.date || e.created_at) || ""}</td>
+        <td>${(e.description || (isCharge ? "Charge" : "Payment")).replace(/</g, "&lt;")}${e.method ? ` <span class="method">(${e.method})</span>` : ""}</td>
+        <td class="r">${isCharge ? money(amt) : ""}</td>
+        <td class="r">${!isCharge ? money(amt) : ""}</td>
+        <td class="r">${money(running)}</td>
+      </tr>`;
+    }).join("");
+
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Statement — ${nameOf(student.id)}</title>
+<style>
+  @page { margin: 0.75in; }
+  * { box-sizing: border-box; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: #1a1a1a; margin: 0; padding: 32px; }
+  .mast { text-align: center; margin-bottom: 8px; }
+  .mast .school { color: #C5922E; font-family: Arial, sans-serif; font-weight: bold; font-size: 11px; letter-spacing: 2px; }
+  .mast .brand { color: #1B3A6B; font-size: 26px; font-weight: bold; margin: 2px 0; }
+  .mast .tag { color: #1B3A6B; font-style: italic; font-size: 12px; }
+  .rule { border: 0; border-top: 2px solid #1B3A6B; margin: 12px 0; }
+  h1 { text-align: center; font-size: 22px; letter-spacing: 1px; margin: 10px 0 2px; }
+  .sub { text-align: center; color: #C5922E; font-style: italic; font-size: 12px; margin-bottom: 18px; }
+  .meta { width: 100%; border-collapse: collapse; background: #F5F0E8; border: 1px solid #ddd; margin-bottom: 18px; }
+  .meta td { padding: 7px 12px; font-size: 12.5px; vertical-align: top; }
+  .meta .lbl { color: #1B3A6B; font-family: Arial, sans-serif; font-weight: bold; width: 90px; }
+  table.ledger { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 12.5px; }
+  table.ledger th { background: #1B3A6B; color: #fff; font-family: Arial, sans-serif; font-size: 11px; text-align: left; padding: 8px 10px; }
+  table.ledger th.r, table.ledger td.r { text-align: right; }
+  table.ledger td { padding: 8px 10px; border-bottom: 1px solid #eee; }
+  table.ledger tr:nth-child(even) td { background: #FBF8F2; }
+  .method { color: #888; font-size: 11px; }
+  .totals { width: 300px; margin-left: auto; border-collapse: collapse; font-size: 13px; }
+  .totals td { padding: 6px 12px; }
+  .totals .lbl { color: #1B3A6B; font-family: Arial, sans-serif; font-weight: bold; text-align: right; }
+  .totals .val { text-align: right; }
+  .totals .bal td { border-top: 2px solid #1B3A6B; font-weight: bold; font-size: 15px; }
+  .bal .val { color: ${t.balance > 0 ? "#B23A3A" : "#2E7D32"}; }
+  .pay { margin-top: 20px; background: #F5F0E8; border-left: 4px solid #C5922E; padding: 12px 16px; font-size: 12.5px; }
+  .foot { text-align: center; color: #666; font-size: 11px; margin-top: 26px; border-top: 1px solid #ccc; padding-top: 8px; }
+  @media print { .noprint { display: none; } body { padding: 0; } }
+</style></head><body>
+  <div class="noprint" style="text-align:center;margin-bottom:16px;">
+    <button onclick="window.print()" style="background:#1B3A6B;color:#fff;border:0;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save as PDF</button>
+  </div>
+  <div class="mast">
+    <div class="school">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
+    <div class="brand">THE HEALED PLACE</div>
+    <div class="tag">Fully Known — Identity, Healing, and Deliverance</div>
+  </div>
+  <hr class="rule"/>
+  <h1>MONTHLY STATEMENT</h1>
+  <div class="sub">Statement for ${stmtMonth}</div>
+  <table class="meta">
+    <tr><td class="lbl">Statement</td><td>${stmtNo}</td><td class="lbl">Date</td><td>${fdate(now.toISOString())}</td></tr>
+    <tr><td class="lbl">Student</td><td>${nameOf(student.id).replace(/</g, "&lt;")}</td><td class="lbl">Program</td><td>${progLabel}</td></tr>
+    <tr><td class="lbl">Email</td><td>${(student.email || "—").replace(/</g, "&lt;")}</td><td class="lbl">School</td><td>The Healed Place</td></tr>
+  </table>
+  <table class="ledger">
+    <thead><tr><th>Date</th><th>Description</th><th class="r">Charges</th><th class="r">Payments</th><th class="r">Balance</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="5" style="text-align:center;color:#888;padding:20px;">No charges or payments on record.</td></tr>`}</tbody>
+  </table>
+  <table class="totals">
+    <tr><td class="lbl">Total Charged</td><td class="val">${money(t.charged)}</td></tr>
+    <tr><td class="lbl">Total Paid</td><td class="val">${money(t.paid)}</td></tr>
+    <tr class="bal"><td class="lbl">Balance Due</td><td class="val">${money(t.balance)}</td></tr>
+  </table>
+  ${t.balance > 0 ? `<div class="pay"><b>Payment options:</b> Pay in full (${money(t.balance)}), or contact the office to arrange installments. Pay online through your student portal under Cert Classes, or by another method arranged with the office.</div>` : `<div class="pay">Your account is paid in full. Thank you!</div>`}
+  <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
+</body></html>`;
+  }
+
+  function openStatement(student) {
+    const w = window.open("", "_blank");
+    if (!w) { window.alert("Please allow pop-ups to view the statement."); return; }
+    w.document.write(makeStatementHtml(student));
+    w.document.close();
+  }
+
+  function printAllStatements(list) {
+    const withActivity = list.filter((s) => entriesFor(s.id).length > 0);
+    if (withActivity.length === 0) { window.alert("No students have billing activity yet."); return; }
+    const w = window.open("", "_blank");
+    if (!w) { window.alert("Please allow pop-ups to print all statements."); return; }
+    const pages = withActivity.map((s) => makeStatementHtml(s)
+      .replace(/^[\s\S]*?<body>/, "").replace(/<\/body>[\s\S]*$/, "")
+      .replace(/<div class="noprint"[\s\S]*?<\/div>\s*/, "")
+    ).join('<div style="page-break-after:always;"></div>');
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Monthly Statements</title>
+<style>@page{margin:0.75in;} body{font-family:Georgia,serif;color:#1a1a1a;padding:32px;} .mast{text-align:center;margin-bottom:8px;} .mast .school{color:#C5922E;font-family:Arial,sans-serif;font-weight:bold;font-size:11px;letter-spacing:2px;} .mast .brand{color:#1B3A6B;font-size:26px;font-weight:bold;margin:2px 0;} .mast .tag{color:#1B3A6B;font-style:italic;font-size:12px;} .rule{border:0;border-top:2px solid #1B3A6B;margin:12px 0;} h1{text-align:center;font-size:22px;letter-spacing:1px;margin:10px 0 2px;} .sub{text-align:center;color:#C5922E;font-style:italic;font-size:12px;margin-bottom:18px;} .meta{width:100%;border-collapse:collapse;background:#F5F0E8;border:1px solid #ddd;margin-bottom:18px;} .meta td{padding:7px 12px;font-size:12.5px;} .meta .lbl{color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;width:90px;} table.ledger{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12.5px;} table.ledger th{background:#1B3A6B;color:#fff;font-family:Arial,sans-serif;font-size:11px;text-align:left;padding:8px 10px;} table.ledger th.r,table.ledger td.r{text-align:right;} table.ledger td{padding:8px 10px;border-bottom:1px solid #eee;} table.ledger tr:nth-child(even) td{background:#FBF8F2;} .method{color:#888;font-size:11px;} .totals{width:300px;margin-left:auto;border-collapse:collapse;font-size:13px;} .totals td{padding:6px 12px;} .totals .lbl{color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;text-align:right;} .totals .val{text-align:right;} .totals .bal td{border-top:2px solid #1B3A6B;font-weight:bold;font-size:15px;} .pay{margin-top:20px;background:#F5F0E8;border-left:4px solid #C5922E;padding:12px 16px;font-size:12.5px;} .foot{text-align:center;color:#666;font-size:11px;margin-top:26px;border-top:1px solid #ccc;padding-top:8px;}</style></head><body>
+    <div style="text-align:center;margin-bottom:16px;"><button onclick="window.print()" style="background:#1B3A6B;color:#fff;border:0;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save All as PDF</button></div>
+    ${pages}</body></html>`);
+    w.document.close();
+  }
+
   async function addCharge() {
     if (!charge.amount) return;
     setBusy(true);
@@ -3336,6 +3442,10 @@ function BillingManager({ students, ledger, courses, refresh }) {
       </Card>
       {students.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card> :
         <Card>
+          <div className="flex items-center justify-between" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+            <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: 0 }}>Balances & Statements</h3>
+            <Btn small icon={Receipt} onClick={() => printAllStatements(students)}>Print all statements</Btn>
+          </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
               <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
@@ -3353,7 +3463,10 @@ function BillingManager({ students, ledger, courses, refresh }) {
                       <td style={{ padding: "10px 8px", textAlign: "right" }}>{money(t.charged)}</td>
                       <td style={{ padding: "10px 8px", textAlign: "right", color: C.green }}>{money(t.paid)}</td>
                       <td style={{ padding: "10px 8px", textAlign: "right", fontWeight: 700, color: t.balance > 0 ? C.rose : C.green }}>{money(t.balance)}</td>
-                      <td style={{ padding: "10px 8px", textAlign: "right" }}><Btn small kind="ghost" onClick={() => setSelected(s.id)}>Manage</Btn></td>
+                      <td style={{ padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
+                        <Btn small kind="ghost" icon={Receipt} onClick={() => openStatement(s)}>Statement</Btn>
+                        <Btn small kind="ghost" onClick={() => setSelected(s.id)}>Manage</Btn>
+                      </td>
                     </tr>
                   );
                 })}
