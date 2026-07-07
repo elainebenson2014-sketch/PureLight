@@ -14,6 +14,24 @@ import {
 const sumPoints = (questions) => (questions || []).reduce((a, q) => a + (Number(q.points) || 0), 0);
 const money = (n) => "$" + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Program-aware document masthead. Both names always appear, but the primary
+// (large) name flips: NCTS Pure Light leads for DEGREE programs; The Healed
+// Place leads for the CERTIFICATE program. Degree docs show no "Fully Known" tagline.
+function docMastheadHtml(program) {
+  const isCert = program === "certificate" || /cert/i.test(String(program || ""));
+  if (isCert) {
+    return `<div class="mast">
+      <div class="school">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
+      <div class="brand">THE HEALED PLACE</div>
+      <div class="tag">Fully Known — Identity, Healing, and Deliverance</div>
+    </div>`;
+  }
+  return `<div class="mast">
+    <div class="school">THE HEALED PLACE</div>
+    <div class="brand">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
+  </div>`;
+}
+
 /* ---- Grade scale + GPA (standard 4.0) ---- */
 function gradeInfo(pct) {
   const p = Number(pct);
@@ -3258,11 +3276,7 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
   <div class="noprint" style="text-align:center;margin-bottom:16px;">
     <button onclick="window.print()" style="background:#1B3A6B;color:#fff;border:0;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save as PDF</button>
   </div>
-  <div class="mast">
-    <div class="school">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
-    <div class="brand">THE HEALED PLACE</div>
-    <div class="tag">Fully Known — Identity, Healing, and Deliverance</div>
-  </div>
+  ${docMastheadHtml(student.program)}
   <hr class="rule"/>
   <h1>MONTHLY STATEMENT</h1>
   <div class="sub">Statement for ${stmtMonth}</div>
@@ -3382,11 +3396,7 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
   <div class="noprint" style="text-align:center;margin-bottom:16px;">
     <button onclick="window.print()" style="background:#1B3A6B;color:#fff;border:0;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save as PDF</button>
   </div>
-  <div class="mast">
-    <div class="school">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
-    <div class="brand">THE HEALED PLACE</div>
-    <div class="tag">Fully Known — Identity, Healing, and Deliverance</div>
-  </div>
+  ${docMastheadHtml(student.program)}
   <hr class="rule"/>
   <h1>INVOICE</h1>
   <div class="sub">Document No. ${invNo} &bull; Issued ${fdate(now.toISOString())}</div>
