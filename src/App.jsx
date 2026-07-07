@@ -3292,6 +3292,93 @@ function BillingManager({ students, ledger, courses, refresh }) {
     w.document.close();
   }
 
+  // Build a printable INVOICE (request for payment) for one student.
+  function makeInvoiceHtml(student, amountDue) {
+    const t = totals(student.id);
+    const now = new Date();
+    const invNo = `INV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}-${String(student.id).slice(0, 4).toUpperCase()}`;
+    const progLabel = student.program ? programLabel(student.program) : "—";
+    const isCert = student.program === "certificate" || /cert/i.test(progLabel);
+    const due = Number(amountDue) || 0;
+    // Payment options: certificate uses full/half/quarter; degree uses full/half/4/7.
+    const options = isCert
+      ? [["Pay in Full", due], ["Pay Half", due / 2], ["Pay 1 of 4", due / 4]]
+      : [["Pay in Full", due], ["Pay Half", due / 2], ["Pay 1 of 4", due / 4], ["Pay 1 of 7", due / 7]];
+    const optRows = options.map(([label, amt]) => `<tr><td>${label}</td><td class="r">${money(Math.round(amt * 100) / 100)}</td></tr>`).join("");
+
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Invoice — ${nameOf(student.id)}</title>
+<style>
+  @page { margin: 0.75in; }
+  * { box-sizing: border-box; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: #1a1a1a; margin: 0; padding: 32px; }
+  .mast { text-align: center; margin-bottom: 8px; }
+  .mast .school { color: #C5922E; font-family: Arial, sans-serif; font-weight: bold; font-size: 11px; letter-spacing: 2px; }
+  .mast .brand { color: #1B3A6B; font-size: 26px; font-weight: bold; margin: 2px 0; }
+  .mast .tag { color: #1B3A6B; font-style: italic; font-size: 12px; }
+  .rule { border: 0; border-top: 2px solid #1B3A6B; margin: 12px 0; }
+  h1 { text-align: center; font-size: 22px; letter-spacing: 2px; margin: 10px 0 2px; }
+  .sub { text-align: center; color: #C5922E; font-style: italic; font-size: 12px; margin-bottom: 18px; }
+  .meta { width: 100%; border-collapse: collapse; background: #F5F0E8; border: 1px solid #ddd; margin-bottom: 18px; }
+  .meta td { padding: 7px 12px; font-size: 12.5px; vertical-align: top; }
+  .meta .lbl { color: #1B3A6B; font-family: Arial, sans-serif; font-weight: bold; width: 90px; }
+  table.bill { width: 100%; border-collapse: collapse; margin-bottom: 8px; font-size: 13px; }
+  table.bill th { background: #1B3A6B; color: #fff; font-family: Arial, sans-serif; font-size: 11px; text-align: left; padding: 8px 10px; }
+  table.bill th.r, table.bill td.r { text-align: right; }
+  table.bill td { padding: 9px 10px; border-bottom: 1px solid #eee; }
+  .due { background: #1B3A6B; color: #fff; text-align: center; padding: 12px; font-size: 17px; font-weight: bold; font-family: Arial, sans-serif; letter-spacing: 1px; margin: 16px 0; border-radius: 4px; }
+  .opts { width: 320px; margin-left: auto; border-collapse: collapse; font-size: 13px; border: 1px solid #ddd; }
+  .opts caption { text-align: left; font-family: Arial, sans-serif; font-weight: bold; color: #1B3A6B; font-size: 12px; padding: 6px 0; }
+  .opts td { padding: 7px 12px; border-bottom: 1px solid #eee; }
+  .opts .r { text-align: right; font-weight: bold; }
+  .pay { margin-top: 18px; background: #F5F0E8; border-left: 4px solid #C5922E; padding: 12px 16px; font-size: 12.5px; }
+  .foot { text-align: center; color: #666; font-size: 11px; margin-top: 26px; border-top: 1px solid #ccc; padding-top: 8px; }
+  @media print { .noprint { display: none; } body { padding: 0; } }
+</style></head><body>
+  <div class="noprint" style="text-align:center;margin-bottom:16px;">
+    <button onclick="window.print()" style="background:#1B3A6B;color:#fff;border:0;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save as PDF</button>
+  </div>
+  <div class="mast">
+    <div class="school">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
+    <div class="brand">THE HEALED PLACE</div>
+    <div class="tag">Fully Known — Identity, Healing, and Deliverance</div>
+  </div>
+  <hr class="rule"/>
+  <h1>INVOICE</h1>
+  <div class="sub">Document No. ${invNo} &bull; Issued ${fdate(now.toISOString())}</div>
+  <table class="meta">
+    <tr><td class="lbl">Student</td><td>${nameOf(student.id).replace(/</g, "&lt;")}</td><td class="lbl">Program</td><td>${progLabel}</td></tr>
+    <tr><td class="lbl">Email</td><td>${(student.email || "—").replace(/</g, "&lt;")}</td><td class="lbl">School</td><td>The Healed Place</td></tr>
+  </table>
+  <table class="bill">
+    <thead><tr><th>Billing Summary</th><th class="r">Amount</th></tr></thead>
+    <tbody>
+      <tr><td>Total Charged</td><td class="r">${money(t.charged)}</td></tr>
+      <tr><td>Total Paid</td><td class="r">${money(t.paid)}</td></tr>
+      <tr><td><b>Current Balance</b></td><td class="r"><b>${money(t.balance)}</b></td></tr>
+    </tbody>
+  </table>
+  <div class="due">AMOUNT DUE: ${money(due)}</div>
+  <table class="opts"><caption>Payment Options</caption><tbody>${optRows}</tbody></table>
+  <div class="pay"><b>How to pay:</b> Pay online through your student portal (${isCert ? "Cert Classes" : "Tuition"} tab), or contact the office to arrange payment. Thank you!</div>
+  <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
+</body></html>`;
+  }
+
+  function openInvoice(student) {
+    const t = totals(student.id);
+    const input = window.prompt(
+      `Invoice for ${nameOf(student.id)}\n\nEnter the amount to invoice, or leave as-is for the full balance:`,
+      String(Math.max(0, Math.round(t.balance * 100) / 100))
+    );
+    if (input === null) return; // cancelled
+    const amt = Number(input);
+    if (isNaN(amt) || amt < 0) { window.alert("Please enter a valid amount."); return; }
+    const w = window.open("", "_blank");
+    if (!w) { window.alert("Please allow pop-ups to view the invoice."); return; }
+    w.document.write(makeInvoiceHtml(student, amt));
+    w.document.close();
+  }
+
   function printAllStatements(list) {
     const withActivity = list.filter((s) => entriesFor(s.id).length > 0);
     if (withActivity.length === 0) { window.alert("No students have billing activity yet."); return; }
@@ -3464,6 +3551,7 @@ function BillingManager({ students, ledger, courses, refresh }) {
                       <td style={{ padding: "10px 8px", textAlign: "right", color: C.green }}>{money(t.paid)}</td>
                       <td style={{ padding: "10px 8px", textAlign: "right", fontWeight: 700, color: t.balance > 0 ? C.rose : C.green }}>{money(t.balance)}</td>
                       <td style={{ padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
+                        <Btn small kind="ghost" icon={FileText} onClick={() => openInvoice(s)}>Invoice</Btn>
                         <Btn small kind="ghost" icon={Receipt} onClick={() => openStatement(s)}>Statement</Btn>
                         <Btn small kind="ghost" onClick={() => setSelected(s.id)}>Manage</Btn>
                       </td>
@@ -3516,7 +3604,7 @@ function TuitionManager({ tuition, refresh }) {
     const total = Number(r?.amount) || 0, reg = Number(r?.registration) || 0, bk = Number(r?.books) || 0;
     const portion = Math.max(0, total - reg - bk);
     if (total <= 0) return "";
-    return `Tuition balance ${money(portion)} — students can pay in full (${money(portion)}), half (${money(portion / 2)}), or four payments of ${money(portion / 4)}`;
+    return `Tuition balance ${money(portion)} — students can pay in full (${money(portion)}), half (${money(portion / 2)}), four payments of ${money(portion / 4)}, or seven payments of ${money(portion / 7)}`;
   };
 
   return (
@@ -3543,7 +3631,7 @@ function TuitionManager({ tuition, refresh }) {
             {saved && <span className="pl-body" style={{ color: C.green, fontSize: 13 }}>Saved</span>}
           </div>
           <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 10, lineHeight: 1.5 }}>
-            Degree students pay Registration, then Books (due September), then the remaining tuition balance — in full, half, or four payments, in any combination. Certificate classes pay from their own fee — 6-week in full, 12-week in full or two installments.
+            Degree students pay Registration, then Books (due September), then the remaining tuition balance — in full, half, four payments, or seven payments, in any combination. Certificate classes pay from their own fee — 6-week in full, 12-week in full or two installments.
           </p>
         </Card>
       </div>
@@ -3577,11 +3665,13 @@ function StudentTuition({ ledger, tuition, profile }) {
   const tuitionRemaining = Math.max(0, Math.round((tuitionPortion - tuitionPaidAmt) * 100) / 100);
   const halfAmt = Math.round((tuitionPortion / 2) * 100) / 100;
   const fourAmt = Math.round((tuitionPortion / 4) * 100) / 100;
-  // Only offer half/four as distinct options while they'd actually leave a
+  const sevenAmt = Math.round((tuitionPortion / 7) * 100) / 100;
+  // Only offer half/four/seven as distinct options while they'd actually leave a
   // balance afterward — once remaining is that small, "pay full" is the same
   // thing, so there's no point cluttering the buttons.
   const showHalf = tuitionRemaining > halfAmt + 0.005;
   const showFour = tuitionRemaining > fourAmt + 0.005;
+  const showSeven = tuitionRemaining > sevenAmt + 0.005;
   const fullyPaid = total > 0 && regPaid >= regFee - 0.005 && bookPaid >= bookFee - 0.005 && tuitionRemaining <= 0.005;
 
   async function pay(bucket, plan) {
@@ -3637,6 +3727,7 @@ function StudentTuition({ ledger, tuition, profile }) {
             <Btn small icon={Receipt} onClick={() => pay("tuition", "full")}>Pay full {money(tuitionRemaining)}</Btn>
             {showHalf && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "half")}>Pay half {money(Math.min(halfAmt, tuitionRemaining))}</Btn>}
             {showFour && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "four")}>Pay 1 of 4 {money(Math.min(fourAmt, tuitionRemaining))}</Btn>}
+            {showSeven && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "seven")}>Pay 1 of 7 {money(Math.min(sevenAmt, tuitionRemaining))}</Btn>}
           </div>
         )}
       </div>
