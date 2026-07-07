@@ -3,7 +3,7 @@ import {
   BookOpen, FileText, Users, Mail, LayoutDashboard, Plus, Upload, Trash2, Send,
   ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
   ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal, Receipt, BarChart3, LayoutGrid,
-  Reply, FileCheck, BarChart2, Star, MessageSquare, ClipboardList, ToggleLeft, ToggleRight, CornerDownRight, ThumbsUp,
+  Reply, FileCheck, BarChart2, Star, MessageSquare, ClipboardList, ToggleLeft, ToggleRight, CornerDownRight, ThumbsUp, RotateCcw,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
@@ -1197,7 +1197,11 @@ function StudentPortal({ profile, onLogout }) {
   const mySubs = subs.filter((s) => s.student_id === profile.id);
   const myHwSubs = hwSubs.filter((s) => s.student_id === profile.id);
   const available = visTests.filter((t) => !mySubs.some((s) => s.test_id === t.id));
-  const availableHw = visHw.filter((h) => !myHwSubs.some((s) => s.homework_id === h.id));
+  // Homework is available if never submitted, OR it was sent back ("returned") to redo.
+  const availableHw = visHw.filter((h) => {
+    const sub = myHwSubs.find((s) => s.homework_id === h.id);
+    return !sub || sub.status === "returned";
+  });
 
   const nav = [
     { key: "dash",        label: "Dashboard",   icon: LayoutDashboard, show: true },
@@ -1587,7 +1591,7 @@ function StudentTests({ available, books, courses, refresh }) {
               <button key={v} onClick={() => setAnswers({ ...answers, [q.id]: v })} className="pl-press" style={{ padding: "9px 22px", borderRadius: 9, marginRight: 8, cursor: "pointer", textTransform: "capitalize", fontWeight: 600, fontSize: 15, border: `1px solid ${answers[q.id] === v ? C.gold : C.line}`, background: answers[q.id] === v ? C.paper2 : "#fff", color: C.ink }}>{v}</button>
             ))}
             {(q.type === "short" || q.type === "essay") && (
-              <textarea style={{ ...inputStyle, minHeight: q.type === "essay" ? 120 : 60 }} placeholder="Type your answer…" value={answers[q.id] || ""} onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
+              <textarea style={{ ...inputStyle, minHeight: q.type === "essay" ? 220 : 110 }} placeholder="Type your answer…" value={answers[q.id] || ""} onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
             )}
           </Card>
         ))}
@@ -1991,6 +1995,33 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
     setBusy(false);
   }
 
+  async function saveGradingDraft() {
+    const sub = hwSubs.find((s) => s.id === gradeId);
+    const hw = homework.find((h) => h.id === sub.homework_id);
+    const hasQs = hw && hw.questions.length > 0;
+    let total = 0, max = 0;
+    if (hasQs) {
+      const auto = autoScore({ questions: hw.questions }, sub);
+      const manualTotal = hw.questions.filter((q) => q.type === "short" || q.type === "essay").reduce((a, q) => a + (Number(manual[q.id] ?? 0) || 0), 0);
+      max = sumPoints(hw.questions); total = auto + manualTotal;
+    } else {
+      max = sub.max_points || hw?.points || 0; total = Number(score) || 0;
+    }
+    setBusy(true);
+    try { await db.saveGradeDraft(gradeId, { manual, score: total, max_points: max, feedback }); await refresh(); setMode("list"); setGradeId(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  async function sendBack() {
+    const note = window.prompt("Send this homework back to the student to complete and resubmit.\n\nAdd a note telling them what to fix or finish:", feedback || "");
+    if (note === null) return; // cancelled
+    setBusy(true);
+    try { await db.sendBackHomework(gradeId, note); await refresh(); setMode("list"); setGradeId(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
   if (mode === "build" && draft) {
     return (
       <>
@@ -2089,7 +2120,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
               {q.type === "tf" && <div className="pl-body" style={{ fontSize: 14, textTransform: "capitalize" }}>Student answered: <b>{ans ?? "—"}</b> · Correct: {q.correct_answer}</div>}
               {(q.type === "short" || q.type === "essay") && (
                 <>
-                  <div className="pl-body" style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{ans || <i style={{ color: C.muted }}>No response</i>}</div>
+                  <div className="pl-body" style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 14px", fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", minHeight: 80 }}>{ans || <i style={{ color: C.muted }}>No response</i>}</div>
                   <div className="flex items-center gap-2" style={{ marginTop: 10 }}>
                     <span className="pl-body" style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>Award points:</span>
                     <input type="number" min={0} max={q.points} value={manual[q.id] ?? ""} placeholder="0" onChange={(e) => setManual({ ...manual, [q.id]: Math.min(q.points, Math.max(0, Number(e.target.value) || 0)) })} style={{ ...inputStyle, width: 80, padding: "6px 10px" }} />
@@ -2106,8 +2137,8 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
           {sub.file_path && <div style={{ marginTop: 10 }}><FileLink path={sub.file_path} label="Open submitted file" /></div>}
         </Card>
         <Card>
-          <Field label="Feedback"><textarea style={{ ...inputStyle, minHeight: 80 }} value={feedback} onChange={(e) => setFeedback(e.target.value)} /></Field>
-          <div className="flex items-center justify-between">
+          <Field label="Feedback"><textarea style={{ ...inputStyle, minHeight: 160 }} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Comments, encouragement, corrections, next steps…" /></Field>
+          <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
             {hasQs ? (
               <div className="pl-display" style={{ fontSize: 24, fontWeight: 600, color: C.green }}>{max ? Math.round((total / max) * 100) : 0}<span style={{ color: C.muted, fontSize: 18 }}> / 100</span> <span className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginLeft: 8 }}>({total} / {max} pts awarded)</span></div>
             ) : (
@@ -2117,7 +2148,11 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
                 <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>/ {max}</span>
               </div>
             )}
-            <Btn icon={Award} kind="gold" onClick={finalize} disabled={busy}>{busy ? "Saving…" : "Finalize & release"}</Btn>
+            <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+              <Btn kind="ghost" icon={Clock} onClick={saveGradingDraft} disabled={busy}>Save draft</Btn>
+              <Btn kind="ghost" icon={RotateCcw} onClick={sendBack} disabled={busy}>Send back</Btn>
+              <Btn icon={Award} kind="gold" onClick={finalize} disabled={busy}>{busy ? "Saving…" : (sub.status === "graded" ? "Update grade" : "Finalize & release")}</Btn>
+            </div>
           </div>
         </Card>
       </>
@@ -2180,20 +2215,28 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
       <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Awaiting grading</h3>
       <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
         {pending.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>Nothing pending.</span></Card>}
-        {pending.map((s) => (
+        {pending.map((s) => {
+          const st = s.status === "grading" ? { label: "Draft saved", color: C.gold, bg: "#fffaf0" }
+            : s.status === "returned" ? { label: "Sent back", color: C.rose, bg: "#fef6f6" }
+            : null;
+          return (
           <Card key={s.id}>
             <div className="flex items-center justify-between">
               <div>
-                <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
+                <div className="flex items-center gap-2">
+                  <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
+                  {st && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: st.color, background: st.bg, border: `1px solid ${st.color}`, borderRadius: 6, padding: "2px 8px" }}>{st.label}</span>}
+                </div>
                 <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{titleOf(s.homework_id)} · submitted {fdate(s.submitted_at)}</div>
               </div>
               <div className="flex items-center gap-2">
                 <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), nameOf(s.student_id))}>View</Btn>
-                <Btn icon={ClipboardCheck} onClick={() => openGrade(s)}>Grade</Btn>
+                <Btn icon={ClipboardCheck} onClick={() => openGrade(s)}>{s.status === "grading" ? "Resume" : "Grade"}</Btn>
               </div>
             </div>
           </Card>
-        ))}
+          );
+        })}
       </div>
 
       <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Graded</h3>
@@ -2208,6 +2251,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
               </div>
               <div className="flex items-center gap-3">
                 <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_points ? Math.round((s.score / s.max_points) * 100) : 0}%</span>
+                <Btn small kind="ghost" icon={PencilLine} onClick={() => openGrade(s)}>Edit grade</Btn>
                 <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), nameOf(s.student_id))}>View / Print</Btn>
               </div>
             </div>
@@ -2283,9 +2327,16 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
   if (doing) {
     const qs = doing.questions || [];
     const hasDraftProgress = Object.keys(answers).length > 0 || response.trim().length > 0;
+    const returnedSub = myHwSubs.find((s) => s.homework_id === doing.id && s.status === "returned");
     return (
       <>
         <PageHead title={doing.title} sub={doing.due_date ? `Due ${fdate(doing.due_date)}` : ""} action={<div className="flex items-center gap-2">{savedNote && <span className="pl-body" style={{ fontSize: 12.5, color: C.green, fontWeight: 600 }}><Check size={13} style={{ verticalAlign: "middle", marginRight: 3 }} />Draft saved</span>}<Btn kind="ghost" icon={X} onClick={saveAndExit}>Save & exit</Btn></div>} />
+        {returnedSub && returnedSub.feedback && (
+          <Card style={{ marginBottom: 12, background: "#fef6f6", border: `1px solid ${C.rose}`, borderLeft: `4px solid ${C.rose}` }}>
+            <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.rose, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}><RotateCcw size={13} style={{ verticalAlign: "middle", marginRight: 4 }} />Returned — please complete and resubmit</div>
+            <p className="pl-body" style={{ fontSize: 14, color: C.ink, margin: 0, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{returnedSub.feedback}</p>
+          </Card>
+        )}
         <Card style={{ marginBottom: 12, background: "#fffaf0", border: `1px solid ${C.gold}` }}>
           <div className="pl-body" style={{ fontSize: 13, color: C.ink }}>
             <Sparkles size={13} style={{ color: C.gold, verticalAlign: "middle", marginRight: 4 }} />
@@ -2310,7 +2361,7 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
               <button key={v} onClick={() => setAnswers({ ...answers, [q.id]: v })} className="pl-press" style={{ padding: "9px 22px", borderRadius: 9, marginRight: 8, cursor: "pointer", textTransform: "capitalize", fontWeight: 600, fontSize: 15, border: `1px solid ${answers[q.id] === v ? C.gold : C.line}`, background: answers[q.id] === v ? C.paper2 : "#fff", color: C.ink }}>{v}</button>
             ))}
             {(q.type === "short" || q.type === "essay") && (
-              <textarea style={{ ...inputStyle, minHeight: q.type === "essay" ? 120 : 60 }} placeholder="Type your answer…" value={answers[q.id] || ""} onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
+              <textarea style={{ ...inputStyle, minHeight: q.type === "essay" ? 220 : 110 }} placeholder="Type your answer…" value={answers[q.id] || ""} onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
             )}
           </Card>
         ))}
