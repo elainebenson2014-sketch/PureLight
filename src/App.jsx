@@ -771,9 +771,13 @@ function StudentsManager({ profiles, meId, courses, assignments, canSetRole, ref
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);
+  const [statusFilter, setStatusFilter] = useState("all");
 
   async function setProg(id, program) {
     try { await db.setStudentProgram(id, program); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function setStatus(id, status) {
+    try { await db.setStudentStatus(id, status); await refresh(); } catch (e) { window.alert(e.message); }
   }
   async function changeRole(id, role) {
     try { await db.setRole(id, role); await refresh(); } catch (e) { window.alert(e.message); }
@@ -836,6 +840,17 @@ function StudentsManager({ profiles, meId, courses, assignments, canSetRole, ref
                     {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
                   </select>
                 )}
+                {s.role === "student" && canSetRole && (
+                  <button onClick={() => setStatus(s.id, (s.status || "active") === "active" ? "inactive" : "active")}
+                    title={(s.status || "active") === "active" ? "Click to mark inactive" : "Click to mark active"}
+                    className="pl-press" style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 20, cursor: "pointer", fontSize: 12.5, fontWeight: 700,
+                      border: `1px solid ${(s.status || "active") === "active" ? C.green : C.line}`,
+                      background: (s.status || "active") === "active" ? "#eef7ee" : C.paper2,
+                      color: (s.status || "active") === "active" ? C.green : C.muted }}>
+                    {(s.status || "active") === "active" ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                    {(s.status || "active") === "active" ? "Active" : "Inactive"}
+                  </button>
+                )}
               </div>
               {s.role === "instructor" && (
                 <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
@@ -882,14 +897,44 @@ function StudentsManager({ profiles, meId, courses, assignments, canSetRole, ref
         {staff.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No staff yet.</span></Card>}
         {staff.map(personCard)}
       </div>
-      <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+      <div className="flex items-center justify-between" style={{ marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>Students</h3>
-        <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{students.length}</span>
+        <div className="flex items-center gap-2">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ ...inputStyle, width: 160, padding: "6px 10px" }}>
+            <option value="all">All students</option>
+            <option value="active">Active only</option>
+            <option value="inactive">Inactive only</option>
+          </select>
+          <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{students.length}</span>
+        </div>
       </div>
-      <div className="flex flex-col gap-2">
-        {students.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card>}
-        {students.map(personCard)}
-      </div>
+      {students.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card>}
+      {(() => {
+        const active = students.filter((s) => (s.status || "active") === "active");
+        const inactive = students.filter((s) => (s.status || "active") === "inactive");
+        const showActive = statusFilter === "all" || statusFilter === "active";
+        const showInactive = statusFilter === "all" || statusFilter === "inactive";
+        return (
+          <>
+            {showActive && (
+              <div style={{ marginBottom: 22 }}>
+                <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.green, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>Active · {active.length}</div>
+                <div className="flex flex-col gap-2">
+                  {active.length === 0 ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>No active students.</span> : active.map(personCard)}
+                </div>
+              </div>
+            )}
+            {showInactive && (
+              <div>
+                <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>Inactive · {inactive.length}</div>
+                <div className="flex flex-col gap-2">
+                  {inactive.length === 0 ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>No inactive students.</span> : inactive.map(personCard)}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
     </>
   );
 }
