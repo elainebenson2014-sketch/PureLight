@@ -3304,12 +3304,40 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
 
     // Find this student's tuition portion (total − registration − books) for their level.
     let tuitionPortion = due; // fallback for cert / unknown levels
+    let regFee = 0, bookFee = 0, levelTotal = 0;
     if (!isCert && student.program) {
       const lvl = (tuition || []).find((x) => x.program === student.program);
       if (lvl) {
-        const total = Number(lvl.amount) || 0, reg = Number(lvl.registration) || 0, bk = Number(lvl.books) || 0;
-        tuitionPortion = Math.max(0, Math.round((total - reg - bk) * 100) / 100);
+        levelTotal = Number(lvl.amount) || 0;
+        regFee = Number(lvl.registration) || 0;
+        bookFee = Number(lvl.books) || 0;
+        tuitionPortion = Math.max(0, Math.round((levelTotal - regFee - bookFee) * 100) / 100);
       }
+    }
+
+    // How much has been paid toward each bucket (from the ledger descriptions).
+    const es = entriesFor(student.id);
+    const label = progLabel;
+    const paidBucket = (word) => es
+      .filter((e) => e.kind === "payment" && (e.description || "").trim().toLowerCase() === `${label} ${word}`.toLowerCase())
+      .reduce((a, e) => a + (Number(e.amount) || 0), 0);
+
+    // Build the charge line-items for the billing summary.
+    let billRows;
+    if (!isCert && (regFee > 0 || bookFee > 0 || tuitionPortion > 0)) {
+      const regPaid = paidBucket("registration"), bookPaid = paidBucket("books"), tuiPaid = paidBucket("tuition");
+      const line = (name, charged, paid) => `<tr><td>${name}</td><td class="r">${money(charged)}</td><td class="r">${paid > 0 ? money(paid) : "—"}</td><td class="r">${money(Math.max(0, charged - paid))}</td></tr>`;
+      billRows = `
+        ${regFee > 0 ? line("Registration", regFee, regPaid) : ""}
+        ${bookFee > 0 ? line("Books", bookFee, bookPaid) : ""}
+        ${tuitionPortion > 0 ? line("Tuition", tuitionPortion, tuiPaid) : ""}
+        <tr class="tot"><td><b>Total</b></td><td class="r"><b>${money(t.charged)}</b></td><td class="r"><b>${money(t.paid)}</b></td><td class="r"><b>${money(t.balance)}</b></td></tr>`;
+    } else {
+      // Certificate or no level data: show the simple charged/paid/balance.
+      billRows = `
+        <tr><td>Total Charged</td><td class="r">${money(t.charged)}</td><td class="r">—</td><td class="r"></td></tr>
+        <tr><td>Total Paid</td><td class="r">—</td><td class="r">${money(t.paid)}</td><td class="r"></td></tr>
+        <tr class="tot"><td><b>Balance</b></td><td class="r"></td><td class="r"></td><td class="r"><b>${money(t.balance)}</b></td></tr>`;
     }
 
     // Certificate: installments on the amount due. Degree: installments on tuition portion.
@@ -3341,6 +3369,7 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
   table.bill th { background: #1B3A6B; color: #fff; font-family: Arial, sans-serif; font-size: 11px; text-align: left; padding: 8px 10px; }
   table.bill th.r, table.bill td.r { text-align: right; }
   table.bill td { padding: 9px 10px; border-bottom: 1px solid #eee; }
+  table.bill tr.tot td { border-top: 2px solid #1B3A6B; border-bottom: none; }
   .due { background: #1B3A6B; color: #fff; text-align: center; padding: 12px; font-size: 17px; font-weight: bold; font-family: Arial, sans-serif; letter-spacing: 1px; margin: 16px 0; border-radius: 4px; }
   .opts { width: 340px; margin-left: auto; border-collapse: collapse; font-size: 13px; border: 1px solid #ddd; }
   .opts caption { text-align: left; font-family: Arial, sans-serif; font-weight: bold; color: #1B3A6B; font-size: 12px; padding: 6px 0; }
@@ -3366,12 +3395,8 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
     <tr><td class="lbl">Email</td><td>${(student.email || "—").replace(/</g, "&lt;")}</td><td class="lbl">School</td><td>The Healed Place</td></tr>
   </table>
   <table class="bill">
-    <thead><tr><th>Billing Summary</th><th class="r">Amount</th></tr></thead>
-    <tbody>
-      <tr><td>Total Charged</td><td class="r">${money(t.charged)}</td></tr>
-      <tr><td>Total Paid</td><td class="r">${money(t.paid)}</td></tr>
-      <tr><td><b>Current Balance</b></td><td class="r"><b>${money(t.balance)}</b></td></tr>
-    </tbody>
+    <thead><tr><th>Billing Summary</th><th class="r">Charged</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
+    <tbody>${billRows}</tbody>
   </table>
   <div class="due">AMOUNT DUE: ${money(due)}</div>
   <table class="opts"><caption>Payment Options</caption><tbody>${optRows}</tbody></table>
