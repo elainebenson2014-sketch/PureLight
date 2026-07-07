@@ -414,13 +414,14 @@ function InstructorPortal({ profile, onLogout }) {
 
 function InstructorDash({ students, books, tests, subs, profiles, setActive }) {
   const pending = subs.filter((s) => s.status !== "graded");
+  const activeStudents = students.filter((s) => (s.status || "active") === "active");
   const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
   const titleOf = (id) => tests.find((t) => t.id === id)?.title || "Test";
   return (
     <>
       <PageHead title="Dashboard" sub="Welcome back. Here is the state of your school." />
       <div className="grid grid-cols-4 gap-4" style={{ marginBottom: 24 }}>
-        <Stat icon={Users} label="Enrolled students" value={students.length} />
+        <Stat icon={Users} label="Active students" value={activeStudents.length} />
         <Stat icon={BookOpen} label="Books in library" value={books.length} />
         <Stat icon={FileText} label="Tests created" value={tests.length} />
         <Stat icon={ClipboardCheck} label="Awaiting grading" value={pending.length} tone={C.gold} />
