@@ -75,6 +75,7 @@ export default async function handler(req, res) {
         let want;
         if (planKey === "half") want = round2(portion / 2);
         else if (planKey === "four" || planKey === "quarter") want = round2(portion / 4);
+        else if (planKey === "seven") want = round2(portion / 7);
         else want = remaining; // "full" — pay off whatever's left
         amount = Math.min(want, remaining);
       } else {
