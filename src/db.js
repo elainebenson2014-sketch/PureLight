@@ -313,15 +313,44 @@ export async function submitHomework({ homework_id, answers, response, file, max
   const { data: { user } } = await supabase.auth.getUser();
   let file_path = null;
   if (file) file_path = await uploadFile("homework-submissions", file);
-  const { error } = await supabase.from("pl_homework_submissions").insert({
-    homework_id, student_id: user.id, answers: answers || {}, response: response || "", file_path, max_points,
-  });
-  if (error) throw error;
+
+  // If a submission already exists (e.g. it was returned for redo), update it
+  // instead of inserting a duplicate — this resubmits it for grading.
+  const { data: existing } = await supabase.from("pl_homework_submissions")
+    .select("id").eq("homework_id", homework_id).eq("student_id", user.id).maybeSingle();
+
+  if (existing?.id) {
+    const patch = { answers: answers || {}, response: response || "", max_points, status: "submitted" };
+    if (file_path) patch.file_path = file_path;
+    const { error } = await supabase.from("pl_homework_submissions").update(patch).eq("id", existing.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("pl_homework_submissions").insert({
+      homework_id, student_id: user.id, answers: answers || {}, response: response || "", file_path, max_points, status: "submitted",
+    });
+    if (error) throw error;
+  }
 }
 
 export async function gradeHomework(id, { manual, score, max_points, feedback }) {
   const { error } = await supabase.from("pl_homework_submissions").update({
     manual: manual || {}, score, max_points, feedback, status: "graded",
+  }).eq("id", id);
+  if (error) throw error;
+}
+
+// Save grading progress WITHOUT releasing to the student (status stays not-graded).
+export async function saveGradeDraft(id, { manual, score, max_points, feedback }) {
+  const { error } = await supabase.from("pl_homework_submissions").update({
+    manual: manual || {}, score, max_points, feedback, status: "grading",
+  }).eq("id", id);
+  if (error) throw error;
+}
+
+// Send a submission back to the student to complete and resubmit, with a note.
+export async function sendBackHomework(id, note) {
+  const { error } = await supabase.from("pl_homework_submissions").update({
+    status: "returned", feedback: note || "",
   }).eq("id", id);
   if (error) throw error;
 }
