@@ -2758,8 +2758,29 @@ function openSubmission(sub, assessment, studentName, hideCorrect) {
   </div>
   ${qHtml}${respHtml}${fileHtml}${fbHtml}
   </body></html>`;
-  const w = window.open("", "_blank");
-  if (w) { w.document.write(html); w.document.close(); } else { window.alert("Please allow pop-ups to view the submission."); }
+  // Try opening a new tab first. If the browser blocks it, fall back to a blob
+  // download so the report still opens without needing pop-ups enabled.
+  let w = null;
+  try { w = window.open("", "_blank"); } catch (e) { w = null; }
+  if (w && w.document) {
+    w.document.write(html);
+    w.document.close();
+  } else {
+    try {
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (e) {
+      window.alert("Could not open the report. Please allow pop-ups for this site and try again.");
+    }
+  }
 }
 
 /* ---------- CERTIFICATES ---------- */
