@@ -2442,9 +2442,12 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
                 <h3 className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink, margin: 0 }}>{titleOf(s.homework_id)}</h3>
                 <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>Submitted {fdate(s.submitted_at)}</div>
               </div>
-              {s.status === "graded"
-                ? <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_points ? Math.round((s.score / s.max_points) * 100) : 0}%</span>
-                : <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: C.gold, background: C.goldSoft, padding: "5px 12px", borderRadius: 20 }}>Awaiting grade</span>}
+              <div className="flex items-center gap-3">
+                {s.status === "graded"
+                  ? <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_points ? Math.round((s.score / s.max_points) * 100) : 0}%</span>
+                  : <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: C.gold, background: C.goldSoft, padding: "5px 12px", borderRadius: 20 }}>Awaiting grade</span>}
+                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), profile.full_name, true)}>View / Print</Btn>
+              </div>
             </div>
             {s.status === "graded" && s.feedback && (
               <div style={{ marginTop: 12, padding: "12px 14px", background: C.paper, borderRadius: 9, borderLeft: `3px solid ${C.gold}` }}>
@@ -2682,7 +2685,7 @@ function AttendanceManager({ students, attendance, subs, hwSubs, refresh }) {
 }
 
 /* ---------- SUBMISSION REPORT (view / print) ---------- */
-function openSubmission(sub, assessment, studentName) {
+function openSubmission(sub, assessment, studentName, hideCorrect) {
   const safe = (s) => String(s ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
   const qs = (assessment && assessment.questions) || [];
   const max = sub.max_score ?? sub.max_points ?? sumPoints(qs);
@@ -2694,12 +2697,12 @@ function openSubmission(sub, assessment, studentName) {
     let answer = "", correct = "", badge = "";
     if (q.type === "mc") {
       answer = safe(q.options?.[Number(ans)] ?? "—");
-      correct = safe(q.options?.[Number(q.correct_answer)] ?? "");
+      correct = hideCorrect ? "" : safe(q.options?.[Number(q.correct_answer)] ?? "");
       const ok = String(ans) === String(q.correct_answer);
       badge = `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
     } else if (q.type === "tf") {
       answer = safe(ans ?? "—");
-      correct = safe(q.correct_answer);
+      correct = hideCorrect ? "" : safe(q.correct_answer);
       const ok = ans === q.correct_answer;
       badge = `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
     } else {
