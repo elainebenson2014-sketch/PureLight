@@ -8,30 +8,41 @@
 // a signed-in staff member (admin / instructor / assistant). Anonymous callers
 // and students are rejected. Without this check, anyone who found the URL could
 // send mail from the school's domain and get it blacklisted as a spam relay.
+//
+// The check uses the project's URL + anon key. It verifies the caller's token,
+// then reads that caller's own profile row using their own token, so no
+// service-role key is needed here.
 
 const STAFF_ROLES = ["admin", "instructor", "assistant"];
+
+function supaEnv() {
+  // Accept either naming; VITE_-prefixed vars are readable server-side too.
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const anon = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  return { url, anon };
+}
 
 async function getStaffUser(req) {
   const auth = req.headers.authorization || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
   if (!token) return { error: "Missing authorization token." };
 
-  const base = process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!base || !serviceKey) return { error: "Server auth is not configured." };
+  const { url, anon } = supaEnv();
+  if (!url || !anon) return { error: "Server auth is not configured." };
 
   // 1) Confirm the token is a real, unexpired Supabase session.
-  const uRes = await fetch(`${base}/auth/v1/user`, {
-    headers: { apikey: serviceKey, Authorization: `Bearer ${token}` },
+  const uRes = await fetch(`${url}/auth/v1/user`, {
+    headers: { apikey: anon, Authorization: `Bearer ${token}` },
   });
   if (!uRes.ok) return { error: "Invalid or expired session." };
   const user = await uRes.json();
   if (!user || !user.id) return { error: "Invalid session." };
 
-  // 2) Look up their role with the service key (bypasses RLS, read-only here).
+  // 2) Read this user's own profile with their own token. Row-level security
+  //    permits a signed-in user to read profiles, so no elevated key is used.
   const pRes = await fetch(
-    `${base}/rest/v1/pl_profiles?id=eq.${encodeURIComponent(user.id)}&select=role`,
-    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } }
+    `${url}/rest/v1/pl_profiles?id=eq.${encodeURIComponent(user.id)}&select=role`,
+    { headers: { apikey: anon, Authorization: `Bearer ${token}` } }
   );
   if (!pRes.ok) return { error: "Could not verify your account." };
   const rows = await pRes.json();
