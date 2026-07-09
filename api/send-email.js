@@ -1,9 +1,54 @@
 // Vercel serverless function: POST /api/send-email
+//
 // Sends email through Resend. RESEND_API_KEY stays server-side only.
+//
+// SECURITY: this endpoint can send mail to arbitrary addresses (the student
+// invite flow emails people who don't have accounts yet), so it MUST NOT be
+// open to the public. Every request has to carry the Supabase access token of
+// a signed-in staff member (admin / instructor / assistant). Anonymous callers
+// and students are rejected. Without this check, anyone who found the URL could
+// send mail from the school's domain and get it blacklisted as a spam relay.
+
+const STAFF_ROLES = ["admin", "instructor", "assistant"];
+
+async function getStaffUser(req) {
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+  if (!token) return { error: "Missing authorization token." };
+
+  const base = process.env.SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!base || !serviceKey) return { error: "Server auth is not configured." };
+
+  // 1) Confirm the token is a real, unexpired Supabase session.
+  const uRes = await fetch(`${base}/auth/v1/user`, {
+    headers: { apikey: serviceKey, Authorization: `Bearer ${token}` },
+  });
+  if (!uRes.ok) return { error: "Invalid or expired session." };
+  const user = await uRes.json();
+  if (!user || !user.id) return { error: "Invalid session." };
+
+  // 2) Look up their role with the service key (bypasses RLS, read-only here).
+  const pRes = await fetch(
+    `${base}/rest/v1/pl_profiles?id=eq.${encodeURIComponent(user.id)}&select=role`,
+    { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } }
+  );
+  if (!pRes.ok) return { error: "Could not verify your account." };
+  const rows = await pRes.json();
+  const role = rows && rows[0] && rows[0].role;
+  if (!STAFF_ROLES.includes(role)) return { error: "Not permitted." };
+
+  return { user, role };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
+
+  // --- Authorization gate -------------------------------------------------
+  const who = await getStaffUser(req);
+  if (who.error) return res.status(401).json({ error: who.error });
 
   let body = req.body;
   if (typeof body === "string") {
@@ -13,6 +58,12 @@ export default async function handler(req, res) {
 
   if (!to || (Array.isArray(to) && to.length === 0) || !subject) {
     return res.status(400).json({ error: "Missing 'to' or 'subject'." });
+  }
+
+  // Cap the blast radius even for staff, so a mistake can't mail thousands.
+  const count = (Array.isArray(to) ? to.length : 1) + (Array.isArray(bcc) ? bcc.length : bcc ? 1 : 0);
+  if (count > 500) {
+    return res.status(400).json({ error: "Too many recipients in one send (limit 500)." });
   }
 
   const apiKey = process.env.RESEND_API_KEY;
