@@ -256,6 +256,13 @@ function Auth() {
           options: { data: { full_name: form.name.trim() } },
         });
         if (error) throw error;
+        // Let the office know. Fire-and-forget: a mail hiccup must never stop
+        // someone from creating their account.
+        fetch("/api/notify-new-account", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: form.name.trim(), email: form.email.trim() }),
+        }).catch((e) => console.error("new-account alert failed", e));
         setMsg({ ok: true, text: "Account created. If email confirmation is on, check your inbox, then sign in." });
         setTab("signin");
       }
