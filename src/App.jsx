@@ -1233,7 +1233,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "library" && <StudentLibrary books={visBooks} courses={courses} />}
           {active === "syllabus" && <StudentSyllabus syllabi={syllabi} profile={profile} />}
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
-          {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} refresh={refresh} />}
+          {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} profile={profile} refresh={refresh} />}
           {active === "grades" && <StudentGrades mySubs={mySubs} tests={degTests} myHwSubs={myHwSubs} homework={degHw} courses={courses} profile={profile} />}
           {active === "progress" && <DegreeProgress profile={profile} courses={courses} tests={degTests} homework={degHw} mySubs={mySubs} myHwSubs={myHwSubs} />}
           {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
@@ -2276,7 +2276,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
 }
 
 /* ---------- HOMEWORK (student) ---------- */
-function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) {
+function StudentHomework({ availableHw, myHwSubs, homework, courses, profile, refresh }) {
   const [doing, setDoing] = useState(null);
   const [answers, setAnswers] = useState({});
   const [response, setResponse] = useState("");
@@ -2446,7 +2446,7 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
                 {s.status === "graded"
                   ? <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_points ? Math.round((s.score / s.max_points) * 100) : 0}%</span>
                   : <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: C.gold, background: C.goldSoft, padding: "5px 12px", borderRadius: 20 }}>Awaiting grade</span>}
-                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), profile.full_name, true)}>View / Print</Btn>
+                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), profile?.full_name || "Student", true)}>View / Print</Btn>
               </div>
             </div>
             {s.status === "graded" && s.feedback && (
