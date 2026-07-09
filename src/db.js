@@ -221,9 +221,18 @@ export async function listHomework() {
   const allQs = (data || []).flatMap((h) => h.pl_homework_questions || []);
   const qIds = allQs.map((q) => q.id);
   let ansMap = {};
-  if (qIds.length) {
-    const { data: ans } = await supabase.from("pl_homework_answers").select("question_id, correct_answer").in("question_id", qIds);
-    (ans || []).forEach((a) => { ansMap[a.question_id] = a.correct_answer; });
+  // Fetch the answer key in batches. Passing every question id at once builds a
+  // URL long enough for the server to reject it (400). Students are blocked from
+  // this table by RLS, so an empty/failed result here is expected and harmless.
+  const BATCH = 100;
+  for (let i = 0; i < qIds.length; i += BATCH) {
+    const slice = qIds.slice(i, i + BATCH);
+    try {
+      const { data: ans, error: ansErr } = await supabase
+        .from("pl_homework_answers").select("question_id, correct_answer").in("question_id", slice);
+      if (ansErr) continue; // instructor-only table; students simply get nothing
+      (ans || []).forEach((a) => { ansMap[a.question_id] = a.correct_answer; });
+    } catch (e) { /* non-fatal: homework still loads without the key */ }
   }
   return (data || []).map((h) => ({
     ...h,
