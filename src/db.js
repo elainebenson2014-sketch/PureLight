@@ -170,12 +170,19 @@ export async function sendMessage({ recipient, subject, body, sender_name }) {
 }
 
 /* Fire the real email through the Vercel function. Never throws — UI continues
-   even if email delivery isn't configured yet. */
+   even if email delivery isn't configured yet.
+   The endpoint only accepts signed-in staff, so we pass the session token. */
 export async function sendEmail({ to, bcc, subject, html }) {
   try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) return { error: "You must be signed in to send email." };
     const r = await fetch("/api/send-email", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({ to, bcc, subject, html }),
     });
     return await r.json();
