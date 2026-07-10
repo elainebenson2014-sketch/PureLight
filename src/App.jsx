@@ -3453,15 +3453,44 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
         <tr class="tot"><td><b>Balance</b></td><td class="r"></td><td class="r"></td><td class="r"><b>${money(t.balance)}</b></td></tr>`;
     }
 
-    // Certificate: installments on the amount due. Degree: installments on tuition portion.
+    // Payment options.
+    //
+    // Once a student has paid anything, they have already chosen a plan and
+    // made a payment against it. The remaining balance is what they owe next —
+    // it must NOT be sliced into fresh halves and quarters. (A student who paid
+    // half of $199 owes the other $99.50; offering a "half" of $99.50 invents a
+    // plan that doesn't exist and under-bills them.)
+    //
+    // Only when nothing has been paid yet do we present the plan choices, and
+    // then they divide the ORIGINAL amount, never a remainder. Any option that
+    // would meet or exceed the amount due is dropped, since "pay in full"
+    // already covers it.
+    // Once a student has paid INTO the thing being split, they have chosen a
+    // plan and made a payment against it. What remains is due as one payment —
+    // it must NOT be sliced into fresh halves and quarters. (A student who paid
+    // half of $199 owes the other $99.50; offering a "half" of $99.50 invents a
+    // plan that doesn't exist and under-bills them.)
+    //
+    // For a degree, paying Registration or Books says nothing about the tuition
+    // plan, so only tuition payments suppress the tuition installment options.
+    const hasPaid = isCert ? t.paid > 0.005 : paidBucket("tuition") > 0.005;
     const splitBase = isCert ? due : tuitionPortion;
-    const options = isCert
-      ? [["Pay in Full", due], ["Pay Half", splitBase / 2], ["Pay 1 of 4", splitBase / 4]]
-      : [["Pay in Full", due], ["Pay Half (tuition)", splitBase / 2], ["Pay 1 of 4 (tuition)", splitBase / 4], ["Pay 1 of 7 (tuition)", splitBase / 7]];
+    const plans = isCert
+      ? [["Pay Half", splitBase / 2], ["Pay 1 of 4", splitBase / 4]]
+      : [["Pay Half (tuition)", splitBase / 2], ["Pay 1 of 4 (tuition)", splitBase / 4], ["Pay 1 of 7 (tuition)", splitBase / 7]];
+
+    const options = [["Pay in Full", due]];
+    if (!hasPaid) {
+      for (const [label, amt] of plans) {
+        if (amt < due - 0.005) options.push([label, amt]);
+      }
+    }
     const optRows = options.map(([label, amt]) => `<tr><td>${label}</td><td class="r">${money(Math.round(amt * 100) / 100)}</td></tr>`).join("");
-    const noteLine = isCert
-      ? "Certificate tuition may be paid in full, half, or in four installments."
-      : "Registration and Books are paid separately. Only the tuition portion may be split into half, four, or seven installments.";
+    const noteLine = hasPaid
+      ? "This is the remaining balance on your account and is due in full."
+      : (isCert
+        ? "Certificate tuition may be paid in full, half, or in four installments."
+        : "Registration and Books are paid separately. Only the tuition portion may be split into half, four, or seven installments.");
 
     return `<!doctype html><html><head><meta charset="utf-8"><title>Invoice — ${nameOf(student.id)}</title>
 <style>
