@@ -14,6 +14,30 @@ import {
 const sumPoints = (questions) => (questions || []).reduce((a, q) => a + (Number(q.points) || 0), 0);
 const money = (n) => "$" + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Describe a ledger entry for display. A negative "payment" is a refund/credit:
+// it should read as "Refund", show its amount as a positive in the Charge column
+// (since it raises the balance), and never appear as a negative "payment".
+function ledgerRowView(e) {
+  const amt = Number(e.amount) || 0;
+  const isCharge = e.kind === "charge";
+  const isRefund = e.kind === "payment" && amt < 0;
+  let label;
+  if (isRefund) {
+    const m = /Stripe (re_[A-Za-z0-9]+)/.exec(e.description || "");
+    const how = m ? `Stripe ${m[1]}` : (e.method || "").replace("card-refund", "to card").replace("refund", "credit");
+    label = `Refund${how ? ` · ${how}` : ""}`;
+  } else {
+    label = (e.description || (isCharge ? "Charge" : "Payment")) + (e.method ? ` · ${e.method}` : "");
+  }
+  return {
+    isRefund,
+    label,
+    charge: isCharge ? money(amt) : (isRefund ? money(Math.abs(amt)) : ""),
+    payment: (!isCharge && !isRefund) ? money(amt) : "",
+  };
+}
+
+
 // Program-aware document masthead. For the CERTIFICATE program, both names
 // appear with The Healed Place leading and the Fully Known tagline. For DEGREE
 // programs, only NCTS Pure Light School of Ministry appears (no Healed Place, no tagline).
@@ -3264,14 +3288,17 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
                     <th style={{ padding: "6px 8px", textAlign: "right" }}>Charge</th><th style={{ padding: "6px 8px", textAlign: "right" }}>Payment</th>
                   </tr></thead>
                   <tbody>
-                    {certEs.map((e) => (
+                    {certEs.map((e) => {
+                      const v = ledgerRowView(e);
+                      return (
                       <tr key={e.id} style={{ borderTop: `1px solid ${C.line}` }}>
                         <td style={{ padding: "8px" }}>{fdate(e.date)}</td>
-                        <td style={{ padding: "8px" }}>{e.description || (e.kind === "payment" ? "Payment" : "Charge")}{e.method ? ` · ${e.method}` : ""}</td>
-                        <td style={{ padding: "8px", textAlign: "right", color: C.ink }}>{e.kind === "charge" ? money(e.amount) : ""}</td>
-                        <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{e.kind === "payment" ? money(e.amount) : ""}</td>
+                        <td style={{ padding: "8px", color: v.isRefund ? C.rose : undefined }}>{v.label}</td>
+                        <td style={{ padding: "8px", textAlign: "right", color: v.isRefund ? C.rose : C.ink }}>{v.charge}</td>
+                        <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{v.payment}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>}
@@ -3337,14 +3364,26 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
     const schoolName = stmtIsCert ? "The Healed Place" : "NCTS Pure Light School of Ministry";
     let running = 0;
     const rows = es.map((e) => {
-      const isCharge = e.kind === "charge";
       const amt = Number(e.amount) || 0;
-      running += isCharge ? amt : -amt;
-      return `<tr>
+      const isCharge = e.kind === "charge";
+      const isRefund = e.kind === "payment" && amt < 0; // negative payment = refund/credit
+      running += isCharge ? amt : -amt; // a refund (negative payment) correctly raises the balance
+      // Clean up the description: refund rows get a plain "Refund" label and a
+      // readable method, not the raw "card-refund" / stored text.
+      let desc;
+      if (isRefund) {
+        const m = /Stripe (re_[A-Za-z0-9]+)/.exec(e.description || "");
+        desc = `Refund${m ? ` <span class="method">(Stripe ${m[1]})</span>` : (e.method ? ` <span class="method">(${e.method.replace("card-refund", "to card").replace("refund", "credit")})</span>` : "")}`;
+      } else {
+        desc = `${(e.description || (isCharge ? "Charge" : "Payment")).replace(/</g, "&lt;")}${e.method ? ` <span class="method">(${e.method})</span>` : ""}`;
+      }
+      const chargeCell = isCharge ? money(amt) : (isRefund ? money(Math.abs(amt)) : "");
+      const paymentCell = (!isCharge && !isRefund) ? money(amt) : "";
+      return `<tr${isRefund ? ' style="color:#B23A3A;"' : ""}>
         <td>${fdate(e.date || e.created_at) || ""}</td>
-        <td>${(e.description || (isCharge ? "Charge" : "Payment")).replace(/</g, "&lt;")}${e.method ? ` <span class="method">(${e.method})</span>` : ""}</td>
-        <td class="r">${isCharge ? money(amt) : ""}</td>
-        <td class="r">${!isCharge ? money(amt) : ""}</td>
+        <td>${desc}</td>
+        <td class="r">${chargeCell}</td>
+        <td class="r">${paymentCell}</td>
         <td class="r">${money(running)}</td>
       </tr>`;
     }).join("");
@@ -3731,12 +3770,14 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
                   <th style={{ padding: "6px 8px", textAlign: "right" }}>Charge</th><th style={{ padding: "6px 8px", textAlign: "right" }}>Payment</th><th></th>
                 </tr></thead>
                 <tbody>
-                  {es.map((e) => (
+                  {es.map((e) => {
+                    const v = ledgerRowView(e);
+                    return (
                     <tr key={e.id} style={{ borderTop: `1px solid ${C.line}` }}>
                       <td style={{ padding: "8px" }}>{fdate(e.date)}</td>
-                      <td style={{ padding: "8px" }}>{e.description || (e.kind === "payment" ? "Payment" : "Charge")}{e.method ? ` · ${e.method}` : ""}</td>
-                      <td style={{ padding: "8px", textAlign: "right", color: C.ink }}>{e.kind === "charge" ? money(e.amount) : ""}</td>
-                      <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{e.kind === "payment" ? money(e.amount) : ""}</td>
+                      <td style={{ padding: "8px", color: v.isRefund ? C.rose : undefined }}>{v.label}</td>
+                      <td style={{ padding: "8px", textAlign: "right", color: v.isRefund ? C.rose : C.ink }}>{v.charge}</td>
+                      <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{v.payment}</td>
                       <td style={{ padding: "8px", textAlign: "right", whiteSpace: "nowrap" }}>
                         {e.kind === "payment" && Number(e.amount) > 0 && (
                           <button onClick={() => refund(e)} className="pl-press" title="Refund this payment" style={{ background: "none", border: "none", cursor: "pointer", color: C.gold, marginRight: 10, fontSize: 12.5, fontWeight: 700 }}>Refund</button>
@@ -3744,7 +3785,8 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
                         <button onClick={() => remove(e.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>}
@@ -4012,14 +4054,17 @@ function StudentTuition({ ledger, tuition, profile }) {
                 <th style={{ padding: "6px 8px", textAlign: "right" }}>Charge</th><th style={{ padding: "6px 8px", textAlign: "right" }}>Payment</th>
               </tr></thead>
               <tbody>
-                {es.map((e) => (
+                {es.map((e) => {
+                  const v = ledgerRowView(e);
+                  return (
                   <tr key={e.id} style={{ borderTop: `1px solid ${C.line}` }}>
                     <td style={{ padding: "8px" }}>{fdate(e.date)}</td>
-                    <td style={{ padding: "8px" }}>{e.description || (e.kind === "payment" ? "Payment" : "Charge")}{e.method ? ` · ${e.method}` : ""}</td>
-                    <td style={{ padding: "8px", textAlign: "right", color: C.ink }}>{e.kind === "charge" ? money(e.amount) : ""}</td>
-                    <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{e.kind === "payment" ? money(e.amount) : ""}</td>
+                    <td style={{ padding: "8px", color: v.isRefund ? C.rose : undefined }}>{v.label}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: v.isRefund ? C.rose : C.ink }}>{v.charge}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{v.payment}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>}
