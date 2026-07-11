@@ -172,6 +172,22 @@ export async function sendMessage({ recipient, subject, body, sender_name }) {
 /* Fire the real email through the Vercel function. Never throws — UI continues
    even if email delivery isn't configured yet.
    The endpoint only accepts signed-in staff, so we pass the session token. */
+export async function refundPayment(ledger_id, amount) {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) return { error: "You must be signed in." };
+    const r = await fetch("/api/refund-payment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ledger_id, amount }),
+    });
+    return await r.json();
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
 export async function sendEmail({ to, bcc, subject, html }) {
   try {
     const { data: { session } } = await supabase.auth.getSession();
