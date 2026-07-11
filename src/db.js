@@ -633,12 +633,12 @@ export async function unenrollCertClass(id) {
 
 /* Start a Stripe Checkout for a certificate class fee; returns the URL to redirect to.
    plan = "full" | "half" | "quarter"  — only half and quarter apply to 12-week classes. */
-export async function startCertCheckout(course_id, plan) {
+export async function startCertCheckout(course_id, plan, custom_amount) {
   const { data: { user } } = await supabase.auth.getUser();
   const r = await fetch("/api/create-checkout-session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ course_id, plan: plan || "full", student_id: user.id, student_email: user.email, origin: window.location.origin }),
+    body: JSON.stringify({ course_id, plan: plan || "full", custom_amount: custom_amount ?? null, student_id: user.id, student_email: user.email, origin: window.location.origin }),
   });
   const j = await r.json();
   if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
@@ -672,12 +672,12 @@ export async function setTuition(program, fields) {
    The amount is looked up server-side from pl_tuition by the checkout function —
    never trust a price sent from the browser. `plan` only applies to the
    "tuition" bucket: "full" | "half" | "four". */
-export async function startTuitionCheckout(tuition_level, bucket, plan) {
+export async function startTuitionCheckout(tuition_level, bucket, plan, custom_amount) {
   const { data: { user } } = await supabase.auth.getUser();
   const r = await fetch("/api/create-checkout-session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tuition_level, bucket, plan, student_id: user.id, student_email: user.email, origin: window.location.origin }),
+    body: JSON.stringify({ tuition_level, bucket, plan, custom_amount: custom_amount ?? null, student_id: user.id, student_email: user.email, origin: window.location.origin }),
   });
   const j = await r.json();
   if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
