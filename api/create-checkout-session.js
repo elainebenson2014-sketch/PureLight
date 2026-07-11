@@ -35,9 +35,14 @@ async function sb(path) {
 export default async function handler(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
   try {
-    const { course_id, half, tuition_level, bucket, plan, student_id, student_email, origin } = req.body || {};
+    const { course_id, half, tuition_level, bucket, plan, custom_amount, student_id, student_email, origin } = req.body || {};
     if (!student_id) { res.status(400).json({ error: "Missing student." }); return; }
     const base = origin || `https://${req.headers.host}`;
+
+    // A custom amount, when provided, overrides the plan math. Overpayment is
+    // allowed by design, so it is not capped to the remaining balance.
+    const customAmt = custom_amount != null && custom_amount !== "" ? round2(Number(custom_amount)) : null;
+    const hasCustom = customAmt != null && !isNaN(customAmt) && customAmt >= 0.5;
 
     let amount = 0;          // dollars to charge now
     let productName = "";
@@ -64,27 +69,31 @@ export default async function handler(req, res) {
       let word;
       if (bucket === "registration") {
         word = "registration";
-        amount = round2(registration - paidFor("registration"));
+        amount = hasCustom ? customAmt : round2(registration - paidFor("registration"));
       } else if (bucket === "books") {
         word = "books";
-        amount = round2(books - paidFor("books"));
+        amount = hasCustom ? customAmt : round2(books - paidFor("books"));
       } else if (bucket === "tuition") {
         word = "tuition";
         const remaining = round2(portion - paidFor("tuition"));
-        const planKey = String(plan || "full").toLowerCase();
-        let want;
-        if (planKey === "half") want = round2(portion / 2);
-        else if (planKey === "four" || planKey === "quarter") want = round2(portion / 4);
-        else if (planKey === "seven") want = round2(portion / 7);
-        else want = remaining; // "full" — pay off whatever's left
-        amount = Math.min(want, remaining);
+        if (hasCustom) {
+          amount = customAmt; // overpay allowed
+        } else {
+          const planKey = String(plan || "full").toLowerCase();
+          let want;
+          if (planKey === "half") want = round2(portion / 2);
+          else if (planKey === "four" || planKey === "quarter") want = round2(portion / 4);
+          else if (planKey === "seven") want = round2(portion / 7);
+          else want = remaining; // "full" — pay off whatever's left
+          amount = Math.min(want, remaining);
+        }
       } else {
         res.status(400).json({ error: "Unknown payment type." }); return;
       }
 
       if (amount < 0.5) { res.status(400).json({ error: "Nothing is due on that item." }); return; }
       productName = `${label} ${word}`;
-      metadata = { student_id, tuition_level, bucket: word, description: `${label} ${word}` };
+      metadata = { student_id, tuition_level, bucket: word, description: `${label} ${word}`, plan: hasCustom ? "custom" : String(plan || "full").toLowerCase() };
       successUrl = `${base}/?tuition_paid=1`;
     } else if (course_id) {
       // -------- Certificate class: full, half, or quarter on a 12-week class --------
@@ -99,15 +108,19 @@ export default async function handler(req, res) {
       const remaining = round2(fee - paid);
 
       const planKey = String(plan || (half ? "half" : "full")).toLowerCase();
-      let want;
-      if (planKey === "half" && weeks >= 12) want = round2(fee / 2);
-      else if ((planKey === "quarter" || planKey === "four") && weeks >= 12) want = round2(fee / 4);
-      else want = remaining; // full — pay off whatever's left
-      amount = Math.min(want, remaining);
+      if (hasCustom) {
+        amount = customAmt; // overpay allowed
+      } else {
+        let want;
+        if (planKey === "half" && weeks >= 12) want = round2(fee / 2);
+        else if ((planKey === "quarter" || planKey === "four") && weeks >= 12) want = round2(fee / 4);
+        else want = remaining; // full — pay off whatever's left
+        amount = Math.min(want, remaining);
+      }
       if (amount < 0.5) { res.status(400).json({ error: "This class is already paid in full." }); return; }
 
       productName = course.title || "Certificate class";
-      metadata = { student_id, course_id, title: course.title || "Certificate class" };
+      metadata = { student_id, course_id, title: course.title || "Certificate class", plan: hasCustom ? "custom" : planKey };
       successUrl = `${base}/?cert_paid=1`;
     } else {
       res.status(400).json({ error: "Missing payment details." }); return;
