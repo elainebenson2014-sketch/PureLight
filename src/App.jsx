@@ -3466,28 +3466,36 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
     // would meet or exceed the amount due is dropped, since "pay in full"
     // already covers it.
     // Once a student has paid INTO the thing being split, they have chosen a
-    // plan and made a payment against it. What remains is due as one payment —
-    // it must NOT be sliced into fresh halves and quarters. (A student who paid
-    // half of $199 owes the other $99.50; offering a "half" of $99.50 invents a
-    // plan that doesn't exist and under-bills them.)
-    //
-    // For a degree, paying Registration or Books says nothing about the tuition
-    // plan, so only tuition payments suppress the tuition installment options.
+    // plan and made a payment against it. Show the NEXT installment for that
+    // plan (from the stored plan on their prior payment), not a re-divided
+    // remainder. If we can't tell the plan, fall back to "pay in full".
+    const es2 = entriesFor(student.id);
+    const priorPlan = (() => {
+      const pays = es2.filter((e) => e.kind === "payment" && e.plan);
+      return pays.length ? pays[pays.length - 1].plan : null;
+    })();
     const hasPaid = isCert ? t.paid > 0.005 : paidBucket("tuition") > 0.005;
     const splitBase = isCert ? due : tuitionPortion;
-    const plans = isCert
-      ? [["Pay Half", splitBase / 2], ["Pay 1 of 4", splitBase / 4]]
-      : [["Pay Half (tuition)", splitBase / 2], ["Pay 1 of 4 (tuition)", splitBase / 4], ["Pay 1 of 7 (tuition)", splitBase / 7]];
-
-    const options = [["Pay in Full", due]];
-    if (!hasPaid) {
+    const planFraction = { half: 2, quarter: 4, four: 4, seven: 7 };
+    let options = [["Pay in Full", due]];
+    if (hasPaid && priorPlan && planFraction[priorPlan]) {
+      // Next installment = original ÷ plan divisor, but never more than what's left.
+      const origAmt = isCert ? (t.charged) : tuitionPortion;
+      const inst = Math.min(Math.round((origAmt / planFraction[priorPlan]) * 100) / 100, due);
+      if (inst < due - 0.005) options.push([`Next installment (${priorPlan})`, inst]);
+    } else if (!hasPaid) {
+      const plans = isCert
+        ? [["Pay Half", splitBase / 2], ["Pay 1 of 4", splitBase / 4]]
+        : [["Pay Half (tuition)", splitBase / 2], ["Pay 1 of 4 (tuition)", splitBase / 4], ["Pay 1 of 7 (tuition)", splitBase / 7]];
       for (const [label, amt] of plans) {
         if (amt < due - 0.005) options.push([label, amt]);
       }
     }
     const optRows = options.map(([label, amt]) => `<tr><td>${label}</td><td class="r">${money(Math.round(amt * 100) / 100)}</td></tr>`).join("");
     const noteLine = hasPaid
-      ? "This is the remaining balance on your account and is due in full."
+      ? (priorPlan && planFraction[priorPlan]
+        ? "You may pay your next installment or the full remaining balance."
+        : "This is the remaining balance on your account and is due in full.")
       : (isCert
         ? "Certificate tuition may be paid in full, half, or in four installments."
         : "Registration and Books are paid separately. Only the tuition portion may be split into half, four, or seven installments.");
@@ -3558,6 +3566,22 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
     w.document.close();
   }
 
+  async function emailAllStatements(list) {
+    const withActivity = list.filter((s) => entriesFor(s.id).length > 0 && s.email);
+    if (withActivity.length === 0) { window.alert("No students with billing activity and an email on file."); return; }
+    if (!window.confirm(`Email a monthly statement to ${withActivity.length} student${withActivity.length === 1 ? "" : "s"} now?`)) return;
+    let sent = 0, failed = 0;
+    for (const s of withActivity) {
+      const html = makeStatementHtml(s);
+      try {
+        const res = await db.sendEmail({ to: [s.email], subject: `Your monthly statement — ${new Date().toLocaleString(undefined, { month: "long", year: "numeric" })}`, html });
+        if (res && res.error) { failed++; console.error("statement email failed", s.email, res.error); }
+        else sent++;
+      } catch (e) { failed++; console.error("statement email failed", s.email, e); }
+    }
+    window.alert(`Statements sent: ${sent}${failed ? ` · failed: ${failed}` : ""}.`);
+  }
+
   function printAllStatements(list) {
     const withActivity = list.filter((s) => entriesFor(s.id).length > 0);
     if (withActivity.length === 0) { window.alert("No students have billing activity yet."); return; }
@@ -3597,6 +3621,27 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
   async function remove(id) {
     if (!window.confirm("Delete this entry?")) return;
     try { await db.deleteLedgerEntry(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function refund(entry) {
+    const max = Number(entry.amount) || 0;
+    const isCard = entry.method === "card" || entry.method === "Stripe";
+    const input = window.prompt(
+      `Refund ${nameOf(entry.student_id)}\n\n${isCard ? "This will refund the card through Stripe AND credit their account." : "This will credit their account (no card involved)."}\n\nAmount to refund (up to ${money(max)}):`,
+      String(max)
+    );
+    if (input === null) return;
+    const amt = Number(input);
+    if (isNaN(amt) || amt <= 0 || amt > max + 0.005) { window.alert("Please enter a valid amount up to the payment total."); return; }
+    if (!window.confirm(`Refund ${money(amt)} to ${nameOf(entry.student_id)}?${isCard ? " This returns money to their card." : ""}`)) return;
+    try {
+      const res = await db.refundPayment(entry.id, amt);
+      if (res && res.ok) {
+        window.alert(`Refunded ${money(res.refunded)}${res.card ? " to the card" : ""}. Their account has been credited.`);
+        await refresh();
+      } else {
+        window.alert(res?.error || "The refund could not be completed.");
+      }
+    } catch (e) { window.alert(e.message); }
   }
   async function onCsv(file) {
     if (!file) return;
@@ -3684,7 +3729,12 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
                       <td style={{ padding: "8px" }}>{e.description || (e.kind === "payment" ? "Payment" : "Charge")}{e.method ? ` · ${e.method}` : ""}</td>
                       <td style={{ padding: "8px", textAlign: "right", color: C.ink }}>{e.kind === "charge" ? money(e.amount) : ""}</td>
                       <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{e.kind === "payment" ? money(e.amount) : ""}</td>
-                      <td style={{ padding: "8px", textAlign: "right" }}><button onClick={() => remove(e.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button></td>
+                      <td style={{ padding: "8px", textAlign: "right", whiteSpace: "nowrap" }}>
+                        {e.kind === "payment" && Number(e.amount) > 0 && (
+                          <button onClick={() => refund(e)} className="pl-press" title="Refund this payment" style={{ background: "none", border: "none", cursor: "pointer", color: C.gold, marginRight: 10, fontSize: 12.5, fontWeight: 700 }}>Refund</button>
+                        )}
+                        <button onClick={() => remove(e.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -3711,6 +3761,7 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
           <div className="flex items-center justify-between" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
             <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: 0 }}>Balances & Statements</h3>
             <Btn small icon={Receipt} onClick={() => printAllStatements(students)}>Print all statements</Btn>
+            <Btn small kind="gold" icon={Send} onClick={() => emailAllStatements(students)}>Email all statements</Btn>
           </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
