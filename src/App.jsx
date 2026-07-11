@@ -3186,9 +3186,16 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
   const certBalance = certCharged - certPaid;
   const certEs = [...certEntries].sort((a, b) => (a.date < b.date ? -1 : 1));
 
-  async function pay(c, plan) {
-    try { const url = await db.startCertCheckout(c.id, plan); window.location.href = url; }
+  async function pay(c, plan, customAmt) {
+    try { const url = await db.startCertCheckout(c.id, plan, customAmt ?? null); window.location.href = url; }
     catch (e) { window.alert(e.message); }
+  }
+  function payCustom(c, remaining) {
+    const input = window.prompt(`Enter the amount you'd like to pay toward ${c.title}:`, remaining ? String(remaining) : "");
+    if (input === null) return;
+    const amt = Math.round(Number(input) * 100) / 100;
+    if (isNaN(amt) || amt < 0.5) { window.alert("Please enter an amount of at least $0.50."); return; }
+    pay(c, "custom", amt);
   }
 
   return (
@@ -3229,6 +3236,7 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
                         <Btn small kind="ghost" icon={Receipt} onClick={() => pay(c, "half")}>Pay half {money(Math.min(Math.round((fee / 2) * 100) / 100, cRemaining))}</Btn>
                       )}
                       <Btn small icon={Receipt} onClick={() => pay(c, "full")}>Pay {money(cRemaining)}</Btn>
+                      <Btn small kind="ghost" onClick={() => payCustom(c, cRemaining)}>Other amount</Btn>
                     </div>
                   )}
                 </div>
@@ -3904,9 +3912,16 @@ function StudentTuition({ ledger, tuition, profile }) {
   const showSeven = tuitionRemaining > sevenAmt + 0.005;
   const fullyPaid = total > 0 && regPaid >= regFee - 0.005 && bookPaid >= bookFee - 0.005 && tuitionRemaining <= 0.005;
 
-  async function pay(bucket, plan) {
-    try { const url = await db.startTuitionCheckout(prog, bucket, plan); window.location.href = url; }
+  async function pay(bucket, plan, customAmt) {
+    try { const url = await db.startTuitionCheckout(prog, bucket, plan, customAmt ?? null); window.location.href = url; }
     catch (e) { window.alert(e.message); }
+  }
+  function payCustom(bucket, label, suggested) {
+    const input = window.prompt(`Enter the amount you'd like to pay toward ${label}:`, suggested ? String(suggested) : "");
+    if (input === null) return;
+    const amt = Math.round(Number(input) * 100) / 100;
+    if (isNaN(amt) || amt < 0.5) { window.alert("Please enter an amount of at least $0.50."); return; }
+    pay(bucket, "custom", amt);
   }
 
   function bucketRow(title, due, owed, paidAmt, bucket) {
@@ -3925,7 +3940,10 @@ function StudentTuition({ ledger, tuition, profile }) {
         ) : done ? (
           <span className="pl-body" style={{ fontSize: 14, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={16} /> Paid</span>
         ) : TUITION_PAY_ENABLED ? (
-          <Btn small icon={Receipt} onClick={() => pay(bucket)}>Pay {money(showAmt)}</Btn>
+          <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+            <Btn small icon={Receipt} onClick={() => pay(bucket)}>Pay {money(showAmt)}</Btn>
+            <Btn small kind="ghost" onClick={() => payCustom(bucket, title, showAmt)}>Other amount</Btn>
+          </div>
         ) : (
           <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Contact the office</span>
         )}
@@ -3958,6 +3976,7 @@ function StudentTuition({ ledger, tuition, profile }) {
             {showHalf && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "half")}>Pay half {money(Math.min(halfAmt, tuitionRemaining))}</Btn>}
             {showFour && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "four")}>Pay 1 of 4 {money(Math.min(fourAmt, tuitionRemaining))}</Btn>}
             {showSeven && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "seven")}>Pay 1 of 7 {money(Math.min(sevenAmt, tuitionRemaining))}</Btn>}
+            <Btn small kind="ghost" onClick={() => payCustom("tuition", "tuition", tuitionRemaining)}>Other amount</Btn>
           </div>
         )}
       </div>
