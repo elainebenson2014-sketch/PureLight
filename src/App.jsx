@@ -3807,41 +3807,168 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
         {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
       </Card>
       {students.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card> :
-        <Card>
-          <div className="flex items-center justify-between" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-            <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: 0 }}>Balances & Statements</h3>
-            <Btn small icon={Receipt} onClick={() => printAllStatements(students)}>Print all statements</Btn>
-            <Btn small kind="gold" icon={Send} onClick={() => emailAllStatements(students)}>Email all statements</Btn>
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
-              <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
-                <th style={{ padding: "6px 8px" }}>Student</th>
-                <th style={{ padding: "6px 8px", textAlign: "right" }}>Charged</th>
-                <th style={{ padding: "6px 8px", textAlign: "right" }}>Paid</th>
-                <th style={{ padding: "6px 8px", textAlign: "right" }}>Balance</th><th></th>
-              </tr></thead>
-              <tbody>
-                {students.map((s) => {
-                  const t = totals(s.id);
-                  return (
-                    <tr key={s.id} style={{ borderTop: `1px solid ${C.line}` }}>
-                      <td style={{ padding: "10px 8px", fontWeight: 600, color: C.ink }}>{s.full_name}</td>
-                      <td style={{ padding: "10px 8px", textAlign: "right" }}>{money(t.charged)}</td>
-                      <td style={{ padding: "10px 8px", textAlign: "right", color: C.green }}>{money(t.paid)}</td>
-                      <td style={{ padding: "10px 8px", textAlign: "right", fontWeight: 700, color: t.balance > 0 ? C.rose : C.green }}>{money(t.balance)}</td>
-                      <td style={{ padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
-                        <Btn small kind="ghost" icon={FileText} onClick={() => openInvoice(s)}>Invoice</Btn>
-                        <Btn small kind="ghost" icon={Receipt} onClick={() => openStatement(s)}>Statement</Btn>
-                        <Btn small kind="ghost" onClick={() => setSelected(s.id)}>Manage</Btn>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </Card>}
+        (() => {
+          // Split by status; treat missing status as active.
+          const isActive = (s) => (s.status || "active") !== "inactive";
+          const activeStudents = students.filter(isActive);
+          const inactiveStudents = students.filter((s) => !isActive(s));
+
+          // Funds summary across ALL students.
+          const sumFor = (list) => list.reduce((acc, s) => {
+            const t = totals(s.id);
+            acc.charged += t.charged; acc.paid += t.paid; acc.balance += Math.max(0, t.balance);
+            return acc;
+          }, { charged: 0, paid: 0, balance: 0 });
+          const all = sumFor(students);
+          const act = sumFor(activeStudents);
+          const owing = students.filter((s) => totals(s.id).balance > 0.005).length;
+
+          function fundsReport() {
+            const now = new Date();
+            const when = now.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
+            const rowsHtml = (list, heading) => {
+              if (!list.length) return "";
+              const body = list.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => {
+                const t = totals(s.id);
+                return `<tr><td>${(s.full_name || "").replace(/</g, "&lt;")}</td><td class="r">${money(t.charged)}</td><td class="r" style="color:#2e7d32">${money(t.paid)}</td><td class="r" style="color:${t.balance > 0.005 ? "#B23A3A" : "#2e7d32"};font-weight:700">${money(Math.max(0, t.balance))}</td></tr>`;
+              }).join("");
+              const sub = sumFor(list);
+              return `<tr class="sub"><td colspan="4">${heading} (${list.length})</td></tr>${body}<tr class="tot"><td>Subtotal</td><td class="r">${money(sub.charged)}</td><td class="r">${money(sub.paid)}</td><td class="r">${money(sub.balance)}</td></tr>`;
+            };
+            const html = `<!doctype html><html><head><meta charset="utf-8"><title>Funds Report</title>
+              <style>
+                body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;max-width:820px;margin:24px auto;padding:0 20px;}
+                .head{text-align:center;border-bottom:3px solid #1B3A6B;padding-bottom:12px;margin-bottom:8px;}
+                .head .n{color:#C5922E;font-family:Arial,sans-serif;font-size:12px;letter-spacing:2px;font-weight:bold;}
+                h1{color:#1B3A6B;font-size:22px;margin:6px 0 2px;}
+                .sub2{color:#666;font-size:13px;margin-bottom:20px;text-align:center;}
+                .cards{display:flex;gap:12px;margin:0 0 22px;}
+                .card{flex:1;border:1px solid #ddd;border-radius:8px;padding:14px 16px;text-align:center;}
+                .card .lbl{font-family:Arial,sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#666;}
+                .card .val{font-size:24px;font-weight:bold;color:#1B3A6B;margin-top:4px;}
+                .card.paid .val{color:#2e7d32}.card.owed .val{color:#B23A3A}
+                table{width:100%;border-collapse:collapse;font-size:13.5px;}
+                th{font-family:Arial,sans-serif;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#666;border-bottom:2px solid #1B3A6B;padding:8px;}
+                td{padding:7px 8px;border-bottom:1px solid #eee;}
+                td.r,th.r{text-align:right;}
+                tr.sub td{background:#F5F0E8;font-family:Arial,sans-serif;font-weight:bold;color:#1B3A6B;font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding-top:14px;}
+                tr.tot td{font-weight:bold;border-top:2px solid #1B3A6B;border-bottom:none;background:#faf7f2;}
+                .grand td{font-size:15px;font-weight:bold;color:#1B3A6B;border-top:3px double #1B3A6B;background:#F5F0E8;padding:12px 8px;}
+                .foot{margin-top:22px;text-align:center;color:#888;font-size:11px;font-family:Arial,sans-serif;}
+                @media print{.noprint{display:none}}
+              </style></head><body>
+              <div class="head"><div class="n">NCTS PURE LIGHT SCHOOL OF MINISTRY</div><h1>Funds Collected &amp; Owed</h1></div>
+              <div class="sub2">Management Report &bull; ${when}</div>
+              <button class="noprint" onclick="window.print()" style="display:block;margin:0 auto 20px;padding:8px 18px;background:#1B3A6B;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Print / Save as PDF</button>
+              <div class="cards">
+                <div class="card paid"><div class="lbl">Total Collected</div><div class="val">${money(all.paid)}</div></div>
+                <div class="card owed"><div class="lbl">Total Outstanding</div><div class="val">${money(all.balance)}</div></div>
+                <div class="card"><div class="lbl">Total Billed</div><div class="val">${money(all.charged)}</div></div>
+              </div>
+              <div class="sub2" style="text-align:left;margin-bottom:8px;">
+                ${students.length} students &bull; ${activeStudents.length} active, ${inactiveStudents.length} inactive &bull; ${owing} with a balance owing
+              </div>
+              <table>
+                <thead><tr><th>Student</th><th class="r">Billed</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
+                <tbody>
+                  ${rowsHtml(activeStudents, "Active students")}
+                  ${rowsHtml(inactiveStudents, "Inactive students")}
+                  <tr class="grand"><td>ALL STUDENTS</td><td class="r">${money(all.charged)}</td><td class="r">${money(all.paid)}</td><td class="r">${money(all.balance)}</td></tr>
+                </tbody>
+              </table>
+              <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
+              </body></html>`;
+            let w = null;
+            try { w = window.open("", "_blank"); } catch (e) { w = null; }
+            if (w && w.document) { w.document.write(html); w.document.close(); }
+            else {
+              try {
+                const blob = new Blob([html], { type: "text/html" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener";
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 10000);
+              } catch (e) { window.alert("Please allow pop-ups to view the report."); }
+            }
+          }
+
+          const renderTable = (list) => (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+                <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
+                  <th style={{ padding: "6px 8px" }}>Student</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Charged</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Paid</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Balance</th><th></th>
+                </tr></thead>
+                <tbody>
+                  {list.map((s) => {
+                    const t = totals(s.id);
+                    return (
+                      <tr key={s.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: C.ink }}>{s.full_name}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right" }}>{money(t.charged)}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", color: C.green }}>{money(t.paid)}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", fontWeight: 700, color: t.balance > 0.005 ? C.rose : C.green }}>{money(t.balance)}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
+                          <Btn small kind="ghost" icon={FileText} onClick={() => openInvoice(s)}>Invoice</Btn>
+                          <Btn small kind="ghost" icon={Receipt} onClick={() => openStatement(s)}>Statement</Btn>
+                          <Btn small kind="ghost" onClick={() => setSelected(s.id)}>Manage</Btn>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          );
+
+          return (
+            <>
+              {/* Funds summary */}
+              <Card style={{ marginBottom: 16 }}>
+                <div className="flex items-center justify-between" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                  <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: 0 }}>Funds Summary</h3>
+                  <Btn small kind="gold" icon={FileText} onClick={fundsReport}>Management report</Btn>
+                </div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ flex: "1 1 160px", background: "#f2f8f3", border: `1px solid ${C.green}33`, borderRadius: 10, padding: "14px 16px" }}>
+                    <div className="pl-body" style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".06em", color: C.muted }}>Total Collected</div>
+                    <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.green, marginTop: 2 }}>{money(all.paid)}</div>
+                  </div>
+                  <div style={{ flex: "1 1 160px", background: "#fdf3f3", border: `1px solid ${C.rose}33`, borderRadius: 10, padding: "14px 16px" }}>
+                    <div className="pl-body" style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".06em", color: C.muted }}>Outstanding</div>
+                    <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.rose, marginTop: 2 }}>{money(all.balance)}</div>
+                    <div className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{owing} student{owing === 1 ? "" : "s"} owing</div>
+                  </div>
+                  <div style={{ flex: "1 1 160px", background: C.paper, border: `1px solid ${C.line}`, borderRadius: 10, padding: "14px 16px" }}>
+                    <div className="pl-body" style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".06em", color: C.muted }}>Total Billed</div>
+                    <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.ink, marginTop: 2 }}>{money(all.charged)}</div>
+                    <div className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{activeStudents.length} active · {inactiveStudents.length} inactive</div>
+                  </div>
+                </div>
+              </Card>
+
+              <Card>
+                <div className="flex items-center justify-between" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                  <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: 0 }}>Active Students &amp; Statements</h3>
+                  <Btn small icon={Receipt} onClick={() => printAllStatements(activeStudents)}>Print all statements</Btn>
+                  <Btn small kind="gold" icon={Send} onClick={() => emailAllStatements(activeStudents)}>Email all statements</Btn>
+                </div>
+                {activeStudents.length ? renderTable(activeStudents) : <span className="pl-body" style={{ color: C.muted }}>No active students.</span>}
+              </Card>
+
+              {inactiveStudents.length > 0 && (
+                <Card style={{ marginTop: 16, opacity: 0.92 }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                    <h3 className="pl-display" style={{ fontSize: 17, color: C.muted, margin: 0 }}>Inactive Students</h3>
+                  </div>
+                  {renderTable(inactiveStudents)}
+                </Card>
+              )}
+            </>
+          );
+        })()}
     </>
   );
 }
