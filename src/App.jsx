@@ -20,9 +20,12 @@ const money = (n) => "$" + (Number(n) || 0).toLocaleString(undefined, { minimumF
 function ledgerRowView(e) {
   const amt = Number(e.amount) || 0;
   const isCharge = e.kind === "charge";
+  const isScholarship = e.kind === "scholarship";
   const isRefund = e.kind === "payment" && amt < 0;
   let label;
-  if (isRefund) {
+  if (isScholarship) {
+    label = `Scholarship${e.description && e.description !== "Scholarship" ? ` · ${e.description}` : ""}`;
+  } else if (isRefund) {
     const m = /Stripe (re_[A-Za-z0-9]+)/.exec(e.description || "");
     const how = m ? `Stripe ${m[1]}` : (e.method || "").replace("card-refund", "to card").replace("refund", "credit");
     label = `Refund${how ? ` · ${how}` : ""}`;
@@ -31,9 +34,10 @@ function ledgerRowView(e) {
   }
   return {
     isRefund,
+    isScholarship,
     label,
     charge: isCharge ? money(amt) : (isRefund ? money(Math.abs(amt)) : ""),
-    payment: (!isCharge && !isRefund) ? money(amt) : "",
+    payment: (e.kind === "payment" && !isRefund) ? money(amt) : (isScholarship ? money(amt) : ""),
   };
 }
 
@@ -3348,7 +3352,9 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
     const es = entriesFor(id);
     const charged = es.filter((e) => e.kind === "charge").reduce((a, e) => a + Number(e.amount || 0), 0);
     const paid = es.filter((e) => e.kind === "payment").reduce((a, e) => a + Number(e.amount || 0), 0);
-    return { charged, paid, balance: charged - paid };
+    // A scholarship is a credit toward the balance, but NOT cash collected.
+    const scholarship = es.filter((e) => e.kind === "scholarship").reduce((a, e) => a + Number(e.amount || 0), 0);
+    return { charged, paid, scholarship, balance: charged - paid - scholarship };
   };
   const nameOf = (id) => students.find((s) => s.id === id)?.full_name || "Student";
 
@@ -3366,20 +3372,23 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
     const rows = es.map((e) => {
       const amt = Number(e.amount) || 0;
       const isCharge = e.kind === "charge";
+      const isScholarship = e.kind === "scholarship";
       const isRefund = e.kind === "payment" && amt < 0; // negative payment = refund/credit
-      running += isCharge ? amt : -amt; // a refund (negative payment) correctly raises the balance
+      running += isCharge ? amt : -amt; // payment, scholarship, and refund all move the balance down (refund amt is negative so it raises it)
       // Clean up the description: refund rows get a plain "Refund" label and a
       // readable method, not the raw "card-refund" / stored text.
       let desc;
-      if (isRefund) {
+      if (isScholarship) {
+        desc = `Scholarship${e.description && e.description !== "Scholarship" ? ` <span class="method">(${e.description.replace(/</g, "&lt;")})</span>` : ""}`;
+      } else if (isRefund) {
         const m = /Stripe (re_[A-Za-z0-9]+)/.exec(e.description || "");
         desc = `Refund${m ? ` <span class="method">(Stripe ${m[1]})</span>` : (e.method ? ` <span class="method">(${e.method.replace("card-refund", "to card").replace("refund", "credit")})</span>` : "")}`;
       } else {
         desc = `${(e.description || (isCharge ? "Charge" : "Payment")).replace(/</g, "&lt;")}${e.method ? ` <span class="method">(${e.method})</span>` : ""}`;
       }
       const chargeCell = isCharge ? money(amt) : (isRefund ? money(Math.abs(amt)) : "");
-      const paymentCell = (!isCharge && !isRefund) ? money(amt) : "";
-      return `<tr${isRefund ? ' style="color:#B23A3A;"' : ""}>
+      const paymentCell = (e.kind === "payment" && !isRefund) ? money(amt) : (isScholarship ? money(amt) : "");
+      return `<tr${isRefund ? ' style="color:#B23A3A;"' : (isScholarship ? ' style="color:#C5922E;"' : "")}>
         <td>${fdate(e.date || e.created_at) || ""}</td>
         <td>${desc}</td>
         <td class="r">${chargeCell}</td>
@@ -3652,6 +3661,17 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
+  async function addScholarship() {
+    const input = window.prompt(`Record a scholarship for ${nameOf(selected)}.\n\nThis reduces their balance but is NOT counted as cash collected.\n\nScholarship amount:`, "");
+    if (input === null) return;
+    const amt = Math.round(Number(input) * 100) / 100;
+    if (isNaN(amt) || amt <= 0) { window.alert("Please enter a scholarship amount greater than zero."); return; }
+    const note = window.prompt("Description (optional) — e.g. 'Pastor's scholarship', 'Need-based award':", "Scholarship") || "Scholarship";
+    setBusy(true);
+    try { await db.addLedgerEntry({ student_id: selected, kind: "scholarship", description: note, amount: amt, date: todayStr() }); await refresh(); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
   async function addPayment() {
     if (!pay.amount) return;
     setBusy(true);
@@ -3736,7 +3756,10 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
               <Field label="Amount"><input style={inputStyle} value={charge.amount} onChange={(e) => setCharge({ ...charge, amount: e.target.value })} placeholder="300" inputMode="decimal" /></Field>
               <Field label="Date"><input type="date" style={inputStyle} value={charge.date} onChange={(e) => setCharge({ ...charge, date: e.target.value })} /></Field>
             </div>
-            <Btn small icon={Plus} onClick={addCharge} disabled={busy}>Add charge</Btn>
+            <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+              <Btn small icon={Plus} onClick={addCharge} disabled={busy}>Add charge</Btn>
+              <Btn small kind="ghost" icon={Award} onClick={addScholarship} disabled={busy}>Add scholarship</Btn>
+            </div>
           </Card>
           <Card>
             <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Record a payment</h3>
@@ -3816,9 +3839,9 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
           // Funds summary across ALL students.
           const sumFor = (list) => list.reduce((acc, s) => {
             const t = totals(s.id);
-            acc.charged += t.charged; acc.paid += t.paid; acc.balance += Math.max(0, t.balance);
+            acc.charged += t.charged; acc.paid += t.paid; acc.scholarship += t.scholarship; acc.balance += Math.max(0, t.balance);
             return acc;
-          }, { charged: 0, paid: 0, balance: 0 });
+          }, { charged: 0, paid: 0, scholarship: 0, balance: 0 });
           const all = sumFor(students);
           const act = sumFor(activeStudents);
           const owing = students.filter((s) => totals(s.id).balance > 0.005).length;
@@ -3830,10 +3853,10 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
               if (!list.length) return "";
               const body = list.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => {
                 const t = totals(s.id);
-                return `<tr><td>${(s.full_name || "").replace(/</g, "&lt;")}</td><td class="r">${money(t.charged)}</td><td class="r" style="color:#2e7d32">${money(t.paid)}</td><td class="r" style="color:${t.balance > 0.005 ? "#B23A3A" : "#2e7d32"};font-weight:700">${money(Math.max(0, t.balance))}</td></tr>`;
+                return `<tr><td>${(s.full_name || "").replace(/</g, "&lt;")}</td><td class="r">${money(t.charged)}</td><td class="r" style="color:#C5922E">${t.scholarship > 0 ? money(t.scholarship) : "—"}</td><td class="r" style="color:#2e7d32">${money(t.paid)}</td><td class="r" style="color:${t.balance > 0.005 ? "#B23A3A" : "#2e7d32"};font-weight:700">${money(Math.max(0, t.balance))}</td></tr>`;
               }).join("");
               const sub = sumFor(list);
-              return `<tr class="sub"><td colspan="4">${heading} (${list.length})</td></tr>${body}<tr class="tot"><td>Subtotal</td><td class="r">${money(sub.charged)}</td><td class="r">${money(sub.paid)}</td><td class="r">${money(sub.balance)}</td></tr>`;
+              return `<tr class="sub"><td colspan="5">${heading} (${list.length})</td></tr>${body}<tr class="tot"><td>Subtotal</td><td class="r">${money(sub.charged)}</td><td class="r">${money(sub.scholarship)}</td><td class="r">${money(sub.paid)}</td><td class="r">${money(sub.balance)}</td></tr>`;
             };
             const html = `<!doctype html><html><head><meta charset="utf-8"><title>Funds Report</title>
               <style>
@@ -3863,17 +3886,18 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
               <div class="cards">
                 <div class="card paid"><div class="lbl">Total Collected</div><div class="val">${money(all.paid)}</div></div>
                 <div class="card owed"><div class="lbl">Total Outstanding</div><div class="val">${money(all.balance)}</div></div>
+                ${all.scholarship > 0 ? `<div class="card"><div class="lbl">Scholarships</div><div class="val" style="color:#C5922E">${money(all.scholarship)}</div></div>` : ""}
                 <div class="card"><div class="lbl">Total Billed</div><div class="val">${money(all.charged)}</div></div>
               </div>
               <div class="sub2" style="text-align:left;margin-bottom:8px;">
                 ${students.length} students &bull; ${activeStudents.length} active, ${inactiveStudents.length} inactive &bull; ${owing} with a balance owing
               </div>
               <table>
-                <thead><tr><th>Student</th><th class="r">Billed</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
+                <thead><tr><th>Student</th><th class="r">Billed</th><th class="r">Scholarship</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
                 <tbody>
                   ${rowsHtml(activeStudents, "Active students")}
                   ${rowsHtml(inactiveStudents, "Inactive students")}
-                  <tr class="grand"><td>ALL STUDENTS</td><td class="r">${money(all.charged)}</td><td class="r">${money(all.paid)}</td><td class="r">${money(all.balance)}</td></tr>
+                  <tr class="grand"><td>ALL STUDENTS</td><td class="r">${money(all.charged)}</td><td class="r">${money(all.scholarship)}</td><td class="r">${money(all.paid)}</td><td class="r">${money(all.balance)}</td></tr>
                 </tbody>
               </table>
               <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
@@ -3898,6 +3922,7 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
                 <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
                   <th style={{ padding: "6px 8px" }}>Student</th>
                   <th style={{ padding: "6px 8px", textAlign: "right" }}>Charged</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Scholarship</th>
                   <th style={{ padding: "6px 8px", textAlign: "right" }}>Paid</th>
                   <th style={{ padding: "6px 8px", textAlign: "right" }}>Balance</th><th></th>
                 </tr></thead>
@@ -3908,6 +3933,7 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
                       <tr key={s.id} style={{ borderTop: `1px solid ${C.line}` }}>
                         <td style={{ padding: "10px 8px", fontWeight: 600, color: C.ink }}>{s.full_name}</td>
                         <td style={{ padding: "10px 8px", textAlign: "right" }}>{money(t.charged)}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", color: t.scholarship > 0 ? C.gold : C.muted }}>{t.scholarship > 0 ? money(t.scholarship) : "—"}</td>
                         <td style={{ padding: "10px 8px", textAlign: "right", color: C.green }}>{money(t.paid)}</td>
                         <td style={{ padding: "10px 8px", textAlign: "right", fontWeight: 700, color: t.balance > 0.005 ? C.rose : C.green }}>{money(t.balance)}</td>
                         <td style={{ padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
@@ -3946,6 +3972,12 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
                     <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.ink, marginTop: 2 }}>{money(all.charged)}</div>
                     <div className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{activeStudents.length} active · {inactiveStudents.length} inactive</div>
                   </div>
+                  {all.scholarship > 0 && (
+                    <div style={{ flex: "1 1 160px", background: "#fffaf0", border: `1px solid ${C.gold}44`, borderRadius: 10, padding: "14px 16px" }}>
+                      <div className="pl-body" style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".06em", color: C.muted }}>Scholarships Awarded</div>
+                      <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.gold, marginTop: 2 }}>{money(all.scholarship)}</div>
+                    </div>
+                  )}
                 </div>
               </Card>
 
@@ -4050,7 +4082,8 @@ function TuitionManager({ tuition, refresh }) {
 function StudentTuition({ ledger, tuition, profile }) {
   const charged = ledger.filter((e) => e.kind === "charge").reduce((a, e) => a + Number(e.amount || 0), 0);
   const paid = ledger.filter((e) => e.kind === "payment").reduce((a, e) => a + Number(e.amount || 0), 0);
-  const balance = charged - paid;
+  const scholarship = ledger.filter((e) => e.kind === "scholarship").reduce((a, e) => a + Number(e.amount || 0), 0);
+  const balance = charged - paid - scholarship;
   const es = [...ledger].sort((a, b) => (a.date < b.date ? -1 : 1));
 
   const prog = profile?.program;
