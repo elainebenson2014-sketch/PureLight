@@ -46,24 +46,25 @@ export async function listBooks() {
   return data;
 }
 
-export async function createBook({ title, author, description, pages, program, video_url, course_id, module, file }) {
+export async function createBook({ title, author, description, pages, program, category, video_url, course_id, module, file }) {
   let file_path = null;
   if (file) file_path = await uploadFile("books", file);
   const { data: { user } } = await supabase.auth.getUser();
   const { error } = await supabase.from("pl_books").insert({
-    title, author, description, pages: Number(pages) || 0, program: program || "all",
+    title, author, description, pages: Number(pages) || 0, program: program || "all", category: category || "book",
     video_url: video_url || null, course_id: course_id || null, module: module || null, file_path, created_by: user.id,
   });
   if (error) throw error;
 }
 
-export async function updateBook(id, { title, author, description, pages, program, video_url, course_id, module, file }) {
+export async function updateBook(id, { title, author, description, pages, program, category, video_url, course_id, module, file }) {
   const patch = {};
   if (title !== undefined) patch.title = title;
   if (author !== undefined) patch.author = author;
   if (description !== undefined) patch.description = description;
   if (pages !== undefined) patch.pages = Number(pages) || 0;
   if (program !== undefined) patch.program = program || "all";
+  if (category !== undefined) patch.category = category || "book";
   if (video_url !== undefined) patch.video_url = video_url || null;
   if (course_id !== undefined) patch.course_id = course_id || null;
   if (module !== undefined) patch.module = module || null;
