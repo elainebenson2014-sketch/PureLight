@@ -72,6 +72,13 @@ const STUDENT_PROGRAMS = PROGRAMS.filter((p) => p.key !== "all");
 const programLabel = (k) => PROGRAMS.find((p) => p.key === k)?.label || "All programs";
 const visibleFor = (items, program) => (items || []).filter((it) => it.program === "all" || it.program === program);
 
+const CATEGORIES = [
+  { key: "book", label: "Books" },
+  { key: "video", label: "Videos" },
+  { key: "music", label: "Music" },
+];
+const categoryLabel = (k) => CATEGORIES.find((c) => c.key === k)?.label || "Books";
+
 function ProgramSelect({ value, onChange, includeAll = true }) {
   const list = includeAll ? PROGRAMS : STUDENT_PROGRAMS;
   return (
@@ -421,7 +428,7 @@ function InstructorDash({ students, books, tests, subs, profiles, setActive }) {
 
 /* ---------- LIBRARY ---------- */
 function LibraryManager({ books, courses, refresh, profile }) {
-  const emptyForm = { title: "", author: profile.full_name, description: "", pages: "", program: "all", video_url: "", course_id: "", module: "", file: null };
+  const emptyForm = { title: "", author: profile.full_name, description: "", pages: "", program: "all", category: "book", video_url: "", course_id: "", module: "", file: null };
   const [mode, setMode] = useState("list");
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
@@ -433,7 +440,7 @@ function LibraryManager({ books, courses, refresh, profile }) {
   function startCreate() { setEditingId(null); setForm(emptyForm); setMode("create"); }
   function startEdit(b) {
     setEditingId(b.id);
-    setForm({ title: b.title || "", author: b.author || profile.full_name, description: b.description || "", pages: b.pages || "", program: b.program || "all", video_url: b.video_url || "", course_id: b.course_id || "", module: b.module || "", file: null });
+    setForm({ title: b.title || "", author: b.author || profile.full_name, description: b.description || "", pages: b.pages || "", program: b.program || "all", category: b.category || "book", video_url: b.video_url || "", course_id: b.course_id || "", module: b.module || "", file: null });
     setMode("create");
   }
 
@@ -454,7 +461,7 @@ function LibraryManager({ books, courses, refresh, profile }) {
   async function applyBulk() {
     if (!bulkCat || sel.size === 0) return;
     setBusy(true);
-    try { for (const id of sel) await db.updateBook(id, { program: bulkCat }); await refresh(); setSel(new Set()); setBulkCat(""); }
+    try { for (const id of sel) await db.updateBook(id, { category: bulkCat }); await refresh(); setSel(new Set()); setBulkCat(""); }
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
@@ -467,6 +474,7 @@ function LibraryManager({ books, courses, refresh, profile }) {
           <Field label="Title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Foundations of Biblical Theology" /></Field>
           <Field label="Author"><input style={inputStyle} value={form.author} onChange={(e) => setForm({ ...form, author: e.target.value })} /></Field>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 90 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+          <Field label="Category"><select style={inputStyle} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>{CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}</select></Field>
           <Field label="Program / level"><ProgramSelect value={form.program} onChange={(v) => setForm({ ...form, program: v })} /></Field>
           <Field label="Video link — YouTube, Vimeo, etc. (optional)"><input style={inputStyle} value={form.video_url} onChange={(e) => setForm({ ...form, video_url: e.target.value })} placeholder="https://youtu.be/…" /></Field>
           <CourseFields courses={courses} courseId={form.course_id} module={form.module} onCourse={(v) => { const c = courses.find((x) => x.id === v); setForm({ ...form, course_id: v, program: c && c.program ? c.program : form.program }); }} onModule={(v) => setForm({ ...form, module: v })} />
@@ -489,8 +497,8 @@ function LibraryManager({ books, courses, refresh, profile }) {
     );
   }
 
-  const shown = books.filter((b) => filter === "__all__" || (b.program || "all") === filter);
-  const groups = PROGRAMS.map((p) => ({ ...p, items: shown.filter((b) => (b.program || "all") === p.key) })).filter((g) => g.items.length > 0);
+  const shown = books.filter((b) => filter === "__all__" || (b.category || "book") === filter);
+  const groups = CATEGORIES.map((c) => ({ ...c, items: shown.filter((b) => (b.category || "book") === c.key) })).filter((g) => g.items.length > 0);
 
   return (
     <>
@@ -502,7 +510,7 @@ function LibraryManager({ books, courses, refresh, profile }) {
               <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Show category</span>
               <select style={{ ...inputStyle, maxWidth: 220 }} value={filter} onChange={(e) => setFilter(e.target.value)}>
                 <option value="__all__">All categories</option>
-                {PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+                {CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
               </select>
               <span className="pl-body" style={{ marginLeft: "auto", fontSize: 13, color: C.muted }}>{books.length} books</span>
             </div>
@@ -515,7 +523,7 @@ function LibraryManager({ books, courses, refresh, profile }) {
                 <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Move to category</span>
                 <select style={{ ...inputStyle, maxWidth: 200 }} value={bulkCat} onChange={(e) => setBulkCat(e.target.value)}>
                   <option value="">— choose —</option>
-                  {PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+                  {CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
                 </select>
                 <Btn small icon={Check} onClick={applyBulk} disabled={!bulkCat || busy}>{busy ? "Moving…" : "Apply"}</Btn>
                 <Btn small kind="ghost" onClick={() => setSel(new Set())}>Clear</Btn>
