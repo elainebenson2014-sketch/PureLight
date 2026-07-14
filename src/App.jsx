@@ -123,6 +123,13 @@ const TUITION_LEVELS = STUDENT_PROGRAMS.filter((p) => p.key !== "certificate");
 const programLabel = (k) => PROGRAMS.find((p) => p.key === k)?.label || "All programs";
 const visibleFor = (items, program) => (items || []).filter((it) => it.program === "all" || it.program === program);
 
+const CATEGORIES = [
+  { key: "book", label: "Books" },
+  { key: "video", label: "Videos" },
+  { key: "music", label: "Music" },
+];
+const categoryLabel = (k) => CATEGORIES.find((c) => c.key === k)?.label || "Books";
+
 const CE_TYPES = [
   { key: "none",     label: "Standard / Degree" },
   { key: "ce",       label: "CE Course — counts toward LPC renewal" },
@@ -515,70 +522,144 @@ function InstructorDash({ students, books, tests, subs, profiles, setActive }) {
 
 /* ---------- LIBRARY ---------- */
 function LibraryManager({ books, courses, refresh, profile }) {
+  const emptyForm = { title: "", author: profile.full_name, description: "", pages: "", program: "all", category: "book", video_url: "", course_id: "", module: "", file: null };
   const [mode, setMode] = useState("list");
-  const [form, setForm] = useState({ title: "", author: profile.full_name, description: "", pages: "", program: "all", video_url: "", course_id: "", module: "", file: null });
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(emptyForm);
   const [busy, setBusy] = useState(false);
+  const [sel, setSel] = useState(() => new Set());
+  const [filter, setFilter] = useState("__all__");
+  const [bulkCat, setBulkCat] = useState("");
+
+  function startCreate() { setEditingId(null); setForm(emptyForm); setMode("create"); }
+  function startEdit(b) {
+    setEditingId(b.id);
+    setForm({ title: b.title || "", author: b.author || profile.full_name, description: b.description || "", pages: b.pages || "", program: b.program || "all", category: b.category || "book", video_url: b.video_url || "", course_id: b.course_id || "", module: b.module || "", file: null });
+    setMode("create");
+  }
 
   async function save() {
     if (!form.title.trim()) return;
     setBusy(true);
-    try { await db.createBook(form); await refresh(); setForm({ title: "", author: profile.full_name, description: "", pages: "", program: "all", video_url: "", course_id: "", module: "", file: null }); setMode("list"); }
-    catch (e) { window.alert(e.message || "Upload failed"); }
+    try {
+      if (editingId) await db.updateBook(editingId, form); else await db.createBook(form);
+      await refresh(); setForm(emptyForm); setEditingId(null); setMode("list");
+    } catch (e) { window.alert(e.message || "Save failed"); }
     setBusy(false);
   }
   async function remove(id) {
     if (!window.confirm("Delete this book?")) return;
     try { await db.deleteBook(id); await refresh(); } catch (e) { window.alert(e.message); }
   }
+  function toggleSel(id) { setSel((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
+  async function applyBulk() {
+    if (!bulkCat || sel.size === 0) return;
+    setBusy(true);
+    try { for (const id of sel) await db.updateBook(id, { category: bulkCat }); await refresh(); setSel(new Set()); setBulkCat(""); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
 
   if (mode === "create") {
     return (
       <>
-        <PageHead title="Add a Book" sub="Create a title and upload its PDF." action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
+        <PageHead title={editingId ? "Edit Book" : "Add a Book"} sub={editingId ? "Update this item's details or category." : "Create a title and upload its PDF."} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => { setEditingId(null); setForm(emptyForm); setMode("list"); }}>Back</Btn>} />
         <Card style={{ maxWidth: 640 }}>
           <Field label="Title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Foundations of Biblical Theology" /></Field>
           <Field label="Author"><input style={inputStyle} value={form.author} onChange={(e) => setForm({ ...form, author: e.target.value })} /></Field>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 90 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+          <Field label="Category"><select style={inputStyle} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>{CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}</select></Field>
           <Field label="Program / level"><ProgramSelect value={form.program} onChange={(v) => setForm({ ...form, program: v })} /></Field>
           <Field label="Video link — YouTube, Vimeo, etc. (optional)"><input style={inputStyle} value={form.video_url} onChange={(e) => setForm({ ...form, video_url: e.target.value })} placeholder="https://youtu.be/…" /></Field>
           <CourseFields courses={courses} courseId={form.course_id} module={form.module} onCourse={(v) => { const c = courses.find((x) => x.id === v); setForm({ ...form, course_id: v, program: c && c.program ? c.program : form.program }); }} onModule={(v) => setForm({ ...form, module: v })} />
           <div className="grid grid-cols-2 gap-4">
             <Field label="Pages"><input style={inputStyle} type="number" value={form.pages} onChange={(e) => setForm({ ...form, pages: e.target.value })} /></Field>
-            <Field label="PDF or video file (optional)">
+            <Field label={editingId ? "Replace file (optional)" : "PDF or video file (optional)"}>
               <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
                 <Upload size={16} color={C.muted} />
                 <span className="pl-body" style={{ fontSize: 14, color: form.file ? C.text : C.muted }}>{form.file ? form.file.name : "Choose a file…"}</span>
-                <input type="file" accept="application/pdf,video/*" style={{ display: "none" }} onChange={(e) => setForm({ ...form, file: e.target.files[0] })} />
+                <input type="file" accept="application/pdf,video/*,audio/*" style={{ display: "none" }} onChange={(e) => setForm({ ...form, file: e.target.files[0] })} />
               </label>
             </Field>
           </div>
           <div className="flex gap-2" style={{ marginTop: 8 }}>
-            <Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Uploading…" : "Publish to library"}</Btn>
-            <Btn kind="ghost" onClick={() => setMode("list")}>Cancel</Btn>
+            <Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : editingId ? "Save changes" : "Publish to library"}</Btn>
+            <Btn kind="ghost" onClick={() => { setEditingId(null); setForm(emptyForm); setMode("list"); }}>Cancel</Btn>
           </div>
         </Card>
       </>
     );
   }
 
+  const shown = books.filter((b) => filter === "__all__" || (b.category || "book") === filter);
+  const groups = CATEGORIES.map((c) => ({ ...c, items: shown.filter((b) => (b.category || "book") === c.key) })).filter((g) => g.items.length > 0);
+
   return (
     <>
-      <PageHead title="Library" sub="Books available to your students." action={<Btn icon={Plus} onClick={() => setMode("create")}>Add book</Btn>} />
-      {books.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No books yet — add your first.</span></Card> :
-        <div className="grid grid-cols-3 gap-4">
-          {books.map((b) => (
-            <Card key={b.id}>
-              <div className="flex items-center justify-center" style={{ height: 110, borderRadius: 9, background: `linear-gradient(150deg, ${C.ink}, ${C.ink2})`, marginBottom: 14 }}><BookOpen size={34} color={C.goldSoft} /></div>
-              <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0, lineHeight: 1.2 }}>{b.title}</h3>
-              <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{b.author} • {b.pages} pp • {programLabel(b.program)}</div>
-              <p className="pl-body" style={{ fontSize: 13.5, color: C.text, marginTop: 8, lineHeight: 1.5 }}>{b.description}</p>
-              <div className="flex justify-between items-center" style={{ marginTop: 14 }}>
-                <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>{b.video_url ? "Video link" : b.file_path ? "File attached" : "No media"}</span>
-                <button onClick={() => remove(b.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
+      <PageHead title="Library" sub="Books available to your students, organized by category." action={<Btn icon={Plus} onClick={startCreate}>Add book</Btn>} />
+      {books.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No books yet — add your first.</span></Card> : (
+        <>
+          <Card style={{ marginBottom: 14 }}>
+            <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+              <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Show category</span>
+              <select style={{ ...inputStyle, maxWidth: 220 }} value={filter} onChange={(e) => setFilter(e.target.value)}>
+                <option value="__all__">All categories</option>
+                {CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+              <span className="pl-body" style={{ marginLeft: "auto", fontSize: 13, color: C.muted }}>{books.length} books</span>
+            </div>
+          </Card>
+
+          {sel.size > 0 && (
+            <Card style={{ marginBottom: 14, background: C.paper2 }}>
+              <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+                <span className="pl-body" style={{ fontWeight: 700, color: C.ink }}>{sel.size} selected</span>
+                <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Move to category</span>
+                <select style={{ ...inputStyle, maxWidth: 200 }} value={bulkCat} onChange={(e) => setBulkCat(e.target.value)}>
+                  <option value="">— choose —</option>
+                  {CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                </select>
+                <Btn small icon={Check} onClick={applyBulk} disabled={!bulkCat || busy}>{busy ? "Moving…" : "Apply"}</Btn>
+                <Btn small kind="ghost" onClick={() => setSel(new Set())}>Clear</Btn>
               </div>
             </Card>
+          )}
+
+          {groups.map((g) => (
+            <div key={g.key} style={{ marginBottom: 22 }}>
+              <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
+                <h3 className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink, margin: 0 }}>{g.label}</h3>
+                <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>· {g.items.length}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                {g.items.map((b) => {
+                  const checked = sel.has(b.id);
+                  return (
+                    <Card key={b.id} style={checked ? { outline: `2px solid ${C.gold}` } : undefined}>
+                      <div className="flex items-center justify-center" style={{ position: "relative", height: 110, borderRadius: 9, background: `linear-gradient(150deg, ${C.ink}, ${C.ink2})`, marginBottom: 14 }}>
+                        <label style={{ position: "absolute", top: 8, left: 8, cursor: "pointer", display: "flex" }} title="Select">
+                          <input type="checkbox" checked={checked} onChange={() => toggleSel(b.id)} style={{ width: 18, height: 18, cursor: "pointer" }} />
+                        </label>
+                        <BookOpen size={34} color={C.goldSoft} />
+                      </div>
+                      <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0, lineHeight: 1.2 }}>{b.title}</h3>
+                      <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{b.author} • {b.pages} pp • {programLabel(b.program)}</div>
+                      <p className="pl-body" style={{ fontSize: 13.5, color: C.text, marginTop: 8, lineHeight: 1.5 }}>{b.description}</p>
+                      <div className="flex justify-between items-center" style={{ marginTop: 14 }}>
+                        <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>{b.video_url ? "Video link" : b.file_path ? "File attached" : "No media"}</span>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => startEdit(b)} title="Edit" className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.muted }}><PencilLine size={16} /></button>
+                          <button onClick={() => remove(b.id)} title="Delete" className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            </div>
           ))}
-        </div>}
+        </>
+      )}
     </>
   );
 }
@@ -1553,13 +1634,23 @@ function StudentLibrary({ books, courses }) {
       </div>
     </Card>
   );
+  const groups = CATEGORIES.map((c) => ({ ...c, items: books.filter((b) => (b.category || "book") === c.key) })).filter((g) => g.items.length > 0);
   return (
     <>
-      <PageHead title="Library" sub="Lessons and materials, organized by course." />
-      {books.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No lessons available yet.</span></Card> :
-        <Grouped items={books} courses={courses}>
-          {(items) => <div className="grid grid-cols-3 gap-4">{items.map(card)}</div>}
-        </Grouped>}
+      <PageHead title="Library" sub="Lessons and materials, organized by type." />
+      {books.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No lessons available yet.</span></Card> : (
+        <>
+          {groups.map((g) => (
+            <div key={g.key} style={{ marginBottom: 22 }}>
+              <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
+                <h3 className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink, margin: 0 }}>{g.label}</h3>
+                <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>· {g.items.length}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-4">{g.items.map(card)}</div>
+            </div>
+          ))}
+        </>
+      )}
     </>
   );
 }
