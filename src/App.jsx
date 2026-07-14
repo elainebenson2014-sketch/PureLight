@@ -150,93 +150,25 @@ const gradeLetter = (score) => {
 const TRANSCRIPT_PROGRAMS = [
   { key: "associate", label: "Associate Degree Program" },
   { key: "bachelor", label: "Bachelor in Theology" },
-  { key: "master1", label: "Master Degree Program — Year I" },
-  { key: "master2", label: "Master Degree Program — Year II" },
+  { key: "master", label: "Master Degree Program" },
+  { key: "doctorate", label: "Doctoral Program" },
+  { key: "phd", label: "PhD Program" },
 ];
-// c = credit course [code, name, hours]; i = scored item (exam/thesis, no hours); hd = section header (not scored)
-const CURRICULUM = {
+// Which app-course codes fall in which semester (guided by the campus grade sheets). Codes are normalized (dashes ignored) when matched to your catalog.
+const TRANSCRIPT_LAYOUT = {
   associate: [
-    { sem: "Fall Semester", lines: [
-      { c: "ABS101", n: "Introduction to the Bible", h: 12 },
-      { hd: "Synoptic & St. John's Gospel" },
-      { c: "ABS102", n: "Matthew", h: 6 }, { c: "ABS103", n: "Mark", h: 5 },
-      { c: "ABS104", n: "Luke", h: 5 }, { c: "ABS105", n: "John", h: 5 },
-      { c: "ATS115", n: "Background to the Old Testament", h: 12 },
-      { c: "ATS115", n: "The Survey of the Old Testament", h: 12 },
-      { c: "ATS115", n: "Between the Testament", h: 12 },
-      { i: "Mid-Term Exam" }, { i: "Final Exam" },
-    ] },
-    { sem: "Spring Semester", lines: [
-      { c: "ABS106", n: "Acts of the Apostles", h: 10 },
-      { hd: "Pauline Letters" },
-      { c: "ABS107", n: "Romans", h: 5 }, { c: "ABS108", n: "I Corinthians", h: 5 },
-      { c: "ABS109", n: "II Corinthians", h: 5 }, { c: "ABS110", n: "Galatians", h: 5 },
-      { c: "ATS115", n: "New Testament Background", h: 12 },
-      { c: "ATS115", n: "The Survey of the New Testament", h: 12 },
-      { c: "ATS116", n: "Church History", h: 6 },
-      { i: "Mid-Term Exam" }, { i: "Final Exam" }, { i: "Thesis" },
-    ] },
+    { sem: "Fall Semester", codes: ["ABS-101", "ABS-102", "ABS-103", "ABS-104", "ABS-105", "ABS-106", "ATS-115"] },
+    { sem: "Spring Semester", codes: ["ABS-107", "ABS-108", "ABS-109", "ABS-110", "ABS-111", "ATS-116"] },
   ],
   bachelor: [
-    { sem: "Fall Semester", lines: [
-      { c: "BBS201", n: "Ephesians", h: 2 }, { c: "BBS202", n: "Philippians", h: 2 },
-      { c: "BBS203", n: "Colossians", h: 2 }, { c: "BBS204", n: "I & II Thessalonians", h: 2 },
-      { c: "BBS205", n: "I & II Timothy", h: 3 }, { c: "BBS206", n: "Titus & Philemon", h: 3 },
-      { c: "BBS207", n: "Hebrews", h: 2 },
-      { hd: "7 General Epistles" },
-      { c: "BBS208", n: "James", h: 2 }, { c: "BBS209", n: "I & II Peter", h: 2 },
-      { c: "BBS210", n: "John I-III & Jude", h: 2 }, { c: "BBS211", n: "Revelation", h: 3 },
-      { c: "BTS215", n: "Systematic Theology Part I", h: 6 }, { c: "BTS216", n: "Homiletics", h: 6 },
-      { c: "BTS217", n: "Systematic Theology Part II", h: 6 },
-      { i: "Mid-Term Exam" }, { i: "Final Exam" },
-    ] },
-    { sem: "Spring Semester", lines: [
-      { hd: "The Pentateuch Books" },
-      { c: "BBS212", n: "Genesis", h: 3 }, { c: "BBS213", n: "Exodus", h: 3 },
-      { hd: "Historical Books" },
-      { c: "BBS214", n: "Ruth & Esther", h: 2 }, { c: "BBS215", n: "Ezra & Nehemiah", h: 2 },
-      { hd: "Poetic & Wisdom Book" },
-      { c: "BBS216", n: "Proverbs", h: 3 },
-      { hd: "Major Prophets" },
-      { c: "BBS217", n: "Isaiah", h: 2 }, { c: "BBS218", n: "Daniel", h: 2 },
-      { c: "BTS218", n: "Chronological Events of the Rapture & Tribulation Period", h: 4 },
-      { i: "Mid-Term Exam" }, { i: "Final Exam" }, { i: "Thesis" },
-    ] },
+    { sem: "Fall Semester", codes: ["BBS-201", "BBS-202", "BBS-203", "BBS-204", "BBS-205", "BBS-206", "BBS-207", "BBS-208", "BBS-209", "BBS-210", "BBS-211", "BTS-215", "BTS-216", "BTS-217"] },
+    { sem: "Spring Semester", codes: ["BBS-212", "BBS-213", "BBS-214", "BBS-215", "BBS-216", "BBS-217", "BBS-218", "BTS-218"] },
   ],
-  master1: [
-    { sem: "Fall Semester", lines: [
-      { c: "MBS401", n: "My Servants the Prophets & Obadiah", h: 1 }, { c: "MBS402", n: "Joel & Jonah", h: 1 },
-      { c: "MBS403", n: "Amos & Hosea", h: 2 }, { c: "MBS404", n: "Micah & Zephaniah", h: 1 },
-      { c: "MBS405", n: "Nahum, Habakkuk & Haggai", h: 3 }, { c: "MBS406", n: "Zechariah & Malachi", h: 2 },
-      { c: "MBS407", n: "Jeremiah", h: 4 }, { c: "MTS415", n: "Christian Education", h: 3 },
-      { c: "MTS416", n: "Church Government", h: 3 }, { c: "MTS417", n: "Church Administration", h: 3 },
-      { c: "MTS418", n: "Church Leadership", h: 4 }, { c: "MTS419", n: "Effective Evangelism", h: 3 },
-      { c: "MTS420", n: "How to Cook For the Whole Church", h: 4 },
-      { i: "Mid-Term Exam" }, { i: "Final Exam" },
-    ] },
-    { sem: "Spring Semester", lines: [
-      { c: "MBS408", n: "The Prophecy of Ezekiel", h: 4 }, { c: "MBS409", n: "The Book of Job", h: 4 },
-      { c: "MBS410", n: "Lamentations", h: 2 }, { c: "MTS421", n: "Apologetics", h: 4 },
-      { c: "MTS422", n: "Christian Ethics", h: 4 }, { c: "MTS423", n: "Angelology", h: 4 },
-      { c: "MTS424", n: "Demonology", h: 4 },
-      { i: "Mid-Term Exam" }, { i: "Final Exam" }, { i: "Thesis" },
-    ] },
-  ],
-  master2: [
-    { sem: "Fall Semester", lines: [
-      { c: "MBS416", n: "Kings 1", h: 4 }, { c: "MBS417", n: "Kings 2", h: 4 },
-      { c: "MBS418", n: "Song of Solomon", h: 2 }, { c: "MBS419", n: "Joshua", h: 2 },
-      { c: "MBS420", n: "Samuel & Saul", h: 2 }, { c: "MBS421", n: "Judges", h: 2 },
-      { c: "MTS432", n: "World Religion", h: 4 }, { c: "MTS434", n: "Biblical Counseling", h: 10 },
-      { i: "Mid-Term Exam" }, { i: "Final Exam" },
-    ] },
-    { sem: "Spring Semester", lines: [
-      { c: "MBS422", n: "Psalms I & II", h: 4 }, { c: "MBS423", n: "Psalms III & IV", h: 4 },
-      { c: "MBS424", n: "Psalms V", h: 2 }, { c: "MBS425", n: "Ecclesiastes", h: 2 },
-      { c: "MTS433", n: "Introduction to Missiology", h: 2 }, { c: "MTS435", n: "Pastoral Ministry", h: 4 },
-      { c: "MTS436", n: "Christian Philosophy", h: 4 },
-      { i: "Mid-Term Exam" }, { i: "Final Exam" }, { i: "Thesis" },
-    ] },
+  master: [
+    { sem: "Year I \u2014 Fall Semester", codes: ["MBS-401", "MBS-402", "MBS-403", "MBS-404", "MBS-405", "MBS-406", "MBS-407", "MTS-415", "MTS-416", "MTS-417", "MTS-418", "MTS-419", "MTS-420"] },
+    { sem: "Year I \u2014 Spring Semester", codes: ["MBS-408", "MBS-409", "MBS-410", "MTS-421", "MTS-422", "MTS-423"] },
+    { sem: "Year II \u2014 Fall Semester", codes: ["MBS-416", "MBS-417", "MBS-418", "MBS-419", "MBS-420", "MBS-421", "MTS-432", "MTS-434"] },
+    { sem: "Year II \u2014 Spring Semester", codes: ["MBS-422", "MBS-423", "MBS-424", "MBS-425", "MTS-433", "MTS-435", "MTS-436"] },
   ],
 };
 
@@ -463,59 +395,78 @@ function Auth() {
 }
 
 /* ============================================================ INSTRUCTOR */
-function TranscriptManager({ students }) {
+function TranscriptManager({ students, courses, subs, tests, hwSubs, homework }) {
   const [studentId, setStudentId] = useState("");
   const [program, setProgram] = useState("associate");
-  const [scores, setScores] = useState({});
+  const [manual, setManual] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedNote, setSavedNote] = useState("");
 
   const student = students.find((s) => s.id === studentId);
-  const semesters = CURRICULUM[program] || [];
-  const lineKey = (si, li) => `${si}:${li}`;
+  const norm = (c) => String(c || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+
+  const progCourses = (courses || []).filter((c) => c.program === program && !c.is_certificate);
+  const layout = TRANSCRIPT_LAYOUT[program];
+  let semesters;
+  if (layout) {
+    const used = new Set();
+    semesters = layout.map((b) => {
+      const list = b.codes.map((cd) => progCourses.find((c) => norm(c.code) === norm(cd))).filter(Boolean);
+      list.forEach((c) => used.add(c.id));
+      return { sem: b.sem, courses: list };
+    });
+    const other = progCourses.filter((c) => !used.has(c.id));
+    if (other.length) semesters.push({ sem: "Other Courses", courses: other });
+  } else {
+    semesters = [{ sem: "Program Courses", courses: progCourses }];
+  }
 
   useEffect(() => {
-    if (!studentId) { setScores({}); return; }
-    let alive = true;
-    setLoading(true);
+    if (!studentId) { setManual({}); return; }
+    let alive = true; setLoading(true);
     db.listTranscriptGrades(studentId)
       .then((rows) => {
         if (!alive) return;
-        const map = {};
-        (rows || []).filter((r) => r.program === program).forEach((r) => { map[r.line_key] = r.score == null ? "" : String(r.score); });
-        setScores(map);
+        const m = {};
+        (rows || []).filter((r) => r.program === program).forEach((r) => { m[r.line_key] = r.score == null ? "" : String(r.score); });
+        setManual(m);
       })
       .catch((e) => window.alert(e.message))
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [studentId, program]);
 
-  function setScore(k, v) { setScores((prev) => ({ ...prev, [k]: v })); setSavedNote(""); }
-
-  function semStats(si) {
-    const sem = semesters[si];
-    let hours = 0; const scored = [];
-    sem.lines.forEach((ln, li) => {
-      if (ln.c) hours += Number(ln.h) || 0;
-      if (ln.c || ln.i) {
-        const v = scores[lineKey(si, li)];
-        if (v !== "" && v != null && !isNaN(Number(v))) scored.push(Number(v));
-      }
-    });
-    const avg = scored.length ? scored.reduce((a, b) => a + b, 0) / scored.length : null;
-    return { hours, avg };
+  function autoScore(courseId) {
+    if (!studentId || !courseId) return null;
+    const pcts = [];
+    (subs || []).filter((s) => s.student_id === studentId && s.status === "graded" && s.max_score)
+      .forEach((s) => { const t = (tests || []).find((x) => x.id === s.test_id); if (t && t.course_id === courseId) pcts.push((s.score / s.max_score) * 100); });
+    (hwSubs || []).filter((s) => s.student_id === studentId && s.status === "graded" && s.max_points)
+      .forEach((s) => { const h = (homework || []).find((x) => x.id === s.homework_id); if (h && h.course_id === courseId) pcts.push((s.score / s.max_points) * 100); });
+    if (!pcts.length) return null;
+    return Math.round((pcts.reduce((a, b) => a + b, 0) / pcts.length) * 100) / 100;
   }
-  const cumHours = semesters.reduce((a, _s, si) => a + semStats(si).hours, 0);
+  function effective(courseId) {
+    const m = manual[courseId];
+    if (m !== undefined && m !== "" && m != null && !isNaN(Number(m))) return Number(m);
+    return autoScore(courseId);
+  }
+  function setScore(courseId, v) { setManual((p) => ({ ...p, [courseId]: v })); setSavedNote(""); }
+
+  function semStats(sem) {
+    let hours = 0; const sc = [];
+    sem.courses.forEach((c) => { hours += Number(c.credit_hours) || 0; const e = effective(c.id); if (e != null) sc.push(e); });
+    return { hours, avg: sc.length ? sc.reduce((a, b) => a + b, 0) / sc.length : null };
+  }
+  const cumHours = semesters.reduce((a, s) => a + semStats(s).hours, 0);
 
   async function save() {
     if (!studentId) return;
     setSaving(true);
     try {
       const rows = [];
-      semesters.forEach((sem, si) => sem.lines.forEach((ln, li) => {
-        if (ln.c || ln.i) rows.push({ line_key: lineKey(si, li), score: scores[lineKey(si, li)] ?? "" });
-      }));
+      semesters.forEach((sem) => sem.courses.forEach((c) => { rows.push({ line_key: c.id, score: manual[c.id] ?? "" }); }));
       await db.saveTranscriptGrades(studentId, program, rows);
       setSavedNote("Saved.");
     } catch (e) { window.alert(e.message); }
@@ -534,26 +485,24 @@ function TranscriptManager({ students }) {
   function generate() {
     if (!student) { window.alert("Choose a student first."); return; }
     const progLabel = TRANSCRIPT_PROGRAMS.find((p) => p.key === program)?.label || "";
-    const rowsFor = (si) => semesters[si].lines.map((ln, li) => {
-      if (ln.hd) return `<tr class="hd"><td colspan="5">${ln.hd}</td></tr>`;
-      const v = scores[lineKey(si, li)];
-      const sc = (v === "" || v == null) ? "" : v;
-      return `<tr><td>${ln.c || ""}</td><td>${(ln.n || ln.i || "").replace(/</g, "&lt;")}</td><td class="c">${ln.i ? "" : (ln.h ?? "")}</td><td class="c">${sc}</td><td class="c">${gradeLetter(v)}</td></tr>`;
-    }).join("");
-    const semBlock = semesters.map((sem, si) => {
-      const st = semStats(si);
+    const semBlock = semesters.map((sem) => {
+      const st = semStats(sem);
+      const rows = sem.courses.map((c) => {
+        const e = effective(c.id);
+        return `<tr><td>${c.code || ""}</td><td>${(c.title || "").replace(/</g, "&lt;")}</td><td class="c">${c.credit_hours ?? ""}</td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`;
+      }).join("");
       return `<div class="semt">${sem.sem}</div>
         <table><thead><tr><th>Code</th><th>Course</th><th class="c">Cr. Hrs</th><th class="c">Grade</th><th class="c">Alpha</th></tr></thead>
-        <tbody>${rowsFor(si)}
+        <tbody>${rows}
         <tr class="tot"><td></td><td>Semester Totals</td><td class="c">${st.hours}</td><td class="c">${st.avg != null ? st.avg.toFixed(2) : ""}</td><td class="c">${gradeLetter(st.avg)}</td></tr></tbody></table>`;
     }).join("");
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Official Academic Record — ${student.full_name}</title>
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Official Academic Record \u2014 ${student.full_name}</title>
       <style>*{box-sizing:border-box}body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;max-width:820px;margin:0 auto;padding:28px}
       .hdr{text-align:center;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px}.hdr h1{font-size:20px;margin:0}.hdr .sub{font-size:12px;color:#333;margin-top:3px}
       .title{text-align:center;font-weight:bold;letter-spacing:.08em;margin:14px 0 8px}.meta{font-size:13px;margin:2px 0}.meta b{display:inline-block;min-width:150px}
       .semt{font-weight:bold;margin:16px 0 4px;background:#f0ece2;padding:4px 8px}table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:4px}
       th,td{border:1px solid #cfcabb;padding:4px 6px;text-align:left}th{background:#faf8f2}td.c,th.c{text-align:center}
-      tr.hd td{font-style:italic;background:#fbfaf6;font-weight:bold}tr.tot td{font-weight:bold;background:#f6f3ea}
+      tr.tot td{font-weight:bold;background:#f6f3ea}
       .foot{margin-top:18px;text-align:center;font-size:11px;color:#555;border-top:1px solid #ccc;padding-top:8px}@media print{body{padding:0}}</style></head>
       <body onload="window.print()">
       <div class="hdr"><h1>${SCHOOL.name}</h1><div class="sub">${SCHOOL.head}</div><div class="sub">${SCHOOL.addr}</div><div class="sub">${SCHOOL.phone} &bull; ${SCHOOL.fax}</div></div>
@@ -569,7 +518,7 @@ function TranscriptManager({ students }) {
 
   return (
     <>
-      <PageHead title="Transcripts" sub="Enter each course score; grades, averages, and hours compute automatically. Generate the official academic record." />
+      <PageHead title="Transcripts" sub="Scores auto-fill from the gradebook where courses are graded; type to override. Grades, averages, and hours compute automatically." />
       <Card style={{ marginBottom: 16 }}>
         <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
           <Field label="Student"><select style={{ ...inputStyle, minWidth: 220 }} value={studentId} onChange={(e) => setStudentId(e.target.value)}>
@@ -580,43 +529,46 @@ function TranscriptManager({ students }) {
             {TRANSCRIPT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
           </select></Field>
           <div style={{ marginLeft: "auto" }} className="flex gap-2">
-            <Btn kind="ghost" icon={Check} onClick={save} disabled={!studentId || saving}>{saving ? "Saving…" : "Save"}</Btn>
+            <Btn kind="ghost" icon={Check} onClick={save} disabled={!studentId || saving}>{saving ? "Saving…" : "Save overrides"}</Btn>
             <Btn icon={ScrollText} onClick={generate} disabled={!studentId}>Generate record</Btn>
           </div>
         </div>
         {savedNote && <div className="pl-body" style={{ fontSize: 13, color: C.green, marginTop: 6 }}>{savedNote}</div>}
       </Card>
 
-      {!studentId ? <Card><span className="pl-body" style={{ color: C.muted }}>Choose a student to enter or view their transcript.</span></Card> :
-        loading ? <Card><span className="pl-body" style={{ color: C.muted }}>Loading…</span></Card> : (
+      {!studentId ? <Card><span className="pl-body" style={{ color: C.muted }}>Choose a student to build their transcript.</span></Card> :
+        loading ? <Card><span className="pl-body" style={{ color: C.muted }}>Loading…</span></Card> :
+        progCourses.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No courses found for this program in your catalog.</span></Card> : (
         <>
           {semesters.map((sem, si) => {
-            const st = semStats(si);
+            const st = semStats(sem);
             return (
               <Card key={si} style={{ marginBottom: 16 }}>
                 <h3 className="pl-display" style={{ fontSize: 16, color: C.ink, margin: "0 0 10px" }}>{sem.sem}</h3>
+                {sem.courses.length === 0 ? <span className="pl-body" style={{ color: C.muted, fontSize: 13 }}>No courses.</span> : (
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
                     <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12, textTransform: "uppercase", letterSpacing: ".05em" }}>
                       <th style={{ padding: "5px 8px", width: 80 }}>Code</th>
                       <th style={{ padding: "5px 8px" }}>Course</th>
                       <th style={{ padding: "5px 8px", textAlign: "center", width: 70 }}>Cr. Hrs</th>
-                      <th style={{ padding: "5px 8px", textAlign: "center", width: 90 }}>Score</th>
+                      <th style={{ padding: "5px 8px", textAlign: "center", width: 110 }}>Score</th>
                       <th style={{ padding: "5px 8px", textAlign: "center", width: 60 }}>Grade</th>
                     </tr></thead>
                     <tbody>
-                      {sem.lines.map((ln, li) => {
-                        if (ln.hd) return <tr key={li}><td colSpan={5} style={{ padding: "6px 8px", fontStyle: "italic", fontWeight: 700, color: C.ink2, background: C.paper2 }}>{ln.hd}</td></tr>;
-                        const k = lineKey(si, li);
-                        const v = scores[k] ?? "";
-                        const lt = gradeLetter(v);
+                      {sem.courses.map((c) => {
+                        const auto = autoScore(c.id);
+                        const m = manual[c.id];
+                        const hasManual = m !== undefined && m !== "" && m != null;
+                        const eff = effective(c.id);
+                        const lt = gradeLetter(eff);
                         return (
-                          <tr key={li} style={{ borderTop: `1px solid ${C.line}` }}>
-                            <td style={{ padding: "6px 8px", color: C.muted, fontSize: 12.5 }}>{ln.c || ""}</td>
-                            <td style={{ padding: "6px 8px", color: C.ink }}>{ln.n || ln.i}</td>
-                            <td style={{ padding: "6px 8px", textAlign: "center", color: C.muted }}>{ln.c ? ln.h : ""}</td>
+                          <tr key={c.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                            <td style={{ padding: "6px 8px", color: C.muted, fontSize: 12.5 }}>{c.code || ""}</td>
+                            <td style={{ padding: "6px 8px", color: C.ink }}>{c.title}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "center", color: C.muted }}>{c.credit_hours ?? "—"}</td>
                             <td style={{ padding: "4px 8px", textAlign: "center" }}>
-                              <input value={v} onChange={(e) => setScore(k, e.target.value)} inputMode="decimal" placeholder="—" style={{ ...inputStyle, width: 72, textAlign: "center", padding: "5px 6px" }} />
+                              <input value={hasManual ? m : ""} onChange={(e) => setScore(c.id, e.target.value)} inputMode="decimal" placeholder={auto != null ? `${auto} (auto)` : "—"} style={{ ...inputStyle, width: 96, textAlign: "center", padding: "5px 6px" }} />
                             </td>
                             <td style={{ padding: "6px 8px", textAlign: "center", fontWeight: 700, color: lt === "F" ? C.rose : lt ? C.green : C.muted }}>{lt || "—"}</td>
                           </tr>
@@ -632,6 +584,7 @@ function TranscriptManager({ students }) {
                     </tbody>
                   </table>
                 </div>
+                )}
               </Card>
             );
           })}
@@ -646,7 +599,6 @@ function TranscriptManager({ students }) {
     </>
   );
 }
-
 function InstructorPortal({ profile, onLogout }) {
   const [active, setActive] = useState("dash");
   const [books, setBooks] = useState([]);
@@ -749,7 +701,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} />}
           {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
-          {active === "transcripts" && profile.role === "admin" && <TranscriptManager students={students} />}
+          {active === "transcripts" && profile.role === "admin" && <TranscriptManager students={students} courses={courses} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} />}
           {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
           {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} courses={courses} tuition={tuition} refresh={refresh} />}
           {active === "tuition" && profile.role === "admin" && <TuitionManager tuition={tuition} refresh={refresh} />}
