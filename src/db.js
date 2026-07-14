@@ -79,6 +79,20 @@ export async function deleteBook(id) {
   if (error) throw error;
 }
 
+/* ---------------- TRANSCRIPTS ---------------- */
+export async function listTranscriptGrades(student_id) {
+  const { data, error } = await supabase.from("pl_transcript_grades").select("*").eq("student_id", student_id);
+  if (error) throw error;
+  return data || [];
+}
+export async function saveTranscriptGrades(student_id, program, rows) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const payload = (rows || []).map((r) => ({ student_id, program, line_key: r.line_key, score: (r.score === "" || r.score == null ? null : Number(r.score)), updated_by: user.id }));
+  if (payload.length === 0) return;
+  const { error } = await supabase.from("pl_transcript_grades").upsert(payload, { onConflict: "student_id,program,line_key" });
+  if (error) throw error;
+}
+
 /* ---------------- TESTS + QUESTIONS ---------------- */
 export async function listTests() {
   const { data, error } = await supabase
