@@ -568,7 +568,7 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
                             <td style={{ padding: "6px 8px", color: C.ink }}>{c.title}</td>
                             <td style={{ padding: "6px 8px", textAlign: "center", color: C.muted }}>{c.credit_hours ?? "—"}</td>
                             <td style={{ padding: "4px 8px", textAlign: "center" }}>
-                              <input value={hasManual ? m : ""} onChange={(e) => setScore(c.id, e.target.value)} inputMode="decimal" placeholder={auto != null ? `${auto} (auto)` : "—"} style={{ ...inputStyle, width: 96, textAlign: "center", padding: "5px 6px" }} />
+                              <input value={hasManual ? m : ""} onChange={(e) => setScore(c.id, e.target.value)} inputMode="decimal" placeholder={auto != null ? `${auto}` : "—"} style={{ ...inputStyle, width: 96, textAlign: "center", padding: "5px 6px" }} />
                             </td>
                             <td style={{ padding: "6px 8px", textAlign: "center", fontWeight: 700, color: lt === "F" ? C.rose : lt ? C.green : C.muted }}>{lt || "—"}</td>
                           </tr>
