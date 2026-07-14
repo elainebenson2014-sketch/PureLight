@@ -2343,6 +2343,8 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
   const [busy, setBusy] = useState(false);
   const [csvNote, setCsvNote] = useState(null);
   const [progFilter, setProgFilter] = useState("all");
+  const [gradedQ, setGradedQ] = useState("");
+  const [openHw, setOpenHw] = useState(() => new Set());
   const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
   const titleOf = (id) => homework.find((h) => h.id === id)?.title || "Homework";
 
@@ -2672,24 +2674,54 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
       </div>
 
       <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Graded</h3>
-      <div className="flex flex-col gap-3">
-        {graded.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>None yet.</span></Card>}
-        {graded.map((s) => (
-          <Card key={s.id}>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
-                <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{titleOf(s.homework_id)}</div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_points ? Math.round((s.score / s.max_points) * 100) : 0}%</span>
-                <Btn small kind="ghost" icon={PencilLine} onClick={() => openGrade(s)}>Edit grade</Btn>
-                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), nameOf(s.student_id))}>View / Print</Btn>
-              </div>
+      {graded.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>None yet.</span></Card> : (() => {
+        const q = gradedQ.trim().toLowerCase();
+        const pctOf = (s) => s.max_points ? Math.round((s.score / s.max_points) * 100) : 0;
+        const match = (s) => !q || nameOf(s.student_id).toLowerCase().includes(q) || titleOf(s.homework_id).toLowerCase().includes(q);
+        const shown = graded.filter(match);
+        const byId = new Map(); const groups = [];
+        shown.forEach((s) => { if (!byId.has(s.homework_id)) { const g = { id: s.homework_id, title: titleOf(s.homework_id), subs: [] }; byId.set(s.homework_id, g); groups.push(g); } byId.get(s.homework_id).subs.push(s); });
+        groups.sort((a, b) => a.title.localeCompare(b.title));
+        return (
+          <>
+            <Card style={{ marginBottom: 12 }}>
+              <input value={gradedQ} onChange={(e) => setGradedQ(e.target.value)} placeholder="Search graded by student or assignment…" style={inputStyle} />
+            </Card>
+            <div className="flex flex-col gap-3">
+              {groups.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No matches.</span></Card>}
+              {groups.map((g) => {
+                const avg = g.subs.length ? Math.round(g.subs.reduce((a, s) => a + pctOf(s), 0) / g.subs.length) : 0;
+                const open = q ? true : openHw.has(g.id);
+                return (
+                  <Card key={g.id} style={{ padding: 0, overflow: "hidden" }}>
+                    <div className="flex items-center justify-between pl-press" style={{ padding: "14px 16px", cursor: "pointer" }} onClick={() => setOpenHw((prev) => { const n = new Set(prev); n.has(g.id) ? n.delete(g.id) : n.add(g.id); return n; })}>
+                      <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
+                        <ChevronRight size={16} color={C.muted} style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+                        <span className="pl-body" style={{ fontWeight: 700, color: C.ink, fontSize: 15 }}>{g.title}</span>
+                      </div>
+                      <span className="pl-body" style={{ fontSize: 12.5, color: C.muted, whiteSpace: "nowrap", marginLeft: 10 }}>{g.subs.length} graded · avg {avg}%</span>
+                    </div>
+                    {open && (
+                      <div style={{ borderTop: `1px solid ${C.line}` }}>
+                        {g.subs.slice().sort((a, b) => nameOf(a.student_id).localeCompare(nameOf(b.student_id))).map((s) => (
+                          <div key={s.id} className="flex items-center justify-between" style={{ padding: "10px 16px", borderTop: `1px solid ${C.line}` }}>
+                            <span className="pl-body" style={{ fontWeight: 600, fontSize: 14.5, color: C.ink }}>{nameOf(s.student_id)}</span>
+                            <div className="flex items-center gap-3">
+                              <span className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: pctOf(s) >= 70 ? C.green : C.rose }}>{pctOf(s)}%</span>
+                              <Btn small kind="ghost" icon={PencilLine} onClick={() => openGrade(s)}>Edit</Btn>
+                              <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), nameOf(s.student_id))}>View / Print</Btn>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
             </div>
-          </Card>
-        ))}
-      </div>
+          </>
+        );
+      })()}
     </>
   );
 }
