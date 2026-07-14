@@ -402,6 +402,8 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedNote, setSavedNote] = useState("");
+  const [batchSel, setBatchSel] = useState(() => new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
 
   const student = students.find((s) => s.id === studentId);
   const norm = (c) => String(c || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
@@ -505,40 +507,89 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
     window.open(url, "_blank");
   }
 
-  function generate() {
-    if (!student) { window.alert("Choose a student first."); return; }
+  function autoScoreFor(sid, courseId) {
+    if (!sid || !courseId) return null;
+    const pcts = [];
+    (subs || []).filter((s) => s.student_id === sid && s.status === "graded" && s.max_score)
+      .forEach((s) => { const t = (tests || []).find((x) => x.id === s.test_id); if (t && t.course_id === courseId) pcts.push((s.score / s.max_score) * 100); });
+    (hwSubs || []).filter((s) => s.student_id === sid && s.status === "graded" && s.max_points)
+      .forEach((s) => { const h = (homework || []).find((x) => x.id === s.homework_id); if (h && h.course_id === courseId) pcts.push((s.score / s.max_points) * 100); });
+    if (!pcts.length) return null;
+    return Math.round((pcts.reduce((a, b) => a + b, 0) / pcts.length) * 100) / 100;
+  }
+  function examAutoFor(sid, sem, type) {
+    if (!sid) return null;
+    const kw = type === "mid" ? "mid" : "final";
+    const cands = (tests || []).filter((t) => {
+      if (t.program !== program) return false;
+      const title = (t.title || "").toLowerCase();
+      if (!title.includes(kw)) return false;
+      if ((sem.term || []).some((x) => !title.includes(x))) return false;
+      if ((sem.not || []).some((x) => title.includes(x))) return false;
+      return true;
+    });
+    for (const t of cands) {
+      const s = (subs || []).find((x) => x.test_id === t.id && x.student_id === sid && x.status === "graded" && x.max_score);
+      if (s) return Math.round((s.score / s.max_score) * 100 * 100) / 100;
+    }
+    return null;
+  }
+  function recordBody(stu, mmap) {
     const progLabel = TRANSCRIPT_PROGRAMS.find((p) => p.key === program)?.label || "";
+    const num = (v) => (v !== undefined && v !== "" && v != null && !isNaN(Number(v)));
+    const effC = (id) => (num(mmap[id]) ? Number(mmap[id]) : autoScoreFor(stu.id, id));
+    const effE = (sem, si, type) => { const k = `EXAM-${type}-${si}`; return num(mmap[k]) ? Number(mmap[k]) : examAutoFor(stu.id, sem, type); };
+    const stat = (sem, si) => { let hours = 0; const sc = []; sem.courses.forEach((c) => { hours += Number(c.credit_hours) || 0; const e = effC(c.id); if (e != null) sc.push(e); }); if (sem.exams) { const em = effE(sem, si, "mid"); if (em != null) sc.push(em); const ef = effE(sem, si, "final"); if (ef != null) sc.push(ef); } return { hours, avg: sc.length ? sc.reduce((a, b) => a + b, 0) / sc.length : null }; };
     const examRow = (label, e) => `<tr><td></td><td>${label}</td><td class="c"></td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`;
     const semBlock = semesters.map((sem, si) => {
-      const st = semStats(sem, si);
-      const rows = sem.courses.map((c) => {
-        const e = effCourse(c.id);
-        return `<tr><td>${c.code || ""}</td><td>${(c.title || "").replace(/</g, "&lt;")}</td><td class="c">${c.credit_hours ?? ""}</td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`;
-      }).join("");
-      const exams = sem.exams ? examRow("Mid-Term Exam", effExam(sem, si, "mid")) + examRow("Final Exam", effExam(sem, si, "final")) : "";
-      return `<div class="semt">${sem.sem}</div>
-        <table><thead><tr><th>Code</th><th>Course</th><th class="c">Cr. Hrs</th><th class="c">Grade</th><th class="c">Alpha</th></tr></thead>
-        <tbody>${rows}${exams}
-        <tr class="tot"><td></td><td>Semester Totals</td><td class="c">${st.hours}</td><td class="c">${st.avg != null ? st.avg.toFixed(2) : ""}</td><td class="c">${gradeLetter(st.avg)}</td></tr></tbody></table>`;
+      const st = stat(sem, si);
+      const rows = sem.courses.map((c) => { const e = effC(c.id); return `<tr><td>${c.code || ""}</td><td>${(c.title || "").replace(/</g, "&lt;")}</td><td class="c">${c.credit_hours ?? ""}</td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`; }).join("");
+      const exams = sem.exams ? examRow("Mid-Term Exam", effE(sem, si, "mid")) + examRow("Final Exam", effE(sem, si, "final")) : "";
+      return `<div class="semt">${sem.sem}</div><table><thead><tr><th>Code</th><th>Course</th><th class="c">Cr. Hrs</th><th class="c">Grade</th><th class="c">Alpha</th></tr></thead><tbody>${rows}${exams}<tr class="tot"><td></td><td>Semester Totals</td><td class="c">${st.hours}</td><td class="c">${st.avg != null ? st.avg.toFixed(2) : ""}</td><td class="c">${gradeLetter(st.avg)}</td></tr></tbody></table>`;
     }).join("");
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Official Academic Record \u2014 ${student.full_name}</title>
-      <style>*{box-sizing:border-box}body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;max-width:820px;margin:0 auto;padding:28px}
+    const cum = semesters.reduce((a, s, si) => a + stat(s, si).hours, 0);
+    return `<div class="rec"><div class="hdr"><h1>${SCHOOL.name}</h1><div class="sub">${SCHOOL.head}</div><div class="sub">${SCHOOL.addr}</div><div class="sub">${SCHOOL.phone} &bull; ${SCHOOL.fax}</div></div>
+      <div class="title">OFFICIAL ACADEMIC RECORD</div>
+      <div class="meta"><b>Name of Student:</b> ${stu.full_name}</div>
+      <div class="meta"><b>Course of Study:</b> ${progLabel}</div>
+      <div class="meta"><b>Date Issued:</b> ${new Date().toLocaleDateString()}</div>
+      ${semBlock}
+      <table style="margin-top:8px"><tbody><tr class="tot"><td></td><td>Total Credit Hours Completed</td><td class="c">${cum}</td><td class="c"></td><td class="c"></td></tr></tbody></table>
+      <div class="foot">${SCHOOL.name} &bull; Official Academic Record</div></div>`;
+  }
+  function pageWrap(title, inner) {
+    return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
+      <style>*{box-sizing:border-box}body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;margin:0;padding:0}
+      .rec{max-width:820px;margin:0 auto;padding:28px;page-break-after:always}.rec:last-child{page-break-after:auto}
       .hdr{text-align:center;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px}.hdr h1{font-size:20px;margin:0}.hdr .sub{font-size:12px;color:#333;margin-top:3px}
       .title{text-align:center;font-weight:bold;letter-spacing:.08em;margin:14px 0 8px}.meta{font-size:13px;margin:2px 0}.meta b{display:inline-block;min-width:150px}
       .semt{font-weight:bold;margin:16px 0 4px;background:#f0ece2;padding:4px 8px}table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:4px}
       th,td{border:1px solid #cfcabb;padding:4px 6px;text-align:left}th{background:#faf8f2}td.c,th.c{text-align:center}
       tr.tot td{font-weight:bold;background:#f6f3ea}
-      .foot{margin-top:18px;text-align:center;font-size:11px;color:#555;border-top:1px solid #ccc;padding-top:8px}@media print{body{padding:0}}</style></head>
-      <body onload="window.print()">
-      <div class="hdr"><h1>${SCHOOL.name}</h1><div class="sub">${SCHOOL.head}</div><div class="sub">${SCHOOL.addr}</div><div class="sub">${SCHOOL.phone} &bull; ${SCHOOL.fax}</div></div>
-      <div class="title">OFFICIAL ACADEMIC RECORD</div>
-      <div class="meta"><b>Name of Student:</b> ${student.full_name}</div>
-      <div class="meta"><b>Course of Study:</b> ${progLabel}</div>
-      <div class="meta"><b>Date Issued:</b> ${new Date().toLocaleDateString()}</div>
-      ${semBlock}
-      <table style="margin-top:8px"><tbody><tr class="tot"><td></td><td>Total Credit Hours Completed</td><td class="c">${cumHours}</td><td class="c"></td><td class="c"></td></tr></tbody></table>
-      <div class="foot">${SCHOOL.name} &bull; Official Academic Record</div></body></html>`;
-    openHtml(html);
+      .foot{margin-top:18px;text-align:center;font-size:11px;color:#555;border-top:1px solid #ccc;padding-top:8px}@media print{.rec{padding:0}}</style></head>
+      <body onload="window.print()">${inner}</body></html>`;
+  }
+  function generate() {
+    if (!student) { window.alert("Choose a student first."); return; }
+    openHtml(pageWrap(`Official Academic Record — ${student.full_name}`, recordBody(student, manual)));
+  }
+  async function generateBatch() {
+    const ids = [...batchSel];
+    if (!ids.length) { window.alert("Select at least one student."); return; }
+    setBatchBusy(true);
+    try {
+      const parts = [];
+      for (const id of ids) {
+        const stu = students.find((s) => s.id === id);
+        if (!stu) continue;
+        const rows = await db.listTranscriptGrades(id);
+        const mmap = {};
+        (rows || []).filter((r) => r.program === program).forEach((r) => { mmap[r.line_key] = r.score == null ? "" : String(r.score); });
+        parts.push(recordBody(stu, mmap));
+      }
+      openHtml(pageWrap(`Transcripts — ${TRANSCRIPT_PROGRAMS.find((p) => p.key === program)?.label || ""}`, parts.join("")));
+    } catch (e) { window.alert(e.message); }
+    setBatchBusy(false);
   }
 
   const examInputRow = (sem, si, type, label) => {
@@ -579,6 +630,28 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
           </div>
         </div>
         {savedNote && <div className="pl-body" style={{ fontSize: 13, color: C.green, marginTop: 6 }}>{savedNote}</div>}
+      </Card>
+
+      <Card style={{ marginBottom: 16 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ minWidth: 0 }}>
+            <div className="pl-body" style={{ fontWeight: 700, color: C.ink }}>Batch export for main campus</div>
+            <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>Select students to export their {TRANSCRIPT_PROGRAMS.find((p) => p.key === program)?.label} records as one document — each on its own page — to save as PDF and email.</div>
+          </div>
+          <div className="flex gap-2" style={{ flexWrap: "wrap" }}>
+            <Btn small kind="ghost" onClick={() => setBatchSel(new Set(students.map((s) => s.id)))}>Select all</Btn>
+            <Btn small kind="ghost" onClick={() => setBatchSel(new Set())}>Clear</Btn>
+            <Btn small icon={ScrollText} onClick={generateBatch} disabled={batchBusy || batchSel.size === 0}>{batchBusy ? "Preparing…" : `Download ${batchSel.size || ""} record${batchSel.size === 1 ? "" : "s"}`.replace("  ", " ")}</Btn>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 4, maxHeight: 200, overflowY: "auto", border: `1px solid ${C.line}`, borderRadius: 8, padding: 10 }}>
+          {students.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => (
+            <label key={s.id} className="flex items-center gap-2" style={{ cursor: "pointer", padding: "3px 2px" }}>
+              <input type="checkbox" checked={batchSel.has(s.id)} onChange={() => setBatchSel((prev) => { const n = new Set(prev); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; })} />
+              <span className="pl-body" style={{ fontSize: 13.5, color: C.ink }}>{s.full_name}</span>
+            </label>
+          ))}
+        </div>
       </Card>
 
       {!studentId ? <Card><span className="pl-body" style={{ color: C.muted }}>Choose a student to build their transcript.</span></Card> :
