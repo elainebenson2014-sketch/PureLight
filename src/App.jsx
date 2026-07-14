@@ -3,15 +3,61 @@ import {
   BookOpen, FileText, Users, Mail, LayoutDashboard, Plus, Upload, Trash2, Send,
   ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
   ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal, Receipt, BarChart3, LayoutGrid,
+  Reply, FileCheck, BarChart2, Star, MessageSquare, ClipboardList, ToggleLeft, ToggleRight, CornerDownRight, ThumbsUp, RotateCcw,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
 import {
-  C, FONTS, QTYPE, inputStyle, Btn, Card, Field, PageHead, Stat, Shell, Spinner, Initials, BRAND,
+  C, FONTS, QTYPE, inputStyle, Btn, Card, Field, PageHead, Stat, Shell, Spinner, Initials, BRAND, FEATURES,
 } from "./ui.jsx";
 
 const sumPoints = (questions) => (questions || []).reduce((a, q) => a + (Number(q.points) || 0), 0);
 const money = (n) => "$" + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Describe a ledger entry for display. A negative "payment" is a refund/credit:
+// it should read as "Refund", show its amount as a positive in the Charge column
+// (since it raises the balance), and never appear as a negative "payment".
+function ledgerRowView(e) {
+  const amt = Number(e.amount) || 0;
+  const isCharge = e.kind === "charge";
+  const isScholarship = e.kind === "scholarship";
+  const isRefund = e.kind === "payment" && amt < 0;
+  let label;
+  if (isScholarship) {
+    label = `Scholarship${e.description && e.description !== "Scholarship" ? ` · ${e.description}` : ""}`;
+  } else if (isRefund) {
+    const m = /Stripe (re_[A-Za-z0-9]+)/.exec(e.description || "");
+    const how = m ? `Stripe ${m[1]}` : (e.method || "").replace("card-refund", "to card").replace("refund", "credit");
+    label = `Refund${how ? ` · ${how}` : ""}`;
+  } else {
+    label = (e.description || (isCharge ? "Charge" : "Payment")) + (e.method ? ` · ${e.method}` : "");
+  }
+  return {
+    isRefund,
+    isScholarship,
+    label,
+    charge: isCharge ? money(amt) : (isRefund ? money(Math.abs(amt)) : ""),
+    payment: (e.kind === "payment" && !isRefund) ? money(amt) : (isScholarship ? money(amt) : ""),
+  };
+}
+
+
+// Program-aware document masthead. For the CERTIFICATE program, both names
+// appear with The Healed Place leading and the Fully Known tagline. For DEGREE
+// programs, only NCTS Pure Light School of Ministry appears (no Healed Place, no tagline).
+function docMastheadHtml(program) {
+  const isCert = program === "certificate" || /cert/i.test(String(program || ""));
+  if (isCert) {
+    return `<div class="mast">
+      <div class="school">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
+      <div class="brand">THE HEALED PLACE</div>
+      <div class="tag">Fully Known — Identity, Healing, and Deliverance</div>
+    </div>`;
+  }
+  return `<div class="mast">
+    <div class="brand">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
+  </div>`;
+}
 
 /* ---- Grade scale + GPA (standard 4.0) ---- */
 function gradeInfo(pct) {
@@ -65,19 +111,30 @@ const PROGRAMS = [
   { key: "associate", label: "Associate" },
   { key: "bachelor", label: "Bachelor" },
   { key: "master", label: "Master" },
+  { key: "master2", label: "Master 2" },
   { key: "doctorate", label: "Doctoral" },
   { key: "phd", label: "PhD" },
 ];
 const STUDENT_PROGRAMS = PROGRAMS.filter((p) => p.key !== "all");
+// Tuition (Registration/Books/installments) only applies to the formal degree
+// ladder. "Certificate" students pay per-course via Cert Classes instead, so
+// it's excluded here even though it stays selectable as a program/field above.
+const TUITION_LEVELS = STUDENT_PROGRAMS.filter((p) => p.key !== "certificate");
 const programLabel = (k) => PROGRAMS.find((p) => p.key === k)?.label || "All programs";
 const visibleFor = (items, program) => (items || []).filter((it) => it.program === "all" || it.program === program);
 
-const CATEGORIES = [
-  { key: "book", label: "Books" },
-  { key: "video", label: "Videos" },
-  { key: "music", label: "Music" },
+const CE_TYPES = [
+  { key: "none",     label: "Standard / Degree" },
+  { key: "ce",       label: "CE Course — counts toward LPC renewal" },
+  { key: "faith_ce", label: "Faith-Based CE — counts toward LPC renewal" },
+  { key: "open",     label: "Open / Elective — no CE credit" },
 ];
-const categoryLabel = (k) => CATEGORIES.find((c) => c.key === k)?.label || "Books";
+const isCEType = (t) => t === "ce" || t === "faith_ce";
+const ceTypeLabel = (k) => CE_TYPES.find((x) => x.key === k)?.label || "Standard";
+
+// Online tuition payment. The checkout + webhook functions handle tuition_level
+// payments (registration / books / installments), so this is live.
+const TUITION_PAY_ENABLED = true;
 
 function ProgramSelect({ value, onChange, includeAll = true }) {
   const list = includeAll ? PROGRAMS : STUDENT_PROGRAMS;
@@ -227,6 +284,13 @@ function Auth() {
           options: { data: { full_name: form.name.trim() } },
         });
         if (error) throw error;
+        // Let the office know. Fire-and-forget: a mail hiccup must never stop
+        // someone from creating their account.
+        fetch("/api/notify-new-account", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: form.name.trim(), email: form.email.trim() }),
+        }).catch((e) => console.error("new-account alert failed", e));
         setMsg({ ok: true, text: "Account created. If email confirmation is on, check your inbox, then sign in." });
         setTab("signin");
       }
@@ -299,18 +363,28 @@ function InstructorPortal({ profile, onLogout }) {
   const [assignments, setAssignments] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [certEnrollments, setCertEnrollments] = useState([]);
+  const [tuition, setTuition] = useState([]);
+  const [forms, setForms] = useState([]);
+  const [formSubs, setFormSubs] = useState([]);
+  const [surveys, setSurveys] = useState([]);
+  const [surveyResps, setSurveyResps] = useState([]);
+  const [resources, setResources] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
+    const safe = (p) => p.then((v) => v).catch((e) => { console.error(e); return undefined; });
     try {
-      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen] = await Promise.all([
-        db.listBooks(), db.listTests(), db.listSubmissions(), db.listProfiles(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listInstructorCourses(), db.listSessions(),
-        db.listCertEnrollments(),
+      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen, tu, fr, fs, sv, sr, rs, an] = await Promise.all([
+        safe(db.listBooks()), safe(db.listTests()), safe(db.listSubmissions()), safe(db.listProfiles()), safe(db.listMessages()),
+        safe(db.listSyllabi()), safe(db.listHomework()), safe(db.listHomeworkSubmissions()), safe(db.listCourses()), safe(db.listAttendance()), safe(db.listCertificates()), safe(db.listLedger()), safe(db.listInstructorCourses()), safe(db.listSessions()),
+        safe(db.listCertEnrollments()), safe(db.listTuition()),
+        safe(db.listForms()), safe(db.listFormSubmissions()), safe(db.listSurveys()), safe(db.listSurveyResponses()), safe(db.listResources()), safe(db.listAnnouncements()),
       ]);
-      setBooks(b); setTests(t); setSubs(s); setProfiles(p); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setAssignments(ic); setSessions(se);
-      setCertEnrollments(cen);
+      if (b) setBooks(b); if (t) setTests(t); if (s) setSubs(s); if (p) setProfiles(p); if (m) setMessages(m);
+      if (sy) setSyllabi(sy); if (hw) setHomework(hw); if (hs) setHwSubs(hs); if (co) setCourses(co); if (at) setAttendance(at); if (ce) setCertificates(ce); if (lg) setLedger(lg); if (ic) setAssignments(ic); if (se) setSessions(se);
+      if (cen) setCertEnrollments(cen); if (tu) setTuition(tu);
+      if (fr) setForms(fr); if (fs) setFormSubs(fs); if (sv) setSurveys(sv); if (sr) setSurveyResps(sr); if (rs) setResources(rs); if (an) setAnnouncements(an);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -322,27 +396,33 @@ function InstructorPortal({ profile, onLogout }) {
   const pendingHw = hwSubs.filter((s) => s.status !== "graded").length;
 
   const fullNav = [
-    { key: "dash", label: "Dashboard", icon: LayoutDashboard },
-    { key: "courses", label: "Courses", icon: GraduationCap },
-    { key: "library", label: "Library", icon: Library },
-    { key: "syllabus", label: "Syllabus", icon: ScrollText },
-    { key: "tests", label: "Tests", icon: FileText },
-    { key: "homework", label: "Homework", icon: NotebookPen },
-    { key: "classes", label: "Live Classes", icon: PlayCircle },
-    { key: "attendance", label: "Attendance", icon: CalendarDays },
-    { key: "grading", label: "Grading", icon: ClipboardCheck },
-    { key: "reports", label: "Reports", icon: BarChart3 },
-    { key: "gradebook", label: "Gradebook", icon: LayoutGrid },
-    { key: "students", label: "People", icon: Users },
-    { key: "billing", label: "Billing", icon: Receipt },
-    { key: "certificates", label: "Certificates", icon: Medal },
-    { key: "certprograms", label: "Cert Classes", icon: Award },
-    { key: "messages", label: "Messages", icon: Mail },
-  ];
+    { key: "dash",        label: "Dashboard",   icon: LayoutDashboard, show: true },
+    { key: "courses",     label: "Courses",      icon: GraduationCap,   show: true },
+    { key: "library",     label: "Library",      icon: Library,         show: FEATURES.library },
+    { key: "syllabus",    label: "Syllabus",     icon: ScrollText,      show: FEATURES.syllabus },
+    { key: "tests",       label: "Tests",        icon: FileText,        show: FEATURES.tests },
+    { key: "homework",    label: "Homework",     icon: NotebookPen,     show: FEATURES.homework },
+    { key: "classes",     label: "Live Classes", icon: PlayCircle,      show: FEATURES.live_classes },
+    { key: "attendance",  label: "Attendance",   icon: CalendarDays,    show: FEATURES.attendance },
+    { key: "grading",     label: "Grading",      icon: ClipboardCheck,  show: FEATURES.grading },
+    { key: "reports",     label: "Reports",      icon: BarChart3,       show: FEATURES.reports },
+    { key: "gradebook",   label: "Gradebook",    icon: LayoutGrid,      show: FEATURES.gradebook },
+    { key: "students",    label: "People",       icon: Users,           show: FEATURES.people },
+    { key: "billing",     label: "Billing",      icon: Receipt,         show: FEATURES.billing },
+    { key: "tuition",     label: "Tuition",      icon: GraduationCap,   show: FEATURES.tuition },
+    { key: "certificates",label: "Certificates", icon: Medal,           show: FEATURES.certificates },
+    { key: "certprograms",label: "Cert Classes", icon: Award,           show: FEATURES.cert_classes },
+    { key: "cehours",     label: "CE Hours",     icon: Clock,           show: FEATURES.ce_hours },
+    { key: "forms",       label: "Forms",        icon: FileCheck,       show: true },
+    { key: "surveys",     label: "Surveys",      icon: BarChart2,       show: true },
+    { key: "resources",   label: "Resources",    icon: BookOpen,        show: true },
+    { key: "announce",    label: "Announcements",icon: Sparkles,        show: true },
+    { key: "messages",    label: "Messages",     icon: Mail,            show: FEATURES.messages },
+  ].filter((n) => n.show);
   // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
   let nav = fullNav;
-  if (profile.role === "instructor") nav = fullNav.filter((n) => !["students", "billing", "certificates", "certprograms"].includes(n.key));
-  else if (profile.role === "assistant") nav = fullNav.filter((n) => !["billing", "certificates", "certprograms"].includes(n.key));
+  if (profile.role === "instructor") nav = fullNav.filter((n) => !["students", "billing", "tuition", "certificates", "certprograms"].includes(n.key));
+  else if (profile.role === "assistant") nav = fullNav.filter((n) => !["billing", "tuition", "certificates", "certprograms"].includes(n.key));
 
   // For an Instructor, grading is limited to the courses they're assigned.
   const myCourseSet = profile.role === "instructor"
@@ -368,9 +448,15 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
-          {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} refresh={refresh} />}
+          {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} courses={courses} tuition={tuition} refresh={refresh} />}
+          {active === "tuition" && profile.role === "admin" && <TuitionManager tuition={tuition} refresh={refresh} />}
           {active === "certificates" && profile.role === "admin" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
           {active === "certprograms" && profile.role === "admin" && <CertClassesManager courses={courses} students={students} profiles={profiles} tests={tests} homework={homework} subs={subs} hwSubs={hwSubs} certificates={certificates} enrollments={certEnrollments} ledger={ledger} refresh={refresh} />}
+          {active === "cehours" && profile.role === "admin" && <CEHoursDashboard students={students} courses={courses} subs={subs} tests={tests} certificates={certificates} refresh={refresh} />}
+          {active === "forms" && <FormsManager forms={forms} formSubs={formSubs} profiles={profiles} refresh={refresh} />}
+          {active === "surveys" && <SurveyBuilder surveys={surveys} surveyResps={surveyResps} profiles={profiles} refresh={refresh} />}
+          {active === "resources" && <ResourcesManager resources={resources} refresh={refresh} />}
+          {active === "announce" && <AnnouncementsManager announcements={announcements} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
         </>
       )}
@@ -380,13 +466,14 @@ function InstructorPortal({ profile, onLogout }) {
 
 function InstructorDash({ students, books, tests, subs, profiles, setActive }) {
   const pending = subs.filter((s) => s.status !== "graded");
+  const activeStudents = students.filter((s) => (s.status || "active") === "active");
   const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
   const titleOf = (id) => tests.find((t) => t.id === id)?.title || "Test";
   return (
     <>
       <PageHead title="Dashboard" sub="Welcome back. Here is the state of your school." />
       <div className="grid grid-cols-4 gap-4" style={{ marginBottom: 24 }}>
-        <Stat icon={Users} label="Enrolled students" value={students.length} />
+        <Stat icon={Users} label="Active students" value={activeStudents.length} />
         <Stat icon={BookOpen} label="Books in library" value={books.length} />
         <Stat icon={FileText} label="Tests created" value={tests.length} />
         <Stat icon={ClipboardCheck} label="Awaiting grading" value={pending.length} tone={C.gold} />
@@ -428,59 +515,36 @@ function InstructorDash({ students, books, tests, subs, profiles, setActive }) {
 
 /* ---------- LIBRARY ---------- */
 function LibraryManager({ books, courses, refresh, profile }) {
-  const emptyForm = { title: "", author: profile.full_name, description: "", pages: "", program: "all", category: "book", video_url: "", course_id: "", module: "", file: null };
   const [mode, setMode] = useState("list");
-  const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState({ title: "", author: profile.full_name, description: "", pages: "", program: "all", video_url: "", course_id: "", module: "", file: null });
   const [busy, setBusy] = useState(false);
-  const [sel, setSel] = useState(() => new Set());
-  const [filter, setFilter] = useState("__all__");
-  const [bulkCat, setBulkCat] = useState("");
-
-  function startCreate() { setEditingId(null); setForm(emptyForm); setMode("create"); }
-  function startEdit(b) {
-    setEditingId(b.id);
-    setForm({ title: b.title || "", author: b.author || profile.full_name, description: b.description || "", pages: b.pages || "", program: b.program || "all", category: b.category || "book", video_url: b.video_url || "", course_id: b.course_id || "", module: b.module || "", file: null });
-    setMode("create");
-  }
 
   async function save() {
     if (!form.title.trim()) return;
     setBusy(true);
-    try {
-      if (editingId) await db.updateBook(editingId, form); else await db.createBook(form);
-      await refresh(); setForm(emptyForm); setEditingId(null); setMode("list");
-    } catch (e) { window.alert(e.message || "Save failed"); }
+    try { await db.createBook(form); await refresh(); setForm({ title: "", author: profile.full_name, description: "", pages: "", program: "all", video_url: "", course_id: "", module: "", file: null }); setMode("list"); }
+    catch (e) { window.alert(e.message || "Upload failed"); }
     setBusy(false);
   }
   async function remove(id) {
     if (!window.confirm("Delete this book?")) return;
     try { await db.deleteBook(id); await refresh(); } catch (e) { window.alert(e.message); }
   }
-  function toggleSel(id) { setSel((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
-  async function applyBulk() {
-    if (!bulkCat || sel.size === 0) return;
-    setBusy(true);
-    try { for (const id of sel) await db.updateBook(id, { category: bulkCat }); await refresh(); setSel(new Set()); setBulkCat(""); }
-    catch (e) { window.alert(e.message); }
-    setBusy(false);
-  }
 
   if (mode === "create") {
     return (
       <>
-        <PageHead title={editingId ? "Edit Book" : "Add a Book"} sub={editingId ? "Update this book's details or category." : "Create a title and upload its PDF."} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => { setEditingId(null); setForm(emptyForm); setMode("list"); }}>Back</Btn>} />
+        <PageHead title="Add a Book" sub="Create a title and upload its PDF." action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
         <Card style={{ maxWidth: 640 }}>
           <Field label="Title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Foundations of Biblical Theology" /></Field>
           <Field label="Author"><input style={inputStyle} value={form.author} onChange={(e) => setForm({ ...form, author: e.target.value })} /></Field>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 90 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
-          <Field label="Category"><select style={inputStyle} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>{CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}</select></Field>
           <Field label="Program / level"><ProgramSelect value={form.program} onChange={(v) => setForm({ ...form, program: v })} /></Field>
           <Field label="Video link — YouTube, Vimeo, etc. (optional)"><input style={inputStyle} value={form.video_url} onChange={(e) => setForm({ ...form, video_url: e.target.value })} placeholder="https://youtu.be/…" /></Field>
           <CourseFields courses={courses} courseId={form.course_id} module={form.module} onCourse={(v) => { const c = courses.find((x) => x.id === v); setForm({ ...form, course_id: v, program: c && c.program ? c.program : form.program }); }} onModule={(v) => setForm({ ...form, module: v })} />
           <div className="grid grid-cols-2 gap-4">
             <Field label="Pages"><input style={inputStyle} type="number" value={form.pages} onChange={(e) => setForm({ ...form, pages: e.target.value })} /></Field>
-            <Field label={editingId ? "Replace file (optional)" : "PDF or video file (optional)"}>
+            <Field label="PDF or video file (optional)">
               <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
                 <Upload size={16} color={C.muted} />
                 <span className="pl-body" style={{ fontSize: 14, color: form.file ? C.text : C.muted }}>{form.file ? form.file.name : "Choose a file…"}</span>
@@ -489,7 +553,7 @@ function LibraryManager({ books, courses, refresh, profile }) {
             </Field>
           </div>
           <div className="flex gap-2" style={{ marginTop: 8 }}>
-            <Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : editingId ? "Save changes" : "Publish to library"}</Btn>
+            <Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Uploading…" : "Publish to library"}</Btn>
             <Btn kind="ghost" onClick={() => setMode("list")}>Cancel</Btn>
           </div>
         </Card>
@@ -497,75 +561,24 @@ function LibraryManager({ books, courses, refresh, profile }) {
     );
   }
 
-  const shown = books.filter((b) => filter === "__all__" || (b.category || "book") === filter);
-  const groups = CATEGORIES.map((c) => ({ ...c, items: shown.filter((b) => (b.category || "book") === c.key) })).filter((g) => g.items.length > 0);
-
   return (
     <>
-      <PageHead title="Library" sub="Books available to your students, organized by category." action={<Btn icon={Plus} onClick={startCreate}>Add book</Btn>} />
-      {books.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No books yet — add your first.</span></Card> : (
-        <>
-          <Card style={{ marginBottom: 14 }}>
-            <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
-              <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Show category</span>
-              <select style={{ ...inputStyle, maxWidth: 220 }} value={filter} onChange={(e) => setFilter(e.target.value)}>
-                <option value="__all__">All categories</option>
-                {CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-              </select>
-              <span className="pl-body" style={{ marginLeft: "auto", fontSize: 13, color: C.muted }}>{books.length} books</span>
-            </div>
-          </Card>
-
-          {sel.size > 0 && (
-            <Card style={{ marginBottom: 14, background: C.paper2 }}>
-              <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
-                <span className="pl-body" style={{ fontWeight: 700, color: C.ink }}>{sel.size} selected</span>
-                <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Move to category</span>
-                <select style={{ ...inputStyle, maxWidth: 200 }} value={bulkCat} onChange={(e) => setBulkCat(e.target.value)}>
-                  <option value="">— choose —</option>
-                  {CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-                </select>
-                <Btn small icon={Check} onClick={applyBulk} disabled={!bulkCat || busy}>{busy ? "Moving…" : "Apply"}</Btn>
-                <Btn small kind="ghost" onClick={() => setSel(new Set())}>Clear</Btn>
+      <PageHead title="Library" sub="Books available to your students." action={<Btn icon={Plus} onClick={() => setMode("create")}>Add book</Btn>} />
+      {books.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No books yet — add your first.</span></Card> :
+        <div className="grid grid-cols-3 gap-4">
+          {books.map((b) => (
+            <Card key={b.id}>
+              <div className="flex items-center justify-center" style={{ height: 110, borderRadius: 9, background: `linear-gradient(150deg, ${C.ink}, ${C.ink2})`, marginBottom: 14 }}><BookOpen size={34} color={C.goldSoft} /></div>
+              <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0, lineHeight: 1.2 }}>{b.title}</h3>
+              <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{b.author} • {b.pages} pp • {programLabel(b.program)}</div>
+              <p className="pl-body" style={{ fontSize: 13.5, color: C.text, marginTop: 8, lineHeight: 1.5 }}>{b.description}</p>
+              <div className="flex justify-between items-center" style={{ marginTop: 14 }}>
+                <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>{b.video_url ? "Video link" : b.file_path ? "File attached" : "No media"}</span>
+                <button onClick={() => remove(b.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
               </div>
             </Card>
-          )}
-
-          {groups.map((g) => (
-            <div key={g.key} style={{ marginBottom: 22 }}>
-              <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
-                <h3 className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink, margin: 0 }}>{g.label}</h3>
-                <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>· {g.items.length}</span>
-              </div>
-              <div className="grid grid-cols-3 gap-4">
-                {g.items.map((b) => {
-                  const checked = sel.has(b.id);
-                  return (
-                    <Card key={b.id} style={checked ? { outline: `2px solid ${C.gold}` } : undefined}>
-                      <div className="flex items-center justify-center" style={{ position: "relative", height: 110, borderRadius: 9, background: `linear-gradient(150deg, ${C.ink}, ${C.ink2})`, marginBottom: 14 }}>
-                        <label style={{ position: "absolute", top: 8, left: 8, cursor: "pointer", display: "flex" }} title="Select">
-                          <input type="checkbox" checked={checked} onChange={() => toggleSel(b.id)} style={{ width: 18, height: 18, cursor: "pointer" }} />
-                        </label>
-                        <BookOpen size={34} color={C.goldSoft} />
-                      </div>
-                      <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0, lineHeight: 1.2 }}>{b.title}</h3>
-                      <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{b.author} • {b.pages} pp • {programLabel(b.program)}</div>
-                      <p className="pl-body" style={{ fontSize: 13.5, color: C.text, marginTop: 8, lineHeight: 1.5 }}>{b.description}</p>
-                      <div className="flex justify-between items-center" style={{ marginTop: 14 }}>
-                        <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>{b.video_url ? "Video link" : b.file_path ? "File attached" : "No media"}</span>
-                        <div className="flex items-center gap-2">
-                          <button onClick={() => startEdit(b)} title="Edit" className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.muted }}><PencilLine size={16} /></button>
-                          <button onClick={() => remove(b.id)} title="Delete" className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
-                        </div>
-                      </div>
-                    </Card>
-                  );
-                })}
-              </div>
-            </div>
           ))}
-        </>
-      )}
+        </div>}
     </>
   );
 }
@@ -811,9 +824,13 @@ function StudentsManager({ profiles, meId, courses, assignments, canSetRole, ref
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);
+  const [statusFilter, setStatusFilter] = useState("all");
 
   async function setProg(id, program) {
     try { await db.setStudentProgram(id, program); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function setStatus(id, status) {
+    try { await db.setStudentStatus(id, status); await refresh(); } catch (e) { window.alert(e.message); }
   }
   async function changeRole(id, role) {
     try { await db.setRole(id, role); await refresh(); } catch (e) { window.alert(e.message); }
@@ -846,23 +863,12 @@ function StudentsManager({ profiles, meId, courses, assignments, canSetRole, ref
     { key: "admin", label: "Administration" },
   ];
   const roleLabel = (r) => ROLES.find((x) => x.key === r)?.label || r;
-  const people = [...(profiles || [])].sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
+  const byName = (a, b) => (a.full_name || "").localeCompare(b.full_name || "");
+  const staff = [...(profiles || [])].filter((p) => p.role !== "student").sort(byName);
+  const students = [...(profiles || [])].filter((p) => p.role === "student").sort(byName);
   const assignedSet = (instructorId) => new Set((assignments || []).filter((a) => a.instructor_id === instructorId).map((a) => a.course_id));
 
-  return (
-    <>
-      <PageHead title="People" sub="Invite students, set roles and levels, and assign instructors to courses." />
-      <Card style={{ marginBottom: 18 }}>
-        <div className="flex items-end gap-3">
-          <div style={{ flex: 1 }}><Field label="Invite a student by email"><input style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="student@example.com" /></Field></div>
-          <div style={{ marginBottom: 14 }}><Btn icon={Send} onClick={invite} disabled={busy}>{busy ? "Sending…" : "Send invite"}</Btn></div>
-        </div>
-        {note && <div className="pl-body" style={{ fontSize: 13, color: note.ok ? C.green : C.rose }}>{note.text}</div>}
-        {canSetRole && <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, margin: "6px 0 0" }}>To add an instructor: have them create an account, then set their role to <b>Instructor</b> and check the courses they should grade.</p>}
-      </Card>
-      <div className="flex flex-col gap-2">
-        {people.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No people yet.</span></Card>}
-        {people.map((s) => {
+  const personCard = (s) => {
           const aset = s.role === "instructor" ? assignedSet(s.id) : null;
           return (
             <Card key={s.id} style={{ padding: 16 }}>
@@ -886,6 +892,17 @@ function StudentsManager({ profiles, meId, courses, assignments, canSetRole, ref
                     <option value="">— level —</option>
                     {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
                   </select>
+                )}
+                {s.role === "student" && canSetRole && (
+                  <button onClick={() => setStatus(s.id, (s.status || "active") === "active" ? "inactive" : "active")}
+                    title={(s.status || "active") === "active" ? "Click to mark inactive" : "Click to mark active"}
+                    className="pl-press" style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 20, cursor: "pointer", fontSize: 12.5, fontWeight: 700,
+                      border: `1px solid ${(s.status || "active") === "active" ? C.green : C.line}`,
+                      background: (s.status || "active") === "active" ? "#eef7ee" : C.paper2,
+                      color: (s.status || "active") === "active" ? C.green : C.muted }}>
+                    {(s.status || "active") === "active" ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                    {(s.status || "active") === "active" ? "Active" : "Inactive"}
+                  </button>
                 )}
               </div>
               {s.role === "instructor" && (
@@ -912,8 +929,65 @@ function StudentsManager({ profiles, meId, courses, assignments, canSetRole, ref
               )}
             </Card>
           );
-        })}
+        };
+
+  return (
+    <>
+      <PageHead title="People" sub="Invite students, set roles and levels, and assign instructors to courses." />
+      <Card style={{ marginBottom: 18 }}>
+        <div className="flex items-end gap-3">
+          <div style={{ flex: 1 }}><Field label="Invite a student by email"><input style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="student@example.com" /></Field></div>
+          <div style={{ marginBottom: 14 }}><Btn icon={Send} onClick={invite} disabled={busy}>{busy ? "Sending…" : "Send invite"}</Btn></div>
+        </div>
+        {note && <div className="pl-body" style={{ fontSize: 13, color: note.ok ? C.green : C.rose }}>{note.text}</div>}
+        {canSetRole && <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, margin: "6px 0 0" }}>To add an instructor: have them create an account, then set their role to <b>Instructor</b> and check the courses they should grade.</p>}
+      </Card>
+      <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+        <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>Staff</h3>
+        <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{staff.length}</span>
       </div>
+      <div className="flex flex-col gap-2" style={{ marginBottom: 26 }}>
+        {staff.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No staff yet.</span></Card>}
+        {staff.map(personCard)}
+      </div>
+      <div className="flex items-center justify-between" style={{ marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+        <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>Students</h3>
+        <div className="flex items-center gap-2">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ ...inputStyle, width: 160, padding: "6px 10px" }}>
+            <option value="all">All students</option>
+            <option value="active">Active only</option>
+            <option value="inactive">Inactive only</option>
+          </select>
+          <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{students.length}</span>
+        </div>
+      </div>
+      {students.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card>}
+      {(() => {
+        const active = students.filter((s) => (s.status || "active") === "active");
+        const inactive = students.filter((s) => (s.status || "active") === "inactive");
+        const showActive = statusFilter === "all" || statusFilter === "active";
+        const showInactive = statusFilter === "all" || statusFilter === "inactive";
+        return (
+          <>
+            {showActive && (
+              <div style={{ marginBottom: 22 }}>
+                <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.green, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>Active · {active.length}</div>
+                <div className="flex flex-col gap-2">
+                  {active.length === 0 ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>No active students.</span> : active.map(personCard)}
+                </div>
+              </div>
+            )}
+            {showInactive && (
+              <div>
+                <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>Inactive · {inactive.length}</div>
+                <div className="flex flex-col gap-2">
+                  {inactive.length === 0 ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>No inactive students.</span> : inactive.map(personCard)}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
     </>
   );
 }
@@ -923,58 +997,164 @@ function MessagesView({ messages, students, profile, canSend, refresh }) {
   const [compose, setCompose] = useState(false);
   const [form, setForm] = useState({ recipient: "all", subject: "", body: "" });
   const [busy, setBusy] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null); // { id, subject, sender_id, sender_name }
+  const [replyBody, setReplyBody] = useState("");
+  const [expanded, setExpanded] = useState({});
 
   async function send() {
     if (!form.subject.trim()) return;
     setBusy(true);
     try {
-      await db.sendMessage({ recipient: form.recipient, subject: form.subject, body: form.body, sender_name: profile.full_name });
-      const emails = form.recipient === "all" ? students.map((s) => s.email).filter(Boolean) : [students.find((s) => s.id === form.recipient)?.email].filter(Boolean);
-      if (emails.length) await db.sendEmail({ to: emails, subject: form.subject, html: `<p>${(form.body || "").replace(/\n/g, "<br/>")}</p><hr/><p style="color:#777">Sent from ${BRAND.name}</p>` });
+      if (canSend) {
+        // Admin / instructor composing to students
+        await db.sendMessage({ recipient: form.recipient, subject: form.subject, body: form.body, sender_name: profile.full_name });
+        const emails = form.recipient === "all" ? students.map((s) => s.email).filter(Boolean) : [students.find((s) => s.id === form.recipient)?.email].filter(Boolean);
+        if (emails.length) await db.sendEmail({ to: emails, subject: form.subject, html: `<p>${(form.body || "").replace(/\n/g, "<br/>")}</p><hr/><p style="color:#777">Sent from ${BRAND.name}</p>` });
+      } else {
+        // Student composing a new message to the office/admin
+        await db.sendMessage({ recipient: "office", subject: form.subject, body: form.body, sender_name: profile.full_name });
+      }
       await refresh();
       setForm({ recipient: "all", subject: "", body: "" }); setCompose(false);
     } catch (e) { window.alert(e.message); }
     setBusy(false);
   }
 
-  const nameFor = (id) => students.find((s) => s.id === id)?.full_name || id;
+  async function sendReply() {
+    if (!replyBody.trim()) return;
+    setBusy(true);
+    try {
+      const r = replyingTo;
+      // Reply goes back to whichever side sent the original
+      const recipientId = r.sender_id === profile.id ? r.recipient : r.sender_id;
+      await db.replyMessage({
+        parent_id: r.root_id || r.id,
+        subject: "Re: " + r.subject.replace(/^Re:\s*/i, ""),
+        body: replyBody,
+        recipient: recipientId,
+        sender_name: profile.full_name,
+      });
+      // Also send email notification if admin is replying to a student
+      if (canSend && recipientId !== "all") {
+        const stu = students.find((s) => s.id === recipientId);
+        if (stu?.email) await db.sendEmail({ to: [stu.email], subject: "Re: " + r.subject, html: `<p>${replyBody.replace(/\n/g, "<br/>")}</p><hr/><p style="color:#777">Sent from ${BRAND.name}</p>` });
+      }
+      await refresh();
+      setReplyingTo(null); setReplyBody("");
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  const nameFor = (id) => students.find((s) => s.id === id)?.full_name || "Staff";
+
+  // Group messages into threads: root messages + their replies
+  const roots = messages.filter((m) => !m.parent_id);
+  const repliesFor = (rootId) => messages.filter((m) => m.parent_id === rootId)
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+  // For students: show threads where they are sender or recipient (incl. office messages they sent)
+  const visibleRoots = canSend ? roots : roots.filter((m) =>
+    m.recipient === "all" || m.recipient === profile.id || m.sender_id === profile.id
+  );
+
+  function MessageBubble({ m, isReply = false, rootId }) {
+    const isMine = m.sender_id === profile.id;
+    return (
+      <div style={{ display: "flex", gap: 10, marginBottom: 10, paddingLeft: isReply ? 28 : 0 }}>
+        {isReply && <CornerDownRight size={14} style={{ color: C.muted, marginTop: 4, flexShrink: 0 }} />}
+        <div style={{ flex: 1 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 3 }}>
+            <span className="pl-body" style={{ fontWeight: 600, fontSize: 13.5, color: isMine ? C.navy : C.ink }}>
+              {isMine ? "You" : (m.sender_name || "Staff")}
+            </span>
+            <span className="pl-body" style={{ fontSize: 11.5, color: C.muted }}>{fdate(m.created_at)}</span>
+          </div>
+          <div style={{ background: isMine ? C.paper2 : C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 12px" }}>
+            <p className="pl-body" style={{ fontSize: 13.5, lineHeight: 1.55, whiteSpace: "pre-wrap", margin: 0 }}>{m.body}</p>
+          </div>
+          {!isReply && (
+            <button className="pl-body" style={{ background: "none", border: "none", color: C.gold, fontSize: 12.5, cursor: "pointer", marginTop: 4, padding: 0 }}
+              onClick={() => { setReplyingTo({ ...m, root_id: rootId || m.id }); setReplyBody(""); }}>
+              <Reply size={12} style={{ marginRight: 4, verticalAlign: "middle" }} />Reply
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
-      <PageHead title={canSend ? "Messages" : "Inbox"} sub={canSend ? "Email students and post announcements." : "Messages from your instructor."} action={canSend && <Btn icon={PencilLine} onClick={() => setCompose(true)}>Compose</Btn>} />
+      <PageHead title={canSend ? "Messages" : "Inbox"} sub={canSend ? "Email students and post announcements." : "Messages from your instructor — reply or start a new message to the office."} action={<Btn icon={PencilLine} onClick={() => setCompose(true)}>{canSend ? "Compose" : "New message"}</Btn>} />
       {compose && (
         <Card style={{ marginBottom: 18 }}>
-          <Field label="To">
-            <select style={inputStyle} value={form.recipient} onChange={(e) => setForm({ ...form, recipient: e.target.value })}>
-              <option value="all">All students</option>
-              {students.map((s) => <option key={s.id} value={s.id}>{s.full_name || s.email}</option>)}
-            </select>
-          </Field>
-          <Field label="Subject"><input style={inputStyle} value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} /></Field>
-          <Field label="Message"><textarea style={{ ...inputStyle, minHeight: 110 }} value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} /></Field>
+          {canSend ? (
+            <Field label="To">
+              <select style={inputStyle} value={form.recipient} onChange={(e) => setForm({ ...form, recipient: e.target.value })}>
+                <option value="all">All students</option>
+                {students.map((s) => <option key={s.id} value={s.id}>{s.full_name || s.email}</option>)}
+              </select>
+            </Field>
+          ) : (
+            <div className="pl-body" style={{ fontSize: 12.5, color: C.gold, fontWeight: 600, marginBottom: 10 }}>
+              <MessageSquare size={13} style={{ marginRight: 4, verticalAlign: "middle" }} />New message to the school office
+            </div>
+          )}
+          <Field label="Subject"><input style={inputStyle} value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} placeholder={canSend ? "" : "What is your message about?"} /></Field>
+          <Field label="Message"><textarea style={{ ...inputStyle, minHeight: 110 }} value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} placeholder={canSend ? "" : "Type your message to the office…"} /></Field>
           <div className="flex gap-2">
-            <Btn icon={Send} kind="gold" onClick={send} disabled={busy}>{busy ? "Sending…" : "Send email"}</Btn>
+            <Btn icon={Send} kind="gold" onClick={send} disabled={busy}>{busy ? "Sending…" : "Send"}</Btn>
             <Btn kind="ghost" onClick={() => setCompose(false)}>Cancel</Btn>
           </div>
         </Card>
       )}
+      {replyingTo && (
+        <Card style={{ marginBottom: 18, borderLeft: `3px solid ${C.gold}` }}>
+          <div className="pl-body" style={{ fontSize: 12.5, color: C.gold, fontWeight: 600, marginBottom: 6 }}>
+            <Reply size={13} style={{ marginRight: 4, verticalAlign: "middle" }} />Replying to: {replyingTo.subject}
+          </div>
+          <Field label="Your reply">
+            <textarea style={{ ...inputStyle, minHeight: 90 }} value={replyBody} onChange={(e) => setReplyBody(e.target.value)} placeholder="Type your reply…" />
+          </Field>
+          <div className="flex gap-2">
+            <Btn icon={Send} kind="gold" onClick={sendReply} disabled={busy}>{busy ? "Sending…" : "Send Reply"}</Btn>
+            <Btn kind="ghost" onClick={() => { setReplyingTo(null); setReplyBody(""); }}>Cancel</Btn>
+          </div>
+        </Card>
+      )}
       <div className="flex flex-col gap-3">
-        {messages.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No messages yet.</span></Card>}
-        {messages.map((m) => (
-          <Card key={m.id}>
-            <div className="flex items-start gap-3">
-              <div className="inline-flex items-center justify-center" style={{ width: 38, height: 38, borderRadius: 10, background: C.paper2, color: C.ink, flexShrink: 0 }}><Inbox size={18} /></div>
-              <div style={{ flex: 1 }}>
-                <div className="flex items-center justify-between">
-                  <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{m.subject}</span>
-                  <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>{fdate(m.created_at)}</span>
+        {visibleRoots.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No messages yet.</span></Card>}
+        {visibleRoots.map((m) => {
+          const replies = repliesFor(m.id);
+          const isExpanded = expanded[m.id] !== false; // default expanded
+          const recipientLabel = m.recipient === "all" ? "All students" : m.recipient === "office" ? "School Office" : canSend ? nameFor(m.recipient) : "You";
+          return (
+            <Card key={m.id}>
+              <div className="flex items-start gap-3">
+                <div className="inline-flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 10, background: C.paper2, color: C.gold, flexShrink: 0 }}><MessageSquare size={16} /></div>
+                <div style={{ flex: 1 }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 2 }}>
+                    <span className="pl-body" style={{ fontWeight: 700, fontSize: 15 }}>{m.subject}</span>
+                    <div className="flex items-center gap-3">
+                      {replies.length > 0 && (
+                        <button className="pl-body" style={{ background: "none", border: "none", color: C.muted, fontSize: 12, cursor: "pointer" }}
+                          onClick={() => setExpanded((e) => ({ ...e, [m.id]: !isExpanded }))}>
+                          {replies.length} {replies.length === 1 ? "reply" : "replies"} {isExpanded ? "▲" : "▼"}
+                        </button>
+                      )}
+                      <span className="pl-body" style={{ fontSize: 11.5, color: C.muted }}>{fdate(m.created_at)}</span>
+                    </div>
+                  </div>
+                  <div className="pl-body" style={{ fontSize: 12, color: C.gold, fontWeight: 600, marginBottom: 8 }}>
+                    From {m.sender_name || "Staff"} · To {recipientLabel}
+                  </div>
+                  <MessageBubble m={m} rootId={m.id} />
+                  {isExpanded && replies.map((r) => <MessageBubble key={r.id} m={r} isReply rootId={m.id} />)}
                 </div>
-                <div className="pl-body" style={{ fontSize: 12.5, color: C.gold, fontWeight: 600, marginBottom: 6 }}>From {m.sender_name} · To {m.recipient === "all" ? "All students" : nameFor(m.recipient)}</div>
-                <p className="pl-body" style={{ fontSize: 14, lineHeight: 1.55, whiteSpace: "pre-wrap", margin: 0 }}>{m.body}</p>
               </div>
-            </div>
-          </Card>
-        ))}
+            </Card>
+          );
+        })}
       </div>
     </>
   );
@@ -996,27 +1176,39 @@ function StudentPortal({ profile, onLogout }) {
   const [ledger, setLedger] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [certEnrollments, setCertEnrollments] = useState([]);
+  const [tuition, setTuition] = useState([]);
+  const [forms, setForms] = useState([]);
+  const [myFormSubs, setMyFormSubs] = useState([]);
+  const [surveys, setSurveys] = useState([]);
+  const [mySurveyResps, setMySurveyResps] = useState([]);
+  const [resources, setResources] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
+    const safe = (p) => p.then((v) => v).catch((e) => { console.error(e); return undefined; });
     try {
-      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen] = await Promise.all([
-        db.listBooks(), db.listTests(), db.listSubmissions(), db.listMessages(),
-        db.listSyllabi(), db.listHomework(), db.listHomeworkSubmissions(), db.listCourses(), db.listAttendance(), db.listCertificates(), db.listLedger(), db.listSessions(),
-        db.listCertEnrollments(),
+      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen, tu, fr, fs, sv, sr, rs, an] = await Promise.all([
+        safe(db.listBooks()), safe(db.listTests()), safe(db.listSubmissions()), safe(db.listMessages()),
+        safe(db.listSyllabi()), safe(db.listHomework()), safe(db.listHomeworkSubmissions()), safe(db.listCourses()), safe(db.listAttendance()), safe(db.listCertificates()), safe(db.listLedger()), safe(db.listSessions()),
+        safe(db.listCertEnrollments()), safe(db.listTuition()),
+        safe(db.listForms()), safe(db.listFormSubmissions()), safe(db.listSurveys()), safe(db.listSurveyResponses()), safe(db.listResources()), safe(db.listAnnouncements()),
       ]);
-      setBooks(b); setTests(t); setSubs(s); setMessages(m);
-      setSyllabi(sy); setHomework(hw); setHwSubs(hs); setCourses(co); setAttendance(at); setCertificates(ce); setLedger(lg); setSessions(se);
-      setCertEnrollments(cen);
+      if (b) setBooks(b); if (t) setTests(t); if (s) setSubs(s); if (m) setMessages(m);
+      if (sy) setSyllabi(sy); if (hw) setHomework(hw); if (hs) setHwSubs(hs); if (co) setCourses(co); if (at) setAttendance(at); if (ce) setCertificates(ce); if (lg) setLedger(lg); if (se) setSessions(se);
+      if (cen) setCertEnrollments(cen); if (tu) setTuition(tu);
+      if (fr) setForms(fr); if (fs) setMyFormSubs(fs.filter((x) => x.student_id === profile.id));
+      if (sv) setSurveys(sv); if (sr) setMySurveyResps(sr.filter((x) => x.student_id === profile.id));
+      if (rs) setResources(rs); if (an) setAnnouncements(an);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
-    if (p.get("cert_paid")) {
+    if (p.get("cert_paid") || p.get("tuition_paid")) {
       window.history.replaceState({}, "", window.location.pathname);
-      window.alert("Payment received — thank you! Your class will show as Paid in a moment.");
+      window.alert("Payment received — thank you! It will show as Paid in a moment.");
       const t = setTimeout(() => refresh(), 2500);
       return () => clearTimeout(t);
     }
@@ -1027,49 +1219,65 @@ function StudentPortal({ profile, onLogout }) {
   const myCertCourseIds = new Set((certEnrollments || []).filter((e) => e.student_id === profile.id).map((e) => e.course_id));
   const notCert = (it) => !certCourseIds.has(it.course_id);
   const visBooks = visibleFor(books, prog).filter(notCert);
-  const visTests = visibleFor(tests, prog).filter(notCert);
-  const visHw = visibleFor(homework, prog).filter(notCert);
+  // Certificate-class tests/homework now live in the main Tests/Homework tabs
+  // (not the separate Cert Classes page), but only for students actually
+  // enrolled in that specific class — not by the generic program-tag match,
+  // which would otherwise leak a class's coursework to unrelated students.
+  const certTests = (tests || []).filter((t) => myCertCourseIds.has(t.course_id));
+  const certHw = (homework || []).filter((h) => myCertCourseIds.has(h.course_id));
+  const visTests = [...visibleFor(tests, prog).filter(notCert), ...certTests];
+  const visHw = [...visibleFor(homework, prog).filter(notCert), ...certHw];
   const degTests = (tests || []).filter(notCert);
   const degHw = (homework || []).filter(notCert);
   const mySubs = subs.filter((s) => s.student_id === profile.id);
   const myHwSubs = hwSubs.filter((s) => s.student_id === profile.id);
   const available = visTests.filter((t) => !mySubs.some((s) => s.test_id === t.id));
-  const availableHw = visHw.filter((h) => !myHwSubs.some((s) => s.homework_id === h.id));
-  const certAvailable = (tests || []).filter((t) => myCertCourseIds.has(t.course_id) && !mySubs.some((s) => s.test_id === t.id));
-  const certAvailableHw = (homework || []).filter((h) => myCertCourseIds.has(h.course_id) && !myHwSubs.some((s) => s.homework_id === h.id));
+  // Homework is available if never submitted, OR it was sent back ("returned") to redo.
+  const availableHw = visHw.filter((h) => {
+    const sub = myHwSubs.find((s) => s.homework_id === h.id);
+    return !sub || sub.status === "returned";
+  });
 
   const nav = [
-    { key: "dash", label: "Dashboard", icon: LayoutDashboard },
-    { key: "courses", label: "My Courses", icon: GraduationCap },
-    { key: "schedule", label: "Schedule", icon: CalendarDays },
-    { key: "library", label: "Library", icon: Library },
-    { key: "syllabus", label: "Syllabus", icon: ScrollText },
-    { key: "tests", label: "My Tests", icon: FileText },
-    { key: "homework", label: "Homework", icon: NotebookPen },
-    { key: "grades", label: "Grades", icon: Award },
-    { key: "progress", label: "Progress", icon: Medal },
-    { key: "certificates", label: "Certificates", icon: Medal },
-    { key: "certprograms", label: "Cert Classes", icon: Award },
-    { key: "tuition", label: "Tuition", icon: Receipt },
-    { key: "inbox", label: "Inbox", icon: Mail },
-  ];
+    { key: "dash",        label: "Dashboard",   icon: LayoutDashboard, show: true },
+    { key: "courses",     label: "My Courses",  icon: GraduationCap,   show: true },
+    { key: "schedule",    label: "Schedule",    icon: CalendarDays,    show: FEATURES.live_classes },
+    { key: "library",     label: "Library",     icon: Library,         show: FEATURES.library },
+    { key: "syllabus",    label: "Syllabus",    icon: ScrollText,      show: FEATURES.syllabus },
+    { key: "tests",       label: "My Tests",    icon: FileText,        show: FEATURES.tests },
+    { key: "homework",    label: "Homework",    icon: NotebookPen,     show: FEATURES.homework },
+    { key: "grades",      label: "Grades",      icon: Award,           show: FEATURES.grades },
+    { key: "progress",    label: "Progress",    icon: Medal,           show: FEATURES.degree_progress },
+    { key: "certificates",label: "Certificates",icon: Medal,           show: FEATURES.certificates },
+    { key: "cehours",     label: "CE Hours",    icon: Clock,           show: FEATURES.ce_hours },
+    { key: "certprograms",label: "Cert Classes",icon: Award,           show: FEATURES.cert_classes },
+    { key: "tuition",     label: "Tuition",     icon: Receipt,         show: FEATURES.tuition },
+    { key: "forms",       label: "Forms",       icon: FileCheck,       show: true },
+    { key: "surveys",     label: "Surveys",     icon: BarChart2,       show: true },
+    { key: "resources",   label: "Resources",   icon: BookOpen,        show: true },
+    { key: "inbox",       label: "Inbox",       icon: Mail,            show: FEATURES.messages },
+  ].filter((n) => n.show);
 
   return (
     <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ tests: available.length, homework: availableHw.length }}>
       {loading ? <Spinner /> : (
         <>
-          {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, tests, attendance, setActive }} />}
+          {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, myHwSubs, homework, tests, attendance, announcements, setActive }} />}
           {active === "courses" && <StudentCourses courses={courses} profile={profile} />}
           {active === "schedule" && <StudentSchedule sessions={sessions} homework={visHw} tests={visTests} courses={courses} profile={profile} />}
           {active === "library" && <StudentLibrary books={visBooks} courses={courses} />}
-          {active === "syllabus" && <StudentSyllabus syllabi={syllabi} />}
+          {active === "syllabus" && <StudentSyllabus syllabi={syllabi} profile={profile} />}
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
-          {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} refresh={refresh} />}
+          {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} profile={profile} refresh={refresh} />}
           {active === "grades" && <StudentGrades mySubs={mySubs} tests={degTests} myHwSubs={myHwSubs} homework={degHw} courses={courses} profile={profile} />}
           {active === "progress" && <DegreeProgress profile={profile} courses={courses} tests={degTests} homework={degHw} mySubs={mySubs} myHwSubs={myHwSubs} />}
           {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
-          {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certAvailable={certAvailable} certAvailableHw={certAvailableHw} myHwSubs={myHwSubs} homework={homework} books={books} certificates={certificates} ledger={ledger.filter((e) => e.student_id === profile.id)} refresh={refresh} />}
-          {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} />}
+          {active === "cehours" && <StudentCEHours profile={profile} courses={courses} tests={tests} subs={mySubs} certificates={certificates} />}
+          {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certificates={certificates} ledger={ledger.filter((e) => e.student_id === profile.id)} refresh={refresh} />}
+          {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} tuition={tuition} profile={profile} />}
+          {active === "forms" && <StudentForms forms={forms} myFormSubs={myFormSubs} profile={profile} refresh={refresh} />}
+          {active === "surveys" && <StudentSurveys surveys={surveys} mySurveyResps={mySurveyResps} profile={profile} refresh={refresh} />}
+          {active === "resources" && <StudentResources resources={resources} profile={profile} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
         </>
       )}
@@ -1077,14 +1285,42 @@ function StudentPortal({ profile, onLogout }) {
   );
 }
 
-function StudentDash({ profile, books, available, mySubs, tests, attendance, setActive }) {
+function StudentDash({ profile, books, available, mySubs, myHwSubs, homework, tests, attendance, announcements, setActive }) {
   const graded = mySubs.filter((s) => s.status === "graded" && s.max_score);
   const avg = graded.length ? Math.round(graded.reduce((a, s) => a + (s.score / s.max_score) * 100, 0) / graded.length) : null;
   const att = attendance || [];
   const attPct = att.length ? Math.round((att.filter((a) => a.status !== "absent").length / att.length) * 100) : null;
+  const myAnnounce = (announcements || []).filter((a) => a.active && (a.program === "all" || a.program === profile.program));
+  const returnedHw = (myHwSubs || []).filter((s) => s.status === "returned");
+  const hwTitle = (id) => (homework || []).find((h) => h.id === id)?.title || "an assignment";
   return (
     <>
       <PageHead title={`Welcome, ${(profile.full_name || "Student").split(" ")[0]}`} sub="Your studies at a glance." />
+      {returnedHw.length > 0 && (
+        <div style={{ background: "#fef6f6", border: `1px solid ${C.rose}`, borderLeft: `4px solid ${C.rose}`, borderRadius: 10, padding: "14px 18px", marginBottom: 16, cursor: "pointer" }} onClick={() => setActive("homework")}>
+          <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+            <RotateCcw size={16} style={{ color: C.rose }} />
+            <span className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink }}>{returnedHw.length === 1 ? "Homework returned for revision" : `${returnedHw.length} assignments returned for revision`}</span>
+          </div>
+          <p className="pl-body" style={{ fontSize: 14, color: C.ink, margin: 0, lineHeight: 1.55 }}>
+            Your instructor sent {returnedHw.length === 1 ? <b>{hwTitle(returnedHw[0].homework_id)}</b> : "some work"} back with notes. Tap here to open your Homework and resubmit.
+          </p>
+        </div>
+      )}
+      {myAnnounce.length > 0 && (
+        <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
+          {myAnnounce.map((a) => (
+            <div key={a.id} style={{ background: "#fffaf0", border: `1px solid ${C.gold}`, borderLeft: `4px solid ${C.gold}`, borderRadius: 10, padding: "14px 18px" }}>
+              <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+                <Sparkles size={16} style={{ color: C.gold }} />
+                <span className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink }}>{a.title}</span>
+              </div>
+              <p className="pl-body" style={{ fontSize: 14, color: C.ink, margin: 0, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{a.body}</p>
+              <div className="pl-body" style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>{fdate(a.created_at)}</div>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="grid grid-cols-4 gap-4" style={{ marginBottom: 24 }}>
         <Stat icon={BookOpen} label="Lessons available" value={books.length} />
         <Stat icon={FileText} label="Tests to take" value={available.length} tone={C.gold} />
@@ -1335,16 +1571,60 @@ function StudentTests({ available, books, courses, refresh }) {
 
   async function submit() {
     setBusy(true);
-    try { await db.createSubmission({ test_id: taking.id, answers, max_score: sumPoints(taking.questions) }); await refresh(); setTaking(null); setAnswers({}); }
-    catch (e) { window.alert(e.message); }
+    try {
+      const maxScore = sumPoints(taking.questions);
+      await db.createSubmission({ test_id: taking.id, answers, max_score: maxScore });
+
+      // ── CE PASS-GATE ──────────────────────────────────────────
+      const course = courses.find((c) => c.id === taking.course_id);
+      if (course && isCEType(course.ce_type)) {
+        let autoPoints = 0;
+        for (const q of taking.questions) {
+          const a = answers[q.id];
+          if (q.type === "mc" && String(a) === String(q.correct_answer)) autoPoints += q.points;
+          if (q.type === "tf" && a === q.correct_answer) autoPoints += q.points;
+        }
+        const pct = maxScore > 0 ? Math.round((autoPoints / maxScore) * 100) : 0;
+        const passing = Number(course.passing_score) || 75;
+        if (pct >= passing) {
+          try {
+            await db.issueCertificate({
+              title: course.title,
+              course_id: course.id,
+              note: [course.ce_hours ? `${course.ce_hours} contact hours` : "", course.approval_number || ""].filter(Boolean).join(" · "),
+              ce_hours: course.ce_hours || null,
+              approval_number: course.approval_number || null,
+              provider_name: course.provider_name || null,
+            });
+          } catch (certErr) { console.error("CE cert auto-issue:", certErr); }
+          window.alert(`You passed with ${pct}%! 🎉\n\nYour CE certificate has been issued.\nHours earned: ${course.ce_hours || "—"} contact hours.\nView it under CE Hours in your menu.`);
+        } else {
+          window.alert(`You scored ${pct}%. A passing score of ${passing}% is required to earn CE credit for this course.\n\nYour submission has been recorded.`);
+        }
+      }
+      // ── END CE PASS-GATE ──────────────────────────────────────
+
+      await refresh(); setTaking(null); setAnswers({});
+    } catch (e) { window.alert(e.message); }
     setBusy(false);
   }
 
   if (taking) {
     const answered = taking.questions.filter((q) => answers[q.id] !== undefined && answers[q.id] !== "").length;
+    const course = courses.find((c) => c.id === taking.course_id);
+    const isCE = course && isCEType(course.ce_type);
     return (
       <>
         <PageHead title={taking.title} sub={taking.description} action={<Btn kind="ghost" icon={X} onClick={() => { setTaking(null); setAnswers({}); }}>Exit</Btn>} />
+        {isCE && (
+          <Card style={{ marginBottom: 12, padding: "12px 16px", background: C.paper, border: `1px solid ${C.goldSoft}` }}>
+            <div className="flex items-center gap-2">
+              <Award size={16} color={C.gold} />
+              <span className="pl-body" style={{ fontSize: 13, color: C.gold, fontWeight: 600 }}>CE Post-Test — {course.ce_type === "faith_ce" ? "Faith-Based CE" : "Continuing Education"}</span>
+              <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>· Pass {course.passing_score || 75}% to earn {course.ce_hours || "—"} contact hours</span>
+            </div>
+          </Card>
+        )}
         {taking.questions.map((q, i) => (
           <Card key={q.id} style={{ marginBottom: 12 }}>
             <span className="pl-body" style={{ fontWeight: 700, color: C.gold, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".06em" }}>Question {i + 1} · {q.points} pts</span>
@@ -1359,13 +1639,13 @@ function StudentTests({ available, books, courses, refresh }) {
               <button key={v} onClick={() => setAnswers({ ...answers, [q.id]: v })} className="pl-press" style={{ padding: "9px 22px", borderRadius: 9, marginRight: 8, cursor: "pointer", textTransform: "capitalize", fontWeight: 600, fontSize: 15, border: `1px solid ${answers[q.id] === v ? C.gold : C.line}`, background: answers[q.id] === v ? C.paper2 : "#fff", color: C.ink }}>{v}</button>
             ))}
             {(q.type === "short" || q.type === "essay") && (
-              <textarea style={{ ...inputStyle, minHeight: q.type === "essay" ? 120 : 60 }} placeholder="Type your answer…" value={answers[q.id] || ""} onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
+              <textarea style={{ ...inputStyle, minHeight: q.type === "essay" ? 220 : 110 }} placeholder="Type your answer…" value={answers[q.id] || ""} onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
             )}
           </Card>
         ))}
         <div className="flex items-center justify-between" style={{ marginTop: 16 }}>
           <span className="pl-body" style={{ color: C.muted, fontSize: 14 }}>{answered} / {taking.questions.length} answered</span>
-          <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : "Submit test"}</Btn>
+          <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : isCE ? "Submit post-test" : "Submit test"}</Btn>
         </div>
       </>
     );
@@ -1378,17 +1658,24 @@ function StudentTests({ available, books, courses, refresh }) {
         <Grouped items={available} courses={courses}>
           {(items) => (
             <div className="flex flex-col gap-3">
-              {items.map((t) => (
-                <Card key={t.id}>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{t.title}</h3>
-                      <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{books.find((b) => b.id === t.book_id)?.title || "General"} · {t.questions.length} questions · {sumPoints(t.questions)} pts</div>
+              {items.map((t) => {
+                const course = courses.find((c) => c.id === t.course_id);
+                const isCE = course && isCEType(course.ce_type);
+                return (
+                  <Card key={t.id}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{t.title}</h3>
+                          {isCE && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: C.goldSoft, padding: "2px 8px", borderRadius: 999 }}>{course.ce_type === "faith_ce" ? "Faith CE" : "CE"} Post-Test</span>}
+                        </div>
+                        <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{books.find((b) => b.id === t.book_id)?.title || "General"} · {t.questions.length} questions · {sumPoints(t.questions)} pts{isCE ? ` · Pass ${course.passing_score || 75}% for ${course.ce_hours || "—"} CE hrs` : ""}</div>
+                      </div>
+                      <Btn icon={PencilLine} onClick={() => setTaking(t)}>Begin</Btn>
                     </div>
-                    <Btn icon={PencilLine} onClick={() => setTaking(t)}>Begin</Btn>
-                  </div>
-                </Card>
-              ))}
+                  </Card>
+                );
+              })}
             </div>
           )}
         </Grouped>}
@@ -1529,74 +1816,129 @@ function FileLink({ path, label = "Open file" }) {
 
 /* ---------- SYLLABUS (instructor) ---------- */
 function SyllabusManager({ syllabi, refresh }) {
+  const [editing, setEditing] = useState(null); // syllabus object or {new:true}
+
+  function startNew() { setEditing({ program: "all", title: "", content: "", term: "" }); }
+
+  async function remove(id) {
+    if (!window.confirm("Delete this syllabus?")) return;
+    try { await db.deleteSyllabus(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  if (editing) {
+    return <SyllabusEditor entry={editing} onDone={() => setEditing(null)} refresh={refresh} />;
+  }
+
   return (
     <>
-      <PageHead title="Syllabus" sub="Post your Fall and Spring syllabus for students." />
-      <div className="grid grid-cols-2 gap-4">
-        <TermEditor term="fall" label="Fall Term" data={syllabi.find((s) => s.term === "fall")} refresh={refresh} />
-        <TermEditor term="spring" label="Spring Term" data={syllabi.find((s) => s.term === "spring")} refresh={refresh} />
+      <PageHead title="Syllabus" sub="Post a syllabus for each program. Students see the one matching their program." action={<Btn icon={Plus} onClick={startNew}>New syllabus</Btn>} />
+      <div className="flex flex-col gap-3">
+        {(!syllabi || syllabi.length === 0) && <Card><span className="pl-body" style={{ color: C.muted }}>No syllabus posted yet. Click New syllabus to add one for a program.</span></Card>}
+        {(syllabi || []).map((s) => (
+          <Card key={s.id}>
+            <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+              <div className="flex items-center gap-2" style={{ flex: 1 }}>
+                <ScrollText size={18} color={C.gold} />
+                <div>
+                  <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{s.title || `${programLabel(s.program)} Syllabus`}</div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.gold, fontWeight: 600 }}>{s.program === "all" ? "All programs" : programLabel(s.program)}{s.term ? ` · ${s.term}` : ""}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {s.file_path && <FileLink path={s.file_path} label="PDF" />}
+                <Btn small kind="ghost" icon={PencilLine} onClick={() => setEditing(s)}>Edit</Btn>
+                <button onClick={() => remove(s.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+              </div>
+            </div>
+          </Card>
+        ))}
       </div>
     </>
   );
 }
 
-function TermEditor({ term, label, data, refresh }) {
-  const [title, setTitle] = useState(data?.title || "");
-  const [content, setContent] = useState(data?.content || "");
+function SyllabusEditor({ entry, onDone, refresh }) {
+  const [program, setProgram] = useState(entry.program || "all");
+  const [title, setTitle] = useState(entry.title || "");
+  const [content, setContent] = useState(entry.content || "");
+  const [term, setTerm] = useState(entry.term || "");
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
-  useEffect(() => { setTitle(data?.title || ""); setContent(data?.content || ""); }, [data]);
 
   async function save() {
-    setBusy(true); setSaved(false);
-    try { await db.saveSyllabus({ term, title, content, file }); await refresh(); setFile(null); setSaved(true); }
-    catch (e) { window.alert(e.message); }
+    setBusy(true);
+    try {
+      await db.saveSyllabus({ id: entry.id, program, term, title, content, file });
+      await refresh();
+      onDone();
+    } catch (e) { window.alert(e.message); }
     setBusy(false);
   }
 
   return (
-    <Card>
-      <div className="flex items-center gap-2" style={{ marginBottom: 12 }}>
-        <ScrollText size={18} color={C.gold} />
-        <h3 className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.ink, margin: 0 }}>{label}</h3>
-      </div>
-      <Field label="Title"><input style={inputStyle} value={title} onChange={(e) => setTitle(e.target.value)} placeholder={`${label} Syllabus`} /></Field>
-      <Field label="Syllabus text"><textarea style={{ ...inputStyle, minHeight: 160 }} value={content} onChange={(e) => setContent(e.target.value)} placeholder="Course outline, schedule, expectations, grading policy…" /></Field>
-      <Field label="Attach PDF (optional)">
-        <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
-          <Upload size={16} color={C.muted} />
-          <span className="pl-body" style={{ fontSize: 14, color: file ? C.text : C.muted }}>{file ? file.name : (data?.file_path ? "Replace current PDF…" : "Choose a file…")}</span>
-          <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => setFile(e.target.files[0])} />
-        </label>
-      </Field>
-      <div className="flex items-center gap-2">
-        <Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Btn>
-        {data?.file_path && <FileLink path={data.file_path} label="View PDF" />}
-        {saved && <span className="pl-body" style={{ color: C.green, fontSize: 13 }}>Saved</span>}
-      </div>
-    </Card>
+    <>
+      <PageHead title={entry.id ? "Edit Syllabus" : "New Syllabus"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={onDone}>Back</Btn>} />
+      <Card style={{ maxWidth: 720 }}>
+        <div className="flex items-center gap-2" style={{ marginBottom: 12 }}>
+          <ScrollText size={18} color={C.gold} />
+          <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>Syllabus details</h3>
+        </div>
+        <Field label="Program">
+          <select style={inputStyle} value={program} onChange={(e) => setProgram(e.target.value)}>
+            <option value="all">All programs</option>
+            {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Term (optional)">
+          <select style={inputStyle} value={term} onChange={(e) => setTerm(e.target.value)}>
+            <option value="">No specific term</option>
+            <option value="fall">Fall</option>
+            <option value="spring">Spring</option>
+            <option value="summer">Summer</option>
+          </select>
+        </Field>
+        <Field label="Title"><input style={inputStyle} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Fully Known — Certificate Syllabus" /></Field>
+        <Field label="Syllabus text"><textarea style={{ ...inputStyle, minHeight: 180 }} value={content} onChange={(e) => setContent(e.target.value)} placeholder="Course outline, schedule, expectations, grading policy…" /></Field>
+        <Field label="Attach PDF (optional)">
+          <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
+            <Upload size={16} color={C.muted} />
+            <span className="pl-body" style={{ fontSize: 14, color: file ? C.text : C.muted }}>{file ? file.name : (entry?.file_path ? "Replace current PDF…" : "Choose a file…")}</span>
+            <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => setFile(e.target.files[0])} />
+          </label>
+        </Field>
+        <div className="flex items-center gap-2">
+          <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save syllabus"}</Btn>
+          {entry?.file_path && <FileLink path={entry.file_path} label="View current PDF" />}
+          <Btn kind="ghost" onClick={onDone}>Cancel</Btn>
+        </div>
+      </Card>
+    </>
   );
 }
 
 /* ---------- SYLLABUS (student) ---------- */
-function StudentSyllabus({ syllabi }) {
-  const items = ["fall", "spring"].map((t) => syllabi.find((s) => s.term === t)).filter(Boolean);
+function StudentSyllabus({ syllabi, profile }) {
+  // Show syllabi for the student's program, plus any marked "all programs".
+  const prog = profile?.program;
+  const items = (syllabi || []).filter((s) => s.program === "all" || s.program === prog);
   return (
     <>
-      <PageHead title="Syllabus" sub="Course outlines for the year." />
-      {items.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No syllabus posted yet.</span></Card> :
+      <PageHead title="Syllabus" sub="Course outline for your program." />
+      {items.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No syllabus posted for your program yet.</span></Card> :
         <div className="flex flex-col gap-4">
           {items.map((s) => (
-            <Card key={s.term}>
+            <Card key={s.id}>
               <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
                 <div className="flex items-center gap-2">
                   <ScrollText size={18} color={C.gold} />
-                  <h3 className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.ink, margin: 0, textTransform: "capitalize" }}>{s.title || `${s.term} Syllabus`}</h3>
+                  <div>
+                    <h3 className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.ink, margin: 0 }}>{s.title || `${programLabel(s.program)} Syllabus`}</h3>
+                    {s.program !== "all" && <div className="pl-body" style={{ fontSize: 12, color: C.gold, fontWeight: 600 }}>{programLabel(s.program)}{s.term ? ` · ${s.term}` : ""}</div>}
+                  </div>
                 </div>
                 {s.file_path && <FileLink path={s.file_path} label="Download PDF" />}
               </div>
-              <p className="pl-body" style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: "pre-wrap", margin: 0 }}>{s.content}</p>
+              {s.content && <p className="pl-body" style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: "pre-wrap", margin: 0 }}>{s.content}</p>}
             </Card>
           ))}
         </div>}
@@ -1616,6 +1958,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
   const [csvNote, setCsvNote] = useState(null);
+  const [progFilter, setProgFilter] = useState("all");
   const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
   const titleOf = (id) => homework.find((h) => h.id === id)?.title || "Homework";
 
@@ -1696,6 +2039,33 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
     }
     setBusy(true);
     try { await db.gradeHomework(gradeId, { manual, score: total, max_points: max, feedback }); await refresh(); setMode("list"); setGradeId(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  async function saveGradingDraft() {
+    const sub = hwSubs.find((s) => s.id === gradeId);
+    const hw = homework.find((h) => h.id === sub.homework_id);
+    const hasQs = hw && hw.questions.length > 0;
+    let total = 0, max = 0;
+    if (hasQs) {
+      const auto = autoScore({ questions: hw.questions }, sub);
+      const manualTotal = hw.questions.filter((q) => q.type === "short" || q.type === "essay").reduce((a, q) => a + (Number(manual[q.id] ?? 0) || 0), 0);
+      max = sumPoints(hw.questions); total = auto + manualTotal;
+    } else {
+      max = sub.max_points || hw?.points || 0; total = Number(score) || 0;
+    }
+    setBusy(true);
+    try { await db.saveGradeDraft(gradeId, { manual, score: total, max_points: max, feedback }); await refresh(); setMode("list"); setGradeId(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  async function sendBack() {
+    const note = window.prompt("Send this homework back to the student to complete and resubmit.\n\nAdd a note telling them what to fix or finish:", feedback || "");
+    if (note === null) return; // cancelled
+    setBusy(true);
+    try { await db.sendBackHomework(gradeId, note); await refresh(); setMode("list"); setGradeId(null); }
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
@@ -1798,7 +2168,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
               {q.type === "tf" && <div className="pl-body" style={{ fontSize: 14, textTransform: "capitalize" }}>Student answered: <b>{ans ?? "—"}</b> · Correct: {q.correct_answer}</div>}
               {(q.type === "short" || q.type === "essay") && (
                 <>
-                  <div className="pl-body" style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{ans || <i style={{ color: C.muted }}>No response</i>}</div>
+                  <div className="pl-body" style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 14px", fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", minHeight: 80 }}>{ans || <i style={{ color: C.muted }}>No response</i>}</div>
                   <div className="flex items-center gap-2" style={{ marginTop: 10 }}>
                     <span className="pl-body" style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>Award points:</span>
                     <input type="number" min={0} max={q.points} value={manual[q.id] ?? ""} placeholder="0" onChange={(e) => setManual({ ...manual, [q.id]: Math.min(q.points, Math.max(0, Number(e.target.value) || 0)) })} style={{ ...inputStyle, width: 80, padding: "6px 10px" }} />
@@ -1815,8 +2185,8 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
           {sub.file_path && <div style={{ marginTop: 10 }}><FileLink path={sub.file_path} label="Open submitted file" /></div>}
         </Card>
         <Card>
-          <Field label="Feedback"><textarea style={{ ...inputStyle, minHeight: 80 }} value={feedback} onChange={(e) => setFeedback(e.target.value)} /></Field>
-          <div className="flex items-center justify-between">
+          <Field label="Feedback"><textarea style={{ ...inputStyle, minHeight: 160 }} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Comments, encouragement, corrections, next steps…" /></Field>
+          <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
             {hasQs ? (
               <div className="pl-display" style={{ fontSize: 24, fontWeight: 600, color: C.green }}>{max ? Math.round((total / max) * 100) : 0}<span style={{ color: C.muted, fontSize: 18 }}> / 100</span> <span className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginLeft: 8 }}>({total} / {max} pts awarded)</span></div>
             ) : (
@@ -1826,7 +2196,11 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
                 <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>/ {max}</span>
               </div>
             )}
-            <Btn icon={Award} kind="gold" onClick={finalize} disabled={busy}>{busy ? "Saving…" : "Finalize & release"}</Btn>
+            <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+              <Btn kind="ghost" icon={Clock} onClick={saveGradingDraft} disabled={busy}>Save draft</Btn>
+              <Btn kind="ghost" icon={RotateCcw} onClick={sendBack} disabled={busy}>Send back</Btn>
+              <Btn icon={Award} kind="gold" onClick={finalize} disabled={busy}>{busy ? "Saving…" : (sub.status === "graded" ? "Update grade" : "Finalize & release")}</Btn>
+            </div>
           </div>
         </Card>
       </>
@@ -1846,43 +2220,71 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
         <input type="file" accept=".csv,text/csv" onChange={(e) => importCsv(e.target.files?.[0])} className="pl-body" style={{ fontSize: 13 }} />
         {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
       </Card>
-      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Assignments</h3>
-      <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
-        {homework.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No assignments yet.</span></Card>}
-        {homework.map((h) => (
-          <Card key={h.id}>
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
-                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(h.program)} · {h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""} · {hwSubs.filter((s) => s.homework_id === h.id).length} submitted</div>
-              </div>
-              <div className="flex items-center gap-2">
-                {h.file_path && <FileLink path={h.file_path} label="Attachment" />}
-                <Btn small kind="ghost" icon={PencilLine} onClick={() => editHw(h)}>Edit</Btn>
-                <button onClick={() => removeHw(h.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
-              </div>
-            </div>
-          </Card>
-        ))}
+      <div className="flex items-center justify-between" style={{ marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+        <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, margin: 0 }}>Assignments</h3>
+        <select style={{ ...inputStyle, maxWidth: 220 }} value={progFilter} onChange={(e) => setProgFilter(e.target.value)}>
+          <option value="all">All programs</option>
+          {PROGRAMS.filter((p) => p.key !== "all").map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        </select>
       </div>
+      {homework.length === 0 && <Card style={{ marginBottom: 24 }}><span className="pl-body" style={{ color: C.muted }}>No assignments yet.</span></Card>}
+      {(() => {
+        // Group assignments by program, in the PROGRAMS order, then render each group with a heading.
+        const visible = progFilter === "all" ? homework : homework.filter((h) => (h.program || "all") === progFilter);
+        const order = ["all", ...PROGRAMS.filter((p) => p.key !== "all").map((p) => p.key)];
+        const groups = order
+          .map((key) => ({ key, label: key === "all" ? "All programs" : programLabel(key), items: visible.filter((h) => (h.program || "all") === key).sort((a, b) => a.title.localeCompare(b.title)) }))
+          .filter((g) => g.items.length);
+        if (visible.length === 0) return <Card style={{ marginBottom: 24 }}><span className="pl-body" style={{ color: C.muted }}>No assignments for this program.</span></Card>;
+        return groups.map((g) => (
+          <div key={g.key} style={{ marginBottom: 22 }}>
+            <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>{g.label} · {g.items.length}</div>
+            <div className="flex flex-col gap-3">
+              {g.items.map((h) => (
+                <Card key={h.id}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
+                      <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(h.program)} · {h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""} · {hwSubs.filter((s) => s.homework_id === h.id).length} submitted</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {h.file_path && <FileLink path={h.file_path} label="Attachment" />}
+                      <Btn small kind="ghost" icon={PencilLine} onClick={() => editHw(h)}>Edit</Btn>
+                      <button onClick={() => removeHw(h.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </div>
+        ));
+      })()}
 
       <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Awaiting grading</h3>
       <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
         {pending.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>Nothing pending.</span></Card>}
-        {pending.map((s) => (
+        {pending.map((s) => {
+          const st = s.status === "grading" ? { label: "Draft saved", color: C.gold, bg: "#fffaf0" }
+            : s.status === "returned" ? { label: "Sent back", color: C.rose, bg: "#fef6f6" }
+            : null;
+          return (
           <Card key={s.id}>
             <div className="flex items-center justify-between">
               <div>
-                <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
+                <div className="flex items-center gap-2">
+                  <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
+                  {st && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: st.color, background: st.bg, border: `1px solid ${st.color}`, borderRadius: 6, padding: "2px 8px" }}>{st.label}</span>}
+                </div>
                 <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{titleOf(s.homework_id)} · submitted {fdate(s.submitted_at)}</div>
               </div>
               <div className="flex items-center gap-2">
                 <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), nameOf(s.student_id))}>View</Btn>
-                <Btn icon={ClipboardCheck} onClick={() => openGrade(s)}>Grade</Btn>
+                <Btn icon={ClipboardCheck} onClick={() => openGrade(s)}>{s.status === "grading" ? "Resume" : "Grade"}</Btn>
               </div>
             </div>
           </Card>
-        ))}
+          );
+        })}
       </div>
 
       <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Graded</h3>
@@ -1897,6 +2299,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
               </div>
               <div className="flex items-center gap-3">
                 <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_points ? Math.round((s.score / s.max_points) * 100) : 0}%</span>
+                <Btn small kind="ghost" icon={PencilLine} onClick={() => openGrade(s)}>Edit grade</Btn>
                 <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), nameOf(s.student_id))}>View / Print</Btn>
               </div>
             </div>
@@ -1908,29 +2311,86 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
 }
 
 /* ---------- HOMEWORK (student) ---------- */
-function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) {
+function StudentHomework({ availableHw, myHwSubs, homework, courses, profile, refresh }) {
   const [doing, setDoing] = useState(null);
   const [answers, setAnswers] = useState({});
   const [response, setResponse] = useState("");
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [savedNote, setSavedNote] = useState(false);
   const titleOf = (id) => homework.find((h) => h.id === id)?.title || "Homework";
 
-  function start(h) { setDoing(h); setAnswers({}); setResponse(""); setFile(null); }
+  const draftKey = (id) => `pl_hw_draft_${id}`;
+
+  function loadDraft(id) {
+    try {
+      const raw = window.localStorage.getItem(draftKey(id));
+      if (raw) return JSON.parse(raw);
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  function start(h) {
+    const draft = loadDraft(h.id);
+    setDoing(h);
+    setAnswers(draft?.answers || {});
+    setResponse(draft?.response || "");
+    setFile(null); // files can't be restored from a draft; student re-attaches if needed
+  }
+
+  // Auto-save the draft whenever answers or response change (while an assignment is open)
+  useEffect(() => {
+    if (!doing) return;
+    try {
+      window.localStorage.setItem(draftKey(doing.id), JSON.stringify({ answers, response, savedAt: Date.now() }));
+      setSavedNote(true);
+      const t = setTimeout(() => setSavedNote(false), 1500);
+      return () => clearTimeout(t);
+    } catch (e) { /* storage may be full/blocked; submitting still works */ }
+  }, [answers, response, doing]);
+
+  function clearDraft(id) {
+    try { window.localStorage.removeItem(draftKey(id)); } catch (e) { /* ignore */ }
+  }
 
   async function submit() {
     const maxPts = doing.questions.length ? sumPoints(doing.questions) : doing.points;
     setBusy(true);
-    try { await db.submitHomework({ homework_id: doing.id, answers, response, file, max_points: maxPts }); await refresh(); setDoing(null); setAnswers({}); setResponse(""); setFile(null); }
+    try {
+      await db.submitHomework({ homework_id: doing.id, answers, response, file, max_points: maxPts });
+      clearDraft(doing.id);
+      await refresh();
+      setDoing(null); setAnswers({}); setResponse(""); setFile(null);
+    }
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
 
+  function saveAndExit() {
+    // Draft is already auto-saved; just confirm and leave.
+    try { window.localStorage.setItem(draftKey(doing.id), JSON.stringify({ answers, response, savedAt: Date.now() })); } catch (e) { /* ignore */ }
+    setDoing(null); setAnswers({}); setResponse(""); setFile(null);
+  }
+
   if (doing) {
     const qs = doing.questions || [];
+    const hasDraftProgress = Object.keys(answers).length > 0 || response.trim().length > 0;
+    const returnedSub = myHwSubs.find((s) => s.homework_id === doing.id && s.status === "returned");
     return (
       <>
-        <PageHead title={doing.title} sub={doing.due_date ? `Due ${fdate(doing.due_date)}` : ""} action={<Btn kind="ghost" icon={X} onClick={() => setDoing(null)}>Exit</Btn>} />
+        <PageHead title={doing.title} sub={doing.due_date ? `Due ${fdate(doing.due_date)}` : ""} action={<div className="flex items-center gap-2">{savedNote && <span className="pl-body" style={{ fontSize: 12.5, color: C.green, fontWeight: 600 }}><Check size={13} style={{ verticalAlign: "middle", marginRight: 3 }} />Draft saved</span>}<Btn kind="ghost" icon={X} onClick={saveAndExit}>Save & exit</Btn></div>} />
+        {returnedSub && returnedSub.feedback && (
+          <Card style={{ marginBottom: 12, background: "#fef6f6", border: `1px solid ${C.rose}`, borderLeft: `4px solid ${C.rose}` }}>
+            <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.rose, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}><RotateCcw size={13} style={{ verticalAlign: "middle", marginRight: 4 }} />Returned — please complete and resubmit</div>
+            <p className="pl-body" style={{ fontSize: 14, color: C.ink, margin: 0, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{returnedSub.feedback}</p>
+          </Card>
+        )}
+        <Card style={{ marginBottom: 12, background: "#fffaf0", border: `1px solid ${C.gold}` }}>
+          <div className="pl-body" style={{ fontSize: 13, color: C.ink }}>
+            <Sparkles size={13} style={{ color: C.gold, verticalAlign: "middle", marginRight: 4 }} />
+            Your answers save automatically as you type. You can leave and come back anytime — just click <b>Start</b> on this assignment again to pick up where you left off. Your work is saved on this device.
+          </div>
+        </Card>
         <Card style={{ marginBottom: 12 }}>
           <p className="pl-body" style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: "pre-wrap", margin: 0 }}>{doing.instructions}</p>
           {doing.file_path && <div style={{ marginTop: 10 }}><FileLink path={doing.file_path} label="Open attachment" /></div>}
@@ -1949,7 +2409,7 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
               <button key={v} onClick={() => setAnswers({ ...answers, [q.id]: v })} className="pl-press" style={{ padding: "9px 22px", borderRadius: 9, marginRight: 8, cursor: "pointer", textTransform: "capitalize", fontWeight: 600, fontSize: 15, border: `1px solid ${answers[q.id] === v ? C.gold : C.line}`, background: answers[q.id] === v ? C.paper2 : "#fff", color: C.ink }}>{v}</button>
             ))}
             {(q.type === "short" || q.type === "essay") && (
-              <textarea style={{ ...inputStyle, minHeight: q.type === "essay" ? 120 : 60 }} placeholder="Type your answer…" value={answers[q.id] || ""} onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
+              <textarea style={{ ...inputStyle, minHeight: q.type === "essay" ? 220 : 110 }} placeholder="Type your answer…" value={answers[q.id] || ""} onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
             )}
           </Card>
         ))}
@@ -1963,7 +2423,10 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
               <input type="file" style={{ display: "none" }} onChange={(e) => setFile(e.target.files[0])} />
             </label>
           </Field>
-          <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : "Submit homework"}</Btn>
+          <div className="flex items-center gap-2">
+            <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : "Submit homework"}</Btn>
+            <Btn kind="ghost" icon={Clock} onClick={saveAndExit}>Save & finish later</Btn>
+          </div>
         </Card>
       </>
     );
@@ -1978,17 +2441,27 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
         <Grouped items={availableHw} courses={courses}>
           {(items) => (
             <div className="flex flex-col gap-3">
-              {items.map((h) => (
-                <Card key={h.id}>
+              {items.map((h) => {
+                let hasDraft = false;
+                try { hasDraft = !!window.localStorage.getItem(`pl_hw_draft_${h.id}`); } catch (e) { /* ignore */ }
+                const returned = myHwSubs.find((s) => s.homework_id === h.id && s.status === "returned");
+                return (
+                <Card key={h.id} style={returned ? { border: `1px solid ${C.rose}`, borderLeft: `4px solid ${C.rose}` } : undefined}>
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
+                      <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                        <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
+                        {returned && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.rose, background: "#fef6f6", border: `1px solid ${C.rose}`, borderRadius: 6, padding: "2px 8px" }}><RotateCcw size={11} style={{ verticalAlign: "middle", marginRight: 3 }} />Returned — needs revision</span>}
+                        {!returned && hasDraft && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: "#fffaf0", border: `1px solid ${C.gold}`, borderRadius: 6, padding: "2px 8px" }}>In progress</span>}
+                      </div>
+                      {returned && returned.feedback && <div className="pl-body" style={{ fontSize: 13, color: C.rose, marginTop: 4, lineHeight: 1.5 }}><b>Instructor note:</b> {returned.feedback}</div>}
                       <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""}</div>
                     </div>
-                    <Btn icon={PencilLine} onClick={() => start(h)}>Start</Btn>
+                    <Btn icon={returned ? RotateCcw : (hasDraft ? Clock : PencilLine)} kind={returned ? "gold" : undefined} onClick={() => start(h)}>{returned ? "Revise & resubmit" : (hasDraft ? "Resume" : "Start")}</Btn>
                   </div>
                 </Card>
-              ))}
+                );
+              })}
             </div>
           )}
         </Grouped>
@@ -2004,9 +2477,12 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
                 <h3 className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink, margin: 0 }}>{titleOf(s.homework_id)}</h3>
                 <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>Submitted {fdate(s.submitted_at)}</div>
               </div>
-              {s.status === "graded"
-                ? <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_points ? Math.round((s.score / s.max_points) * 100) : 0}%</span>
-                : <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: C.gold, background: C.goldSoft, padding: "5px 12px", borderRadius: 20 }}>Awaiting grade</span>}
+              <div className="flex items-center gap-3">
+                {s.status === "graded"
+                  ? <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_points ? Math.round((s.score / s.max_points) * 100) : 0}%</span>
+                  : <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: C.gold, background: C.goldSoft, padding: "5px 12px", borderRadius: 20 }}>Awaiting grade</span>}
+                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), profile?.full_name || "Student", true)}>View / Print</Btn>
+              </div>
             </div>
             {s.status === "graded" && s.feedback && (
               <div style={{ marginTop: 12, padding: "12px 14px", background: C.paper, borderRadius: 9, borderLeft: `3px solid ${C.gold}` }}>
@@ -2023,7 +2499,11 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, refresh }) 
 
 /* ---------- COURSES (instructor) ---------- */
 function CoursesManager({ courses, refresh }) {
-  const [form, setForm] = useState({ code: "", title: "", credit_hours: "", description: "", program: "all" });
+  const blankForm = {
+    code: "", title: "", credit_hours: "", description: "", program: "all",
+    ce_type: "none", ce_hours: "", passing_score: "75", approval_number: "", provider_name: "",
+  };
+  const [form, setForm] = useState(blankForm);
   const [busy, setBusy] = useState(false);
   const [show, setShow] = useState(false);
   const [csvNote, setCsvNote] = useState(null);
@@ -2031,7 +2511,7 @@ function CoursesManager({ courses, refresh }) {
   async function create() {
     if (!form.title.trim()) return;
     setBusy(true);
-    try { await db.createCourse(form); await refresh(); setForm({ code: "", title: "", credit_hours: "", description: "", program: "all" }); setShow(false); }
+    try { await db.createCourse(form); await refresh(); setForm(blankForm); setShow(false); }
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
@@ -2058,13 +2538,15 @@ function CoursesManager({ courses, refresh }) {
         if (!title) { skipped++; continue; }
         let prog = iProg >= 0 ? (row[iProg] || "").trim().toLowerCase() : "all";
         if (!valid.has(prog)) prog = "all";
-        recs.push({ code: iCode >= 0 ? (row[iCode] || "").trim() : "", title, credit_hours: iCred >= 0 ? (row[iCred] || "").trim() : "", program: prog, description: iDesc >= 0 ? (row[iDesc] || "").trim() : "" });
+        recs.push({ code: iCode >= 0 ? (row[iCode] || "").trim() : "", title, credit_hours: iCred >= 0 ? (row[iCred] || "").trim() : "", program: prog, description: iDesc >= 0 ? (row[iDesc] || "").trim() : "", ce_type: "none", ce_hours: null, passing_score: 75, approval_number: null, provider_name: null });
       }
       if (recs.length) await db.bulkAddCourses(recs);
       await refresh();
       setCsvNote(`Imported ${recs.length} course${recs.length === 1 ? "" : "s"}${skipped ? `, skipped ${skipped} (missing title)` : ""}.`);
     } catch (e) { setCsvNote("Couldn't read that file: " + e.message); }
   }
+
+  const ceOn = isCEType(form.ce_type);
 
   return (
     <>
@@ -2078,7 +2560,7 @@ function CoursesManager({ courses, refresh }) {
         {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
       </Card>
       {show && (
-        <Card style={{ marginBottom: 18, maxWidth: 640 }}>
+        <Card style={{ marginBottom: 18, maxWidth: 680 }}>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Course code"><input style={inputStyle} value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="e.g. ABS-101" /></Field>
             <Field label="Credit hours"><input style={inputStyle} value={form.credit_hours} onChange={(e) => setForm({ ...form, credit_hours: e.target.value })} placeholder="e.g. 4" inputMode="decimal" /></Field>
@@ -2086,6 +2568,23 @@ function CoursesManager({ courses, refresh }) {
           <Field label="Course title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Introduction to the Bible" /></Field>
           <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 80 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <Field label="Program / level"><ProgramSelect value={form.program} onChange={(v) => setForm({ ...form, program: v })} /></Field>
+          <Field label="Course type">
+            <select style={inputStyle} value={form.ce_type} onChange={(e) => setForm({ ...form, ce_type: e.target.value })}>
+              {CE_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </select>
+          </Field>
+          {ceOn && (
+            <div style={{ background: C.paper, border: `1px solid ${C.goldSoft}`, borderRadius: 10, padding: "14px 16px", marginBottom: 10 }}>
+              <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>CE Settings — required for certificate issuance</div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="CE / contact hours"><input style={inputStyle} type="number" step="0.5" value={form.ce_hours} onChange={(e) => setForm({ ...form, ce_hours: e.target.value })} placeholder="e.g. 2.0" /></Field>
+                <Field label="Passing score (%)"><input style={inputStyle} type="number" value={form.passing_score} onChange={(e) => setForm({ ...form, passing_score: e.target.value })} placeholder="75" /></Field>
+              </div>
+              <Field label="CE approval number"><input style={inputStyle} value={form.approval_number} onChange={(e) => setForm({ ...form, approval_number: e.target.value })} placeholder="e.g. NBCC ACEP #12345" /></Field>
+              <Field label="Provider name (appears on CE certificate)"><input style={inputStyle} value={form.provider_name} onChange={(e) => setForm({ ...form, provider_name: e.target.value })} placeholder="e.g. Healing Forward LLC" /></Field>
+              <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 6 }}>Learners must score ≥ {form.passing_score || 75}% on the post-test to receive a CE certificate. The certificate auto-issues on pass.</div>
+            </div>
+          )}
           <div className="flex gap-2"><Btn icon={Check} onClick={create} disabled={busy}>{busy ? "Saving…" : "Create course"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
         </Card>
       )}
@@ -2095,8 +2594,12 @@ function CoursesManager({ courses, refresh }) {
           <Card key={c.id}>
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} — ` : ""}{c.title}</h3>
-                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(c.program)}{c.credit_hours ? ` · ${c.credit_hours} cr` : ""}{c.description ? ` · ${c.description}` : ""}</div>
+                <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                  <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} — ` : ""}{c.title}</h3>
+                  {isCEType(c.ce_type) && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: C.goldSoft, padding: "2px 9px", borderRadius: 999 }}>{c.ce_type === "faith_ce" ? "Faith CE" : "CE"} · {c.ce_hours || "?"} hrs</span>}
+                  {c.ce_type === "open" && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.paper, padding: "2px 9px", borderRadius: 999, border: `1px solid ${C.line}` }}>Open / Elective</span>}
+                </div>
+                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(c.program)}{c.credit_hours ? ` · ${c.credit_hours} cr` : ""}{isCEType(c.ce_type) && c.approval_number ? ` · ${c.approval_number}` : ""}{c.description ? ` · ${c.description}` : ""}</div>
               </div>
               <button onClick={() => remove(c.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
             </div>
@@ -2217,7 +2720,7 @@ function AttendanceManager({ students, attendance, subs, hwSubs, refresh }) {
 }
 
 /* ---------- SUBMISSION REPORT (view / print) ---------- */
-function openSubmission(sub, assessment, studentName) {
+function openSubmission(sub, assessment, studentName, hideCorrect) {
   const safe = (s) => String(s ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
   const qs = (assessment && assessment.questions) || [];
   const max = sub.max_score ?? sub.max_points ?? sumPoints(qs);
@@ -2229,12 +2732,12 @@ function openSubmission(sub, assessment, studentName) {
     let answer = "", correct = "", badge = "";
     if (q.type === "mc") {
       answer = safe(q.options?.[Number(ans)] ?? "—");
-      correct = safe(q.options?.[Number(q.correct_answer)] ?? "");
+      correct = hideCorrect ? "" : safe(q.options?.[Number(q.correct_answer)] ?? "");
       const ok = String(ans) === String(q.correct_answer);
       badge = `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
     } else if (q.type === "tf") {
       answer = safe(ans ?? "—");
-      correct = safe(q.correct_answer);
+      correct = hideCorrect ? "" : safe(q.correct_answer);
       const ok = ans === q.correct_answer;
       badge = `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
     } else {
@@ -2290,8 +2793,29 @@ function openSubmission(sub, assessment, studentName) {
   </div>
   ${qHtml}${respHtml}${fileHtml}${fbHtml}
   </body></html>`;
-  const w = window.open("", "_blank");
-  if (w) { w.document.write(html); w.document.close(); } else { window.alert("Please allow pop-ups to view the submission."); }
+  // Try opening a new tab first. If the browser blocks it, fall back to a blob
+  // download so the report still opens without needing pop-ups enabled.
+  let w = null;
+  try { w = window.open("", "_blank"); } catch (e) { w = null; }
+  if (w && w.document) {
+    w.document.write(html);
+    w.document.close();
+  } else {
+    try {
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (e) {
+      window.alert("Could not open the report. Please allow pop-ups for this site and try again.");
+    }
+  }
 }
 
 /* ---------- CERTIFICATES ---------- */
@@ -2339,6 +2863,69 @@ function openCertificate(cert, studentName) {
           <div><div class="sigline">Date — ${dateStr}</div></div>
         </div>
         <div class="serial">Serial ${safe(cert.serial)}</div>
+      </div>
+    </div>
+  </body></html>`;
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); }
+  else window.alert("Please allow pop-ups to view the certificate.");
+}
+
+function openCECertificate(cert, studentName, course) {
+  const safe = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  const dateStr = new Date(cert.issued_on).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  const providerName = safe(course?.provider_name || cert.provider_name || BRAND.name);
+  const approvalNum = safe(course?.approval_number || cert.approval_number || "");
+  const ceHours = safe(course?.ce_hours || cert.ce_hours || "");
+  const ceTypeLabel = course?.ce_type === "faith_ce" ? "Faith-Based Continuing Education" : "Continuing Education";
+  const serial = safe(cert.serial || "");
+  const html = `<!doctype html><html><head><meta charset="utf-8">
+  <title>CE Certificate — ${safe(studentName)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    @page { size: landscape; margin: 0; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:'Source Serif 4',Georgia,serif; color:#15213d; background:#e9e3d4; display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; }
+    .cert { width:1050px; max-width:96vw; aspect-ratio:1.414/1; background:#f6f1e7; position:relative; padding:52px 64px; box-shadow:0 24px 70px rgba(0,0,0,.20); }
+    .frame { position:absolute; inset:18px; border:2px solid #1B3A6B; pointer-events:none; }
+    .frame:before { content:''; position:absolute; inset:7px; border:1px solid #5b7fc4; }
+    .inner { position:relative; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+    .kicker { letter-spacing:.34em; text-transform:uppercase; font-size:11.5px; color:#1B3A6B; font-weight:600; }
+    .provider { font-family:'Fraunces',serif; font-size:26px; font-weight:600; margin:6px 0 0; color:#1B3A6B; }
+    .cetype { font-size:13.5px; color:#5b6478; font-style:italic; margin:4px 0 0; }
+    .rule { width:64px; height:2px; background:#C49A1A; margin:16px auto 20px; }
+    .pres { font-size:14.5px; color:#5b6478; font-style:italic; }
+    .name { font-family:'Fraunces',serif; font-size:42px; font-weight:600; margin:8px 0 14px; padding:0 24px 10px; border-bottom:2px solid #C49A1A; }
+    .body { font-size:15.5px; max-width:660px; line-height:1.7; color:#2a3147; }
+    .body b { color:#15213d; }
+    .hours-badge { display:inline-block; margin:14px 0 0; background:#1B3A6B; color:#f6f1e7; font-family:'Fraunces',serif; font-size:16px; font-weight:600; padding:8px 28px; border-radius:999px; letter-spacing:.04em; }
+    .row { display:flex; gap:70px; margin-top:32px; }
+    .sigline { width:200px; border-top:1.5px solid #15213d; padding-top:7px; font-size:12px; color:#5b6478; letter-spacing:.04em; }
+    .approval { position:absolute; bottom:30px; left:50%; transform:translateX(-50%); font-size:10.5px; color:#7a8299; letter-spacing:.06em; text-align:center; white-space:nowrap; }
+    .serial { position:absolute; bottom:8px; right:6px; font-size:10px; color:#9aa2b3; letter-spacing:.06em; }
+    .print { position:fixed; top:16px; right:16px; background:#1B3A6B; color:#f6f1e7; border:none; padding:10px 18px; border-radius:8px; font-family:'Source Serif 4',serif; font-size:14px; cursor:pointer; }
+    @media print { .print { display:none; } body { background:#fff; padding:0; } .cert { box-shadow:none; } }
+  </style></head>
+  <body>
+    <button class="print" onclick="window.print()">Print / Save as PDF</button>
+    <div class="cert"><div class="frame"></div>
+      <div class="inner">
+        <div class="kicker">Certificate of Completion</div>
+        <div class="provider">${providerName}</div>
+        <div class="cetype">${ceTypeLabel}</div>
+        <div class="rule"></div>
+        <div class="pres">This certifies that</div>
+        <div class="name">${safe(studentName)}</div>
+        <div class="body">has successfully completed <b>${safe(cert.title)}</b>${cert.note ? `, ${safe(cert.note)}` : ""}, demonstrating competency through successful completion of the required post-assessment.</div>
+        ${ceHours ? `<div class="hours-badge">${ceHours} Contact Hour${Number(ceHours) === 1 ? "" : "s"}</div>` : ""}
+        <div class="row">
+          <div><div class="sigline">Presenter / Instructor</div></div>
+          <div><div class="sigline">Completion Date — ${dateStr}</div></div>
+        </div>
+        ${approvalNum ? `<div class="approval">Approved by ${approvalNum}</div>` : ""}
+        <div class="serial">Serial ${serial}</div>
       </div>
     </div>
   </body></html>`;
@@ -2474,20 +3061,7 @@ function CertClassesManager({ courses, students, profiles, tests, homework, subs
   }
   async function enroll(courseId, studentId) {
     if (!studentId) return;
-    try {
-      await db.enrollCertClass(courseId, studentId);
-      const cls = classes.find((c) => c.id === courseId);
-      if (cls && Number(cls.fee) > 0 && !(ledger || []).some((e) => e.kind === "charge" && e.course_id === courseId && e.student_id === studentId)) {
-        await db.addLedgerEntry({ student_id: studentId, course_id: courseId, kind: "charge", description: `Certificate class: ${cls.title}`, amount: cls.fee });
-      }
-      await refresh();
-    } catch (e) { window.alert(e.message); }
-  }
-  async function postFee(c, studentId) {
-    try {
-      await db.addLedgerEntry({ student_id: studentId, course_id: c.id, kind: "charge", description: `Certificate class: ${c.title}`, amount: c.fee });
-      await refresh();
-    } catch (e) { window.alert(e.message); }
+    try { await db.enrollCertClass(courseId, studentId); await refresh(); } catch (e) { window.alert(e.message); }
   }
   async function unenroll(id) {
     if (!window.confirm("Remove this student from the class?")) return;
@@ -2554,8 +3128,8 @@ function CertClassesManager({ courses, students, profiles, tests, homework, subs
                     const { done, total } = progressFor(c, r.student_id);
                     const ready = total > 0 && done >= total;
                     const cert = certificates.find((x) => x.course_id === c.id && x.student_id === r.student_id);
-                    const paid = Number(c.fee) > 0 && (ledger || []).some((e) => e.kind === "payment" && e.course_id === c.id && e.student_id === r.student_id);
-                    const charged = (ledger || []).some((e) => e.kind === "charge" && e.course_id === c.id && e.student_id === r.student_id);
+                    const paidAmt = (ledger || []).filter((e) => e.kind === "payment" && e.course_id === c.id && e.student_id === r.student_id).reduce((a, e) => a + (Number(e.amount) || 0), 0);
+                    const paid = Number(c.fee) > 0 && paidAmt >= Number(c.fee) - 0.005;
                     return (
                       <div key={r.id} className="flex items-center justify-between gap-3" style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
                         <div style={{ minWidth: 0, flex: 1 }}>
@@ -2563,7 +3137,6 @@ function CertClassesManager({ courses, students, profiles, tests, homework, subs
                           <div className="pl-body" style={{ fontSize: 12.5, color: ready ? C.green : C.muted, marginTop: 2 }}>{total ? `${done}/${total} coursework graded` : "No coursework added yet"}{ready ? " · ready for certificate" : ""}{Number(c.fee) > 0 ? (paid ? " · paid" : " · unpaid") : ""}</div>
                         </div>
                         <div className="flex items-center gap-2">
-                          {Number(c.fee) > 0 && !charged && <Btn small kind="ghost" icon={Receipt} onClick={() => postFee(c, r.student_id)}>Post fee</Btn>}
                           {cert
                             ? <Btn small icon={ExternalLink} onClick={() => openCertificate(cert, nameOf(r.student_id))}>View cert</Btn>
                             : <Btn small icon={Award} onClick={() => award(c, r.student_id)}>Issue cert</Btn>}
@@ -2624,28 +3197,47 @@ function ClassEditor({ draft, onClose, refresh }) {
   );
 }
 
-function StudentCertClasses({ courses, enrollments, profile, certAvailable, certAvailableHw, myHwSubs, homework, books, certificates, ledger, refresh }) {
+function StudentCertClasses({ courses, enrollments, profile, certificates, ledger, refresh }) {
   const myEnroll = enrollments.filter((e) => e.student_id === profile.id);
   const myClassIds = new Set(myEnroll.map((e) => e.course_id));
   const myClasses = courses.filter((c) => c.is_certificate && myClassIds.has(c.id));
   const myCerts = certificates.filter((c) => c.student_id === profile.id && myClassIds.has(c.course_id));
-  const paidIds = new Set((ledger || []).filter((e) => e.kind === "payment" && e.course_id).map((e) => e.course_id));
-  const certHomework = (homework || []).filter((h) => myClassIds.has(h.course_id));
-  const certMyHwSubs = (myHwSubs || []).filter((s) => certHomework.some((h) => h.id === s.homework_id));
+  const paidForCourse = (id) => (ledger || [])
+    .filter((e) => e.kind === "payment" && e.course_id === id)
+    .reduce((a, e) => a + (Number(e.amount) || 0), 0);
 
-  async function pay(c) {
-    try { const url = await db.startCertCheckout(c.id); window.location.href = url; }
+  // Billing summary across all enrolled cert classes — same shape as the
+  // Tuition page (Total charged / Total paid / Balance due + a statement).
+  const certCharged = myClasses.reduce((a, c) => a + (Number(c.fee) || 0), 0);
+  const certEntries = (ledger || []).filter((e) => myClassIds.has(e.course_id));
+  const certPaid = certEntries.filter((e) => e.kind === "payment").reduce((a, e) => a + (Number(e.amount) || 0), 0);
+  const certBalance = certCharged - certPaid;
+  const certEs = [...certEntries].sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  async function pay(c, plan, customAmt) {
+    try { const url = await db.startCertCheckout(c.id, plan, customAmt ?? null); window.location.href = url; }
     catch (e) { window.alert(e.message); }
+  }
+  function payCustom(c, remaining) {
+    const input = window.prompt(`Enter the amount you'd like to pay toward ${c.title}:`, remaining ? String(remaining) : "");
+    if (input === null) return;
+    const amt = Math.round(Number(input) * 100) / 100;
+    if (isNaN(amt) || amt < 0.5) { window.alert("Please enter an amount of at least $0.50."); return; }
+    pay(c, "custom", amt);
   }
 
   return (
     <>
-      <PageHead title="Certificate Classes" sub="Your enrolled certificate classes, their coursework, and the certificates you've earned." />
+      <PageHead title="Certificate Classes" sub="Your enrolled certificate classes, billing, and the certificates you've earned. Tests and homework for these classes are in the main Tests and Homework tabs." />
       {myClasses.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>You're not enrolled in any certificate classes yet. Your instructor will add you to one.</span></Card>}
       <div className="flex flex-col gap-3" style={{ marginBottom: myClasses.length ? 24 : 0 }}>
         {myClasses.map((c) => {
           const cert = myCerts.find((x) => x.course_id === c.id);
-          const paid = paidIds.has(c.id);
+          const fee = Number(c.fee) || 0;
+          const cPaid = paidForCourse(c.id);
+          const cRemaining = Math.max(0, Math.round((fee - cPaid) * 100) / 100);
+          const isPaid = fee > 0 && cRemaining <= 0.005;
+          const weeks = Number(c.duration_weeks) || 0;
           return (
             <Card key={c.id}>
               <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
@@ -2658,12 +3250,23 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
                   : <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{c.duration_weeks ? `${c.duration_weeks} weeks` : ""}{c.start_date ? ` · starts ${fdate(c.start_date)}` : ""}</span>}
               </div>
               {c.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.text, margin: "8px 0 0", lineHeight: 1.55 }}>{c.description}</p>}
-              {Number(c.fee) > 0 && (
+              {fee > 0 && (
                 <div className="flex items-center justify-between" style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}`, gap: 10, flexWrap: "wrap" }}>
-                  <span className="pl-body" style={{ fontSize: 14, color: C.ink }}>Tuition: <b>{money(c.fee)}</b></span>
-                  {paid
-                    ? <span className="pl-body" style={{ fontSize: 13, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={15} /> Paid</span>
-                    : <Btn small icon={Receipt} onClick={() => pay(c)}>Pay {money(c.fee)}</Btn>}
+                  <span className="pl-body" style={{ fontSize: 14, color: C.ink }}>Tuition: <b>{money(fee)}</b>{cPaid > 0 && !isPaid ? <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}> · {money(cRemaining)} left</span> : null}</span>
+                  {isPaid ? (
+                    <span className="pl-body" style={{ fontSize: 13, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={15} /> Paid</span>
+                  ) : (
+                    <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                      {weeks >= 12 && cRemaining > Math.round((fee / 4) * 100) / 100 + 0.005 && (
+                        <Btn small kind="ghost" icon={Receipt} onClick={() => pay(c, "quarter")}>Pay 1 of 4 {money(Math.min(Math.round((fee / 4) * 100) / 100, cRemaining))}</Btn>
+                      )}
+                      {weeks >= 12 && cRemaining > Math.round((fee / 2) * 100) / 100 + 0.005 && (
+                        <Btn small kind="ghost" icon={Receipt} onClick={() => pay(c, "half")}>Pay half {money(Math.min(Math.round((fee / 2) * 100) / 100, cRemaining))}</Btn>
+                      )}
+                      <Btn small icon={Receipt} onClick={() => pay(c, "full")}>Pay {money(cRemaining)}</Btn>
+                      <Btn small kind="ghost" onClick={() => payCustom(c, cRemaining)}>Other amount</Btn>
+                    </div>
+                  )}
                 </div>
               )}
               {cert && <div className="pl-body" style={{ marginTop: 10, color: C.green, fontWeight: 600, fontSize: 14 }}>Certificate earned {fdate(cert.issued_on)} — well done.</div>}
@@ -2671,11 +3274,39 @@ function StudentCertClasses({ courses, enrollments, profile, certAvailable, cert
           );
         })}
       </div>
-      {myClasses.length > 0 && (
+
+      {myClasses.length > 0 && certCharged > 0 && (
         <>
-          <StudentTests available={certAvailable} books={books} courses={courses} refresh={refresh} />
-          <div style={{ height: 18 }} />
-          <StudentHomework availableHw={certAvailableHw} myHwSubs={certMyHwSubs} homework={certHomework} courses={courses} refresh={refresh} />
+          <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
+            <Stat icon={Receipt} label="Total charged" value={money(certCharged)} />
+            <Stat icon={Check} label="Total paid" value={money(certPaid)} tone={C.green} />
+            <Stat icon={Receipt} label="Balance due" value={money(certBalance)} tone={certBalance > 0 ? C.rose : C.green} />
+          </div>
+          <Card style={{ marginBottom: 24 }}>
+            <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Statement</h3>
+            {certEs.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No charges or payments on record yet.</span> :
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+                  <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5 }}>
+                    <th style={{ padding: "6px 8px" }}>Date</th><th style={{ padding: "6px 8px" }}>Description</th>
+                    <th style={{ padding: "6px 8px", textAlign: "right" }}>Charge</th><th style={{ padding: "6px 8px", textAlign: "right" }}>Payment</th>
+                  </tr></thead>
+                  <tbody>
+                    {certEs.map((e) => {
+                      const v = ledgerRowView(e);
+                      return (
+                      <tr key={e.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                        <td style={{ padding: "8px" }}>{fdate(e.date)}</td>
+                        <td style={{ padding: "8px", color: v.isRefund ? C.rose : undefined }}>{v.label}</td>
+                        <td style={{ padding: "8px", textAlign: "right", color: v.isRefund ? C.rose : C.ink }}>{v.charge}</td>
+                        <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{v.payment}</td>
+                      </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>}
+          </Card>
         </>
       )}
     </>
@@ -2707,21 +3338,321 @@ function parseCSV(text) {
 }
 
 /* ---------- BILLING (instructor) ---------- */
-function BillingManager({ students, ledger, refresh }) {
+function BillingManager({ students, ledger, courses, tuition, refresh }) {
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
   const [csvNote, setCsvNote] = useState(null);
   const [charge, setCharge] = useState({ description: "", amount: "", date: todayStr() });
-  const [pay, setPay] = useState({ amount: "", date: todayStr(), method: "Wave", note: "" });
+  const [pay, setPay] = useState({ amount: "", date: todayStr(), method: "Wave", note: "", applyTo: "" });
+
+  const certClasses = (courses || []).filter((c) => c.is_certificate);
 
   const entriesFor = (id) => ledger.filter((e) => e.student_id === id);
   const totals = (id) => {
     const es = entriesFor(id);
     const charged = es.filter((e) => e.kind === "charge").reduce((a, e) => a + Number(e.amount || 0), 0);
     const paid = es.filter((e) => e.kind === "payment").reduce((a, e) => a + Number(e.amount || 0), 0);
-    return { charged, paid, balance: charged - paid };
+    // A scholarship is a credit toward the balance, but NOT cash collected.
+    const scholarship = es.filter((e) => e.kind === "scholarship").reduce((a, e) => a + Number(e.amount || 0), 0);
+    return { charged, paid, scholarship, balance: charged - paid - scholarship };
   };
   const nameOf = (id) => students.find((s) => s.id === id)?.full_name || "Student";
+
+  // Build a printable monthly statement (HTML) for one student and open it.
+  function makeStatementHtml(student) {
+    const es = entriesFor(student.id).slice().sort((a, b) => String(a.date || a.created_at || "").localeCompare(String(b.date || b.created_at || "")));
+    const t = totals(student.id);
+    const now = new Date();
+    const stmtMonth = now.toLocaleString(undefined, { month: "long", year: "numeric" });
+    const stmtNo = `STM-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}-${String(student.id).slice(0, 4).toUpperCase()}`;
+    const progLabel = student.program ? programLabel(student.program) : "—";
+    const stmtIsCert = student.program === "certificate" || /cert/i.test(String(student.program || ""));
+    const schoolName = stmtIsCert ? "The Healed Place" : "NCTS Pure Light School of Ministry";
+    let running = 0;
+    const rows = es.map((e) => {
+      const amt = Number(e.amount) || 0;
+      const isCharge = e.kind === "charge";
+      const isScholarship = e.kind === "scholarship";
+      const isRefund = e.kind === "payment" && amt < 0; // negative payment = refund/credit
+      running += isCharge ? amt : -amt; // payment, scholarship, and refund all move the balance down (refund amt is negative so it raises it)
+      // Clean up the description: refund rows get a plain "Refund" label and a
+      // readable method, not the raw "card-refund" / stored text.
+      let desc;
+      if (isScholarship) {
+        desc = `Scholarship${e.description && e.description !== "Scholarship" ? ` <span class="method">(${e.description.replace(/</g, "&lt;")})</span>` : ""}`;
+      } else if (isRefund) {
+        const m = /Stripe (re_[A-Za-z0-9]+)/.exec(e.description || "");
+        desc = `Refund${m ? ` <span class="method">(Stripe ${m[1]})</span>` : (e.method ? ` <span class="method">(${e.method.replace("card-refund", "to card").replace("refund", "credit")})</span>` : "")}`;
+      } else {
+        desc = `${(e.description || (isCharge ? "Charge" : "Payment")).replace(/</g, "&lt;")}${e.method ? ` <span class="method">(${e.method})</span>` : ""}`;
+      }
+      const chargeCell = isCharge ? money(amt) : (isRefund ? money(Math.abs(amt)) : "");
+      const paymentCell = (e.kind === "payment" && !isRefund) ? money(amt) : (isScholarship ? money(amt) : "");
+      return `<tr${isRefund ? ' style="color:#B23A3A;"' : (isScholarship ? ' style="color:#C5922E;"' : "")}>
+        <td>${fdate(e.date || e.created_at) || ""}</td>
+        <td>${desc}</td>
+        <td class="r">${chargeCell}</td>
+        <td class="r">${paymentCell}</td>
+        <td class="r">${money(running)}</td>
+      </tr>`;
+    }).join("");
+
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Statement — ${nameOf(student.id)}</title>
+<style>
+  @page { margin: 0.75in; }
+  * { box-sizing: border-box; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: #1a1a1a; margin: 0; padding: 32px; }
+  .mast { text-align: center; margin-bottom: 8px; }
+  .mast .school { color: #C5922E; font-family: Arial, sans-serif; font-weight: bold; font-size: 11px; letter-spacing: 2px; }
+  .mast .brand { color: #1B3A6B; font-size: 26px; font-weight: bold; margin: 2px 0; }
+  .mast .tag { color: #1B3A6B; font-style: italic; font-size: 12px; }
+  .rule { border: 0; border-top: 2px solid #1B3A6B; margin: 12px 0; }
+  h1 { text-align: center; font-size: 22px; letter-spacing: 1px; margin: 10px 0 2px; }
+  .sub { text-align: center; color: #C5922E; font-style: italic; font-size: 12px; margin-bottom: 18px; }
+  .meta { width: 100%; border-collapse: collapse; background: #F5F0E8; border: 1px solid #ddd; margin-bottom: 18px; }
+  .meta td { padding: 7px 12px; font-size: 12.5px; vertical-align: top; }
+  .meta .lbl { color: #1B3A6B; font-family: Arial, sans-serif; font-weight: bold; width: 90px; }
+  table.ledger { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 12.5px; }
+  table.ledger th { background: #1B3A6B; color: #fff; font-family: Arial, sans-serif; font-size: 11px; text-align: left; padding: 8px 10px; }
+  table.ledger th.r, table.ledger td.r { text-align: right; }
+  table.ledger td { padding: 8px 10px; border-bottom: 1px solid #eee; }
+  table.ledger tr:nth-child(even) td { background: #FBF8F2; }
+  .method { color: #888; font-size: 11px; }
+  .totals { width: 300px; margin-left: auto; border-collapse: collapse; font-size: 13px; }
+  .totals td { padding: 6px 12px; }
+  .totals .lbl { color: #1B3A6B; font-family: Arial, sans-serif; font-weight: bold; text-align: right; }
+  .totals .val { text-align: right; }
+  .totals .bal td { border-top: 2px solid #1B3A6B; font-weight: bold; font-size: 15px; }
+  .bal .val { color: ${t.balance > 0 ? "#B23A3A" : "#2E7D32"}; }
+  .pay { margin-top: 20px; background: #F5F0E8; border-left: 4px solid #C5922E; padding: 12px 16px; font-size: 12.5px; }
+  .foot { text-align: center; color: #666; font-size: 11px; margin-top: 26px; border-top: 1px solid #ccc; padding-top: 8px; }
+  @media print { .noprint { display: none; } body { padding: 0; } }
+</style></head><body>
+  <div class="noprint" style="text-align:center;margin-bottom:16px;">
+    <button onclick="window.print()" style="background:#1B3A6B;color:#fff;border:0;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save as PDF</button>
+  </div>
+  ${docMastheadHtml(student.program)}
+  <hr class="rule"/>
+  <h1>MONTHLY STATEMENT</h1>
+  <div class="sub">Statement for ${stmtMonth}</div>
+  <table class="meta">
+    <tr><td class="lbl">Statement</td><td>${stmtNo}</td><td class="lbl">Date</td><td>${fdate(now.toISOString())}</td></tr>
+    <tr><td class="lbl">Student</td><td>${nameOf(student.id).replace(/</g, "&lt;")}</td><td class="lbl">Program</td><td>${progLabel}</td></tr>
+    <tr><td class="lbl">Email</td><td>${(student.email || "—").replace(/</g, "&lt;")}</td><td class="lbl">School</td><td>${schoolName}</td></tr>
+  </table>
+  <table class="ledger">
+    <thead><tr><th>Date</th><th>Description</th><th class="r">Charges</th><th class="r">Payments</th><th class="r">Balance</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="5" style="text-align:center;color:#888;padding:20px;">No charges or payments on record.</td></tr>`}</tbody>
+  </table>
+  <table class="totals">
+    <tr><td class="lbl">Total Charged</td><td class="val">${money(t.charged)}</td></tr>
+    <tr><td class="lbl">Total Paid</td><td class="val">${money(t.paid)}</td></tr>
+    <tr class="bal"><td class="lbl">Balance Due</td><td class="val">${money(t.balance)}</td></tr>
+  </table>
+  ${t.balance > 0 ? `<div class="pay"><b>Payment options:</b> Pay in full (${money(t.balance)}), or contact the office to arrange installments. Pay online through your student portal under Cert Classes, or by another method arranged with the office.</div>` : `<div class="pay">Your account is paid in full. Thank you!</div>`}
+  <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
+</body></html>`;
+  }
+
+  function openStatement(student) {
+    const w = window.open("", "_blank");
+    if (!w) { window.alert("Please allow pop-ups to view the statement."); return; }
+    w.document.write(makeStatementHtml(student));
+    w.document.close();
+  }
+
+  // Build a printable INVOICE (request for payment) for one student.
+  // Installment options divide only the TUITION portion (not registration/books).
+  function makeInvoiceHtml(student, amountDue) {
+    const t = totals(student.id);
+    const now = new Date();
+    const invNo = `INV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}-${String(student.id).slice(0, 4).toUpperCase()}`;
+    const progLabel = student.program ? programLabel(student.program) : "—";
+    const isCert = student.program === "certificate" || /cert/i.test(progLabel);
+    const due = Number(amountDue) || 0;
+
+    // Find this student's tuition portion (total − registration − books) for their level.
+    let tuitionPortion = due; // fallback for cert / unknown levels
+    let regFee = 0, bookFee = 0, levelTotal = 0;
+    if (!isCert && student.program) {
+      const lvl = (tuition || []).find((x) => x.program === student.program);
+      if (lvl) {
+        levelTotal = Number(lvl.amount) || 0;
+        regFee = Number(lvl.registration) || 0;
+        bookFee = Number(lvl.books) || 0;
+        tuitionPortion = Math.max(0, Math.round((levelTotal - regFee - bookFee) * 100) / 100);
+      }
+    }
+
+    // How much has been paid toward each bucket (from the ledger descriptions).
+    const es = entriesFor(student.id);
+    const label = progLabel;
+    const paidBucket = (word) => es
+      .filter((e) => e.kind === "payment" && (e.description || "").trim().toLowerCase() === `${label} ${word}`.toLowerCase())
+      .reduce((a, e) => a + (Number(e.amount) || 0), 0);
+
+    // Build the charge line-items for the billing summary.
+    let billRows;
+    if (!isCert && (regFee > 0 || bookFee > 0 || tuitionPortion > 0)) {
+      const regPaid = paidBucket("registration"), bookPaid = paidBucket("books"), tuiPaid = paidBucket("tuition");
+      const line = (name, charged, paid) => `<tr><td>${name}</td><td class="r">${money(charged)}</td><td class="r">${paid > 0 ? money(paid) : "—"}</td><td class="r">${money(Math.max(0, charged - paid))}</td></tr>`;
+      billRows = `
+        ${regFee > 0 ? line("Registration", regFee, regPaid) : ""}
+        ${bookFee > 0 ? line("Books", bookFee, bookPaid) : ""}
+        ${tuitionPortion > 0 ? line("Tuition", tuitionPortion, tuiPaid) : ""}
+        <tr class="tot"><td><b>Total</b></td><td class="r"><b>${money(t.charged)}</b></td><td class="r"><b>${money(t.paid)}</b></td><td class="r"><b>${money(t.balance)}</b></td></tr>`;
+    } else {
+      // Certificate or no level data: show the simple charged/paid/balance.
+      billRows = `
+        <tr><td>Total Charged</td><td class="r">${money(t.charged)}</td><td class="r">—</td><td class="r"></td></tr>
+        <tr><td>Total Paid</td><td class="r">—</td><td class="r">${money(t.paid)}</td><td class="r"></td></tr>
+        <tr class="tot"><td><b>Balance</b></td><td class="r"></td><td class="r"></td><td class="r"><b>${money(t.balance)}</b></td></tr>`;
+    }
+
+    // Payment options.
+    //
+    // Once a student has paid anything, they have already chosen a plan and
+    // made a payment against it. The remaining balance is what they owe next —
+    // it must NOT be sliced into fresh halves and quarters. (A student who paid
+    // half of $199 owes the other $99.50; offering a "half" of $99.50 invents a
+    // plan that doesn't exist and under-bills them.)
+    //
+    // Only when nothing has been paid yet do we present the plan choices, and
+    // then they divide the ORIGINAL amount, never a remainder. Any option that
+    // would meet or exceed the amount due is dropped, since "pay in full"
+    // already covers it.
+    // Once a student has paid INTO the thing being split, they have chosen a
+    // plan and made a payment against it. Show the NEXT installment for that
+    // plan (from the stored plan on their prior payment), not a re-divided
+    // remainder. If we can't tell the plan, fall back to "pay in full".
+    const es2 = entriesFor(student.id);
+    const priorPlan = (() => {
+      const pays = es2.filter((e) => e.kind === "payment" && e.plan);
+      return pays.length ? pays[pays.length - 1].plan : null;
+    })();
+    const hasPaid = isCert ? t.paid > 0.005 : paidBucket("tuition") > 0.005;
+    const splitBase = isCert ? due : tuitionPortion;
+    const planFraction = { half: 2, quarter: 4, four: 4, seven: 7 };
+    let options = [["Pay in Full", due]];
+    if (hasPaid && priorPlan && planFraction[priorPlan]) {
+      // Next installment = original ÷ plan divisor, but never more than what's left.
+      const origAmt = isCert ? (t.charged) : tuitionPortion;
+      const inst = Math.min(Math.round((origAmt / planFraction[priorPlan]) * 100) / 100, due);
+      if (inst < due - 0.005) options.push([`Next installment (${priorPlan})`, inst]);
+    } else if (!hasPaid) {
+      const plans = isCert
+        ? [["Pay Half", splitBase / 2], ["Pay 1 of 4", splitBase / 4]]
+        : [["Pay Half (tuition)", splitBase / 2], ["Pay 1 of 4 (tuition)", splitBase / 4], ["Pay 1 of 7 (tuition)", splitBase / 7]];
+      for (const [label, amt] of plans) {
+        if (amt < due - 0.005) options.push([label, amt]);
+      }
+    }
+    const optRows = options.map(([label, amt]) => `<tr><td>${label}</td><td class="r">${money(Math.round(amt * 100) / 100)}</td></tr>`).join("");
+    const noteLine = hasPaid
+      ? (priorPlan && planFraction[priorPlan]
+        ? "You may pay your next installment or the full remaining balance."
+        : "This is the remaining balance on your account and is due in full.")
+      : (isCert
+        ? "Certificate tuition may be paid in full, half, or in four installments."
+        : "Registration and Books are paid separately. Only the tuition portion may be split into half, four, or seven installments.");
+
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Invoice — ${nameOf(student.id)}</title>
+<style>
+  @page { margin: 0.75in; }
+  * { box-sizing: border-box; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: #1a1a1a; margin: 0; padding: 32px; }
+  .mast { text-align: center; margin-bottom: 8px; }
+  .mast .school { color: #C5922E; font-family: Arial, sans-serif; font-weight: bold; font-size: 11px; letter-spacing: 2px; }
+  .mast .brand { color: #1B3A6B; font-size: 26px; font-weight: bold; margin: 2px 0; }
+  .mast .tag { color: #1B3A6B; font-style: italic; font-size: 12px; }
+  .rule { border: 0; border-top: 2px solid #1B3A6B; margin: 12px 0; }
+  h1 { text-align: center; font-size: 22px; letter-spacing: 2px; margin: 10px 0 2px; }
+  .sub { text-align: center; color: #C5922E; font-style: italic; font-size: 12px; margin-bottom: 18px; }
+  .meta { width: 100%; border-collapse: collapse; background: #F5F0E8; border: 1px solid #ddd; margin-bottom: 18px; }
+  .meta td { padding: 7px 12px; font-size: 12.5px; vertical-align: top; }
+  .meta .lbl { color: #1B3A6B; font-family: Arial, sans-serif; font-weight: bold; width: 90px; }
+  table.bill { width: 100%; border-collapse: collapse; margin-bottom: 8px; font-size: 13px; }
+  table.bill th { background: #1B3A6B; color: #fff; font-family: Arial, sans-serif; font-size: 11px; text-align: left; padding: 8px 10px; }
+  table.bill th.r, table.bill td.r { text-align: right; }
+  table.bill td { padding: 9px 10px; border-bottom: 1px solid #eee; }
+  table.bill tr.tot td { border-top: 2px solid #1B3A6B; border-bottom: none; }
+  .due { background: #1B3A6B; color: #fff; text-align: center; padding: 12px; font-size: 17px; font-weight: bold; font-family: Arial, sans-serif; letter-spacing: 1px; margin: 16px 0; border-radius: 4px; }
+  .opts { width: 340px; margin-left: auto; border-collapse: collapse; font-size: 13px; border: 1px solid #ddd; }
+  .opts caption { text-align: left; font-family: Arial, sans-serif; font-weight: bold; color: #1B3A6B; font-size: 12px; padding: 6px 0; }
+  .opts td { padding: 7px 12px; border-bottom: 1px solid #eee; }
+  .opts .r { text-align: right; font-weight: bold; }
+  .pay { margin-top: 18px; background: #F5F0E8; border-left: 4px solid #C5922E; padding: 12px 16px; font-size: 12.5px; }
+  .foot { text-align: center; color: #666; font-size: 11px; margin-top: 26px; border-top: 1px solid #ccc; padding-top: 8px; }
+  @media print { .noprint { display: none; } body { padding: 0; } }
+</style></head><body>
+  <div class="noprint" style="text-align:center;margin-bottom:16px;">
+    <button onclick="window.print()" style="background:#1B3A6B;color:#fff;border:0;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save as PDF</button>
+  </div>
+  ${docMastheadHtml(student.program)}
+  <hr class="rule"/>
+  <h1>INVOICE</h1>
+  <div class="sub">Document No. ${invNo} &bull; Issued ${fdate(now.toISOString())}</div>
+  <table class="meta">
+    <tr><td class="lbl">Student</td><td>${nameOf(student.id).replace(/</g, "&lt;")}</td><td class="lbl">Program</td><td>${progLabel}</td></tr>
+    <tr><td class="lbl">Email</td><td>${(student.email || "—").replace(/</g, "&lt;")}</td><td class="lbl">School</td><td>${isCert ? "The Healed Place" : "NCTS Pure Light School of Ministry"}</td></tr>
+  </table>
+  <table class="bill">
+    <thead><tr><th>Billing Summary</th><th class="r">Charged</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
+    <tbody>${billRows}</tbody>
+  </table>
+  <div class="due">AMOUNT DUE: ${money(due)}</div>
+  <table class="opts"><caption>Payment Options</caption><tbody>${optRows}</tbody></table>
+  <div class="pay"><b>How to pay:</b> Pay online through your student portal (${isCert ? "Cert Classes" : "Tuition"} tab), or contact the office to arrange payment. ${noteLine} Thank you!</div>
+  <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
+</body></html>`;
+  }
+
+  function openInvoice(student) {
+    const t = totals(student.id);
+    const input = window.prompt(
+      `Invoice for ${nameOf(student.id)}\n\nEnter the amount to invoice, or leave as-is for the full balance:`,
+      String(Math.max(0, Math.round(t.balance * 100) / 100))
+    );
+    if (input === null) return; // cancelled
+    const amt = Number(input);
+    if (isNaN(amt) || amt < 0) { window.alert("Please enter a valid amount."); return; }
+    const w = window.open("", "_blank");
+    if (!w) { window.alert("Please allow pop-ups to view the invoice."); return; }
+    w.document.write(makeInvoiceHtml(student, amt));
+    w.document.close();
+  }
+
+  async function emailAllStatements(list) {
+    const withActivity = list.filter((s) => entriesFor(s.id).length > 0 && s.email);
+    if (withActivity.length === 0) { window.alert("No students with billing activity and an email on file."); return; }
+    if (!window.confirm(`Email a monthly statement to ${withActivity.length} student${withActivity.length === 1 ? "" : "s"} now?`)) return;
+    let sent = 0, failed = 0;
+    for (const s of withActivity) {
+      const html = makeStatementHtml(s);
+      try {
+        const res = await db.sendEmail({ to: [s.email], subject: `Your monthly statement — ${new Date().toLocaleString(undefined, { month: "long", year: "numeric" })}`, html });
+        if (res && res.error) { failed++; console.error("statement email failed", s.email, res.error); }
+        else sent++;
+      } catch (e) { failed++; console.error("statement email failed", s.email, e); }
+    }
+    window.alert(`Statements sent: ${sent}${failed ? ` · failed: ${failed}` : ""}.`);
+  }
+
+  function printAllStatements(list) {
+    const withActivity = list.filter((s) => entriesFor(s.id).length > 0);
+    if (withActivity.length === 0) { window.alert("No students have billing activity yet."); return; }
+    const w = window.open("", "_blank");
+    if (!w) { window.alert("Please allow pop-ups to print all statements."); return; }
+    const pages = withActivity.map((s) => makeStatementHtml(s)
+      .replace(/^[\s\S]*?<body>/, "").replace(/<\/body>[\s\S]*$/, "")
+      .replace(/<div class="noprint"[\s\S]*?<\/div>\s*/, "")
+    ).join('<div style="page-break-after:always;"></div>');
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Monthly Statements</title>
+<style>@page{margin:0.75in;} body{font-family:Georgia,serif;color:#1a1a1a;padding:32px;} .mast{text-align:center;margin-bottom:8px;} .mast .school{color:#C5922E;font-family:Arial,sans-serif;font-weight:bold;font-size:11px;letter-spacing:2px;} .mast .brand{color:#1B3A6B;font-size:26px;font-weight:bold;margin:2px 0;} .mast .tag{color:#1B3A6B;font-style:italic;font-size:12px;} .rule{border:0;border-top:2px solid #1B3A6B;margin:12px 0;} h1{text-align:center;font-size:22px;letter-spacing:1px;margin:10px 0 2px;} .sub{text-align:center;color:#C5922E;font-style:italic;font-size:12px;margin-bottom:18px;} .meta{width:100%;border-collapse:collapse;background:#F5F0E8;border:1px solid #ddd;margin-bottom:18px;} .meta td{padding:7px 12px;font-size:12.5px;} .meta .lbl{color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;width:90px;} table.ledger{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12.5px;} table.ledger th{background:#1B3A6B;color:#fff;font-family:Arial,sans-serif;font-size:11px;text-align:left;padding:8px 10px;} table.ledger th.r,table.ledger td.r{text-align:right;} table.ledger td{padding:8px 10px;border-bottom:1px solid #eee;} table.ledger tr:nth-child(even) td{background:#FBF8F2;} .method{color:#888;font-size:11px;} .totals{width:300px;margin-left:auto;border-collapse:collapse;font-size:13px;} .totals td{padding:6px 12px;} .totals .lbl{color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;text-align:right;} .totals .val{text-align:right;} .totals .bal td{border-top:2px solid #1B3A6B;font-weight:bold;font-size:15px;} .pay{margin-top:20px;background:#F5F0E8;border-left:4px solid #C5922E;padding:12px 16px;font-size:12.5px;} .foot{text-align:center;color:#666;font-size:11px;margin-top:26px;border-top:1px solid #ccc;padding-top:8px;}</style></head><body>
+    <div style="text-align:center;margin-bottom:16px;"><button onclick="window.print()" style="background:#1B3A6B;color:#fff;border:0;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save All as PDF</button></div>
+    ${pages}</body></html>`);
+    w.document.close();
+  }
 
   async function addCharge() {
     if (!charge.amount) return;
@@ -2730,16 +3661,54 @@ function BillingManager({ students, ledger, refresh }) {
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
+  async function addScholarship() {
+    const input = window.prompt(`Record a scholarship for ${nameOf(selected)}.\n\nThis reduces their balance but is NOT counted as cash collected.\n\nScholarship amount:`, "");
+    if (input === null) return;
+    const amt = Math.round(Number(input) * 100) / 100;
+    if (isNaN(amt) || amt <= 0) { window.alert("Please enter a scholarship amount greater than zero."); return; }
+    const note = window.prompt("Description (optional) — e.g. 'Pastor's scholarship', 'Need-based award':", "Scholarship") || "Scholarship";
+    setBusy(true);
+    try { await db.addLedgerEntry({ student_id: selected, kind: "scholarship", description: note, amount: amt, date: todayStr() }); await refresh(); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
   async function addPayment() {
     if (!pay.amount) return;
     setBusy(true);
-    try { await db.addLedgerEntry({ student_id: selected, kind: "payment", description: pay.note || "Payment", amount: pay.amount, date: pay.date, method: pay.method }); await refresh(); setPay({ amount: "", date: todayStr(), method: pay.method, note: "" }); }
+    try {
+      const cls = certClasses.find((c) => c.id === pay.applyTo);
+      const description = pay.note || (cls ? cls.title : "Payment");
+      await db.addLedgerEntry({ student_id: selected, kind: "payment", description, amount: pay.amount, date: pay.date, method: pay.method, course_id: cls ? cls.id : undefined });
+      await refresh();
+      setPay({ amount: "", date: todayStr(), method: pay.method, note: "", applyTo: "" });
+    }
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
   async function remove(id) {
     if (!window.confirm("Delete this entry?")) return;
     try { await db.deleteLedgerEntry(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function refund(entry) {
+    const max = Number(entry.amount) || 0;
+    const isCard = entry.method === "card" || entry.method === "Stripe";
+    const input = window.prompt(
+      `Refund ${nameOf(entry.student_id)}\n\n${isCard ? "This will refund the card through Stripe AND credit their account." : "This will credit their account (no card involved)."}\n\nAmount to refund (up to ${money(max)}):`,
+      String(max)
+    );
+    if (input === null) return;
+    const amt = Number(input);
+    if (isNaN(amt) || amt <= 0 || amt > max + 0.005) { window.alert("Please enter a valid amount up to the payment total."); return; }
+    if (!window.confirm(`Refund ${money(amt)} to ${nameOf(entry.student_id)}?${isCard ? " This returns money to their card." : ""}`)) return;
+    try {
+      const res = await db.refundPayment(entry.id, amt);
+      if (res && res.ok) {
+        window.alert(`Refunded ${money(res.refunded)}${res.card ? " to the card" : ""}. Their account has been credited.`);
+        await refresh();
+      } else {
+        window.alert(res?.error || "The refund could not be completed.");
+      }
+    } catch (e) { window.alert(e.message); }
   }
   async function onCsv(file) {
     if (!file) return;
@@ -2787,7 +3756,10 @@ function BillingManager({ students, ledger, refresh }) {
               <Field label="Amount"><input style={inputStyle} value={charge.amount} onChange={(e) => setCharge({ ...charge, amount: e.target.value })} placeholder="300" inputMode="decimal" /></Field>
               <Field label="Date"><input type="date" style={inputStyle} value={charge.date} onChange={(e) => setCharge({ ...charge, date: e.target.value })} /></Field>
             </div>
-            <Btn small icon={Plus} onClick={addCharge} disabled={busy}>Add charge</Btn>
+            <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+              <Btn small icon={Plus} onClick={addCharge} disabled={busy}>Add charge</Btn>
+              <Btn small kind="ghost" icon={Award} onClick={addScholarship} disabled={busy}>Add scholarship</Btn>
+            </div>
           </Card>
           <Card>
             <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Record a payment</h3>
@@ -2795,11 +3767,20 @@ function BillingManager({ students, ledger, refresh }) {
               <Field label="Amount"><input style={inputStyle} value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} placeholder="100" inputMode="decimal" /></Field>
               <Field label="Date"><input type="date" style={inputStyle} value={pay.date} onChange={(e) => setPay({ ...pay, date: e.target.value })} /></Field>
             </div>
+            {certClasses.length > 0 && (
+              <Field label="Apply to (for installment tracking)">
+                <select style={inputStyle} value={pay.applyTo} onChange={(e) => setPay({ ...pay, applyTo: e.target.value })}>
+                  <option value="">General account (degree tuition)</option>
+                  {certClasses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+                </select>
+              </Field>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <Field label="Method"><input style={inputStyle} value={pay.method} onChange={(e) => setPay({ ...pay, method: e.target.value })} placeholder="Wave" /></Field>
-              <Field label="Note (optional)"><input style={inputStyle} value={pay.note} onChange={(e) => setPay({ ...pay, note: e.target.value })} /></Field>
+              <Field label="Note (optional)"><input style={inputStyle} value={pay.note} onChange={(e) => setPay({ ...pay, note: e.target.value })} placeholder={pay.applyTo ? "Leave blank to use class name" : "e.g. Bachelor tuition"} /></Field>
             </div>
             <Btn small icon={Plus} onClick={addPayment} disabled={busy}>Record payment</Btn>
+            {pay.applyTo && <p className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>This payment will apply to the student's balance for that certificate class and show as paid on their Cert Classes page.</p>}
           </Card>
         </div>
         <Card>
@@ -2812,15 +3793,23 @@ function BillingManager({ students, ledger, refresh }) {
                   <th style={{ padding: "6px 8px", textAlign: "right" }}>Charge</th><th style={{ padding: "6px 8px", textAlign: "right" }}>Payment</th><th></th>
                 </tr></thead>
                 <tbody>
-                  {es.map((e) => (
+                  {es.map((e) => {
+                    const v = ledgerRowView(e);
+                    return (
                     <tr key={e.id} style={{ borderTop: `1px solid ${C.line}` }}>
                       <td style={{ padding: "8px" }}>{fdate(e.date)}</td>
-                      <td style={{ padding: "8px" }}>{e.description || (e.kind === "payment" ? "Payment" : "Charge")}{e.method ? ` · ${e.method}` : ""}</td>
-                      <td style={{ padding: "8px", textAlign: "right", color: C.ink }}>{e.kind === "charge" ? money(e.amount) : ""}</td>
-                      <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{e.kind === "payment" ? money(e.amount) : ""}</td>
-                      <td style={{ padding: "8px", textAlign: "right" }}><button onClick={() => remove(e.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button></td>
+                      <td style={{ padding: "8px", color: v.isRefund ? C.rose : undefined }}>{v.label}</td>
+                      <td style={{ padding: "8px", textAlign: "right", color: v.isRefund ? C.rose : C.ink }}>{v.charge}</td>
+                      <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{v.payment}</td>
+                      <td style={{ padding: "8px", textAlign: "right", whiteSpace: "nowrap" }}>
+                        {e.kind === "payment" && Number(e.amount) > 0 && (
+                          <button onClick={() => refund(e)} className="pl-press" title="Refund this payment" style={{ background: "none", border: "none", cursor: "pointer", color: C.gold, marginRight: 10, fontSize: 12.5, fontWeight: 700 }}>Refund</button>
+                        )}
+                        <button onClick={() => remove(e.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>}
@@ -2841,45 +3830,375 @@ function BillingManager({ students, ledger, refresh }) {
         {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
       </Card>
       {students.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card> :
+        (() => {
+          // Split by status; treat missing status as active.
+          const isActive = (s) => (s.status || "active") !== "inactive";
+          const activeStudents = students.filter(isActive);
+          const inactiveStudents = students.filter((s) => !isActive(s));
+
+          // Funds summary across ALL students.
+          const sumFor = (list) => list.reduce((acc, s) => {
+            const t = totals(s.id);
+            acc.charged += t.charged; acc.paid += t.paid; acc.scholarship += t.scholarship; acc.balance += Math.max(0, t.balance);
+            return acc;
+          }, { charged: 0, paid: 0, scholarship: 0, balance: 0 });
+          const all = sumFor(students);
+          const act = sumFor(activeStudents);
+          const owing = students.filter((s) => totals(s.id).balance > 0.005).length;
+
+          function fundsReport() {
+            const now = new Date();
+            const when = now.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
+            const rowsHtml = (list, heading) => {
+              if (!list.length) return "";
+              const body = list.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => {
+                const t = totals(s.id);
+                return `<tr><td>${(s.full_name || "").replace(/</g, "&lt;")}</td><td class="r">${money(t.charged)}</td><td class="r" style="color:#C5922E">${t.scholarship > 0 ? money(t.scholarship) : "—"}</td><td class="r" style="color:#2e7d32">${money(t.paid)}</td><td class="r" style="color:${t.balance > 0.005 ? "#B23A3A" : "#2e7d32"};font-weight:700">${money(Math.max(0, t.balance))}</td></tr>`;
+              }).join("");
+              const sub = sumFor(list);
+              return `<tr class="sub"><td colspan="5">${heading} (${list.length})</td></tr>${body}<tr class="tot"><td>Subtotal</td><td class="r">${money(sub.charged)}</td><td class="r">${money(sub.scholarship)}</td><td class="r">${money(sub.paid)}</td><td class="r">${money(sub.balance)}</td></tr>`;
+            };
+            const html = `<!doctype html><html><head><meta charset="utf-8"><title>Funds Report</title>
+              <style>
+                body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;max-width:820px;margin:24px auto;padding:0 20px;}
+                .head{text-align:center;border-bottom:3px solid #1B3A6B;padding-bottom:12px;margin-bottom:8px;}
+                .head .n{color:#C5922E;font-family:Arial,sans-serif;font-size:12px;letter-spacing:2px;font-weight:bold;}
+                h1{color:#1B3A6B;font-size:22px;margin:6px 0 2px;}
+                .sub2{color:#666;font-size:13px;margin-bottom:20px;text-align:center;}
+                .cards{display:flex;gap:12px;margin:0 0 22px;}
+                .card{flex:1;border:1px solid #ddd;border-radius:8px;padding:14px 16px;text-align:center;}
+                .card .lbl{font-family:Arial,sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#666;}
+                .card .val{font-size:24px;font-weight:bold;color:#1B3A6B;margin-top:4px;}
+                .card.paid .val{color:#2e7d32}.card.owed .val{color:#B23A3A}
+                table{width:100%;border-collapse:collapse;font-size:13.5px;}
+                th{font-family:Arial,sans-serif;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#666;border-bottom:2px solid #1B3A6B;padding:8px;}
+                td{padding:7px 8px;border-bottom:1px solid #eee;}
+                td.r,th.r{text-align:right;}
+                tr.sub td{background:#F5F0E8;font-family:Arial,sans-serif;font-weight:bold;color:#1B3A6B;font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding-top:14px;}
+                tr.tot td{font-weight:bold;border-top:2px solid #1B3A6B;border-bottom:none;background:#faf7f2;}
+                .grand td{font-size:15px;font-weight:bold;color:#1B3A6B;border-top:3px double #1B3A6B;background:#F5F0E8;padding:12px 8px;}
+                .foot{margin-top:22px;text-align:center;color:#888;font-size:11px;font-family:Arial,sans-serif;}
+                @media print{.noprint{display:none}}
+              </style></head><body>
+              <div class="head"><div class="n">NCTS PURE LIGHT SCHOOL OF MINISTRY</div><h1>Funds Collected &amp; Owed</h1></div>
+              <div class="sub2">Management Report &bull; ${when}</div>
+              <button class="noprint" onclick="window.print()" style="display:block;margin:0 auto 20px;padding:8px 18px;background:#1B3A6B;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Print / Save as PDF</button>
+              <div class="cards">
+                <div class="card paid"><div class="lbl">Total Collected</div><div class="val">${money(all.paid)}</div></div>
+                <div class="card owed"><div class="lbl">Total Outstanding</div><div class="val">${money(all.balance)}</div></div>
+                ${all.scholarship > 0 ? `<div class="card"><div class="lbl">Scholarships</div><div class="val" style="color:#C5922E">${money(all.scholarship)}</div></div>` : ""}
+                <div class="card"><div class="lbl">Total Billed</div><div class="val">${money(all.charged)}</div></div>
+              </div>
+              <div class="sub2" style="text-align:left;margin-bottom:8px;">
+                ${students.length} students &bull; ${activeStudents.length} active, ${inactiveStudents.length} inactive &bull; ${owing} with a balance owing
+              </div>
+              <table>
+                <thead><tr><th>Student</th><th class="r">Billed</th><th class="r">Scholarship</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
+                <tbody>
+                  ${rowsHtml(activeStudents, "Active students")}
+                  ${rowsHtml(inactiveStudents, "Inactive students")}
+                  <tr class="grand"><td>ALL STUDENTS</td><td class="r">${money(all.charged)}</td><td class="r">${money(all.scholarship)}</td><td class="r">${money(all.paid)}</td><td class="r">${money(all.balance)}</td></tr>
+                </tbody>
+              </table>
+              <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
+              </body></html>`;
+            let w = null;
+            try { w = window.open("", "_blank"); } catch (e) { w = null; }
+            if (w && w.document) { w.document.write(html); w.document.close(); }
+            else {
+              try {
+                const blob = new Blob([html], { type: "text/html" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener";
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 10000);
+              } catch (e) { window.alert("Please allow pop-ups to view the report."); }
+            }
+          }
+
+          const renderTable = (list) => (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+                <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
+                  <th style={{ padding: "6px 8px" }}>Student</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Charged</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Scholarship</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Paid</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Balance</th><th></th>
+                </tr></thead>
+                <tbody>
+                  {list.map((s) => {
+                    const t = totals(s.id);
+                    return (
+                      <tr key={s.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: C.ink }}>{s.full_name}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right" }}>{money(t.charged)}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", color: t.scholarship > 0 ? C.gold : C.muted }}>{t.scholarship > 0 ? money(t.scholarship) : "—"}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", color: C.green }}>{money(t.paid)}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", fontWeight: 700, color: t.balance > 0.005 ? C.rose : C.green }}>{money(t.balance)}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
+                          <Btn small kind="ghost" icon={FileText} onClick={() => openInvoice(s)}>Invoice</Btn>
+                          <Btn small kind="ghost" icon={Receipt} onClick={() => openStatement(s)}>Statement</Btn>
+                          <Btn small kind="ghost" onClick={() => setSelected(s.id)}>Manage</Btn>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          );
+
+          return (
+            <>
+              {/* Funds summary */}
+              <Card style={{ marginBottom: 16 }}>
+                <div className="flex items-center justify-between" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                  <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: 0 }}>Funds Summary</h3>
+                  <Btn small kind="gold" icon={FileText} onClick={fundsReport}>Management report</Btn>
+                </div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ flex: "1 1 160px", background: "#f2f8f3", border: `1px solid ${C.green}33`, borderRadius: 10, padding: "14px 16px" }}>
+                    <div className="pl-body" style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".06em", color: C.muted }}>Total Collected</div>
+                    <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.green, marginTop: 2 }}>{money(all.paid)}</div>
+                  </div>
+                  <div style={{ flex: "1 1 160px", background: "#fdf3f3", border: `1px solid ${C.rose}33`, borderRadius: 10, padding: "14px 16px" }}>
+                    <div className="pl-body" style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".06em", color: C.muted }}>Outstanding</div>
+                    <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.rose, marginTop: 2 }}>{money(all.balance)}</div>
+                    <div className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{owing} student{owing === 1 ? "" : "s"} owing</div>
+                  </div>
+                  <div style={{ flex: "1 1 160px", background: C.paper, border: `1px solid ${C.line}`, borderRadius: 10, padding: "14px 16px" }}>
+                    <div className="pl-body" style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".06em", color: C.muted }}>Total Billed</div>
+                    <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.ink, marginTop: 2 }}>{money(all.charged)}</div>
+                    <div className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{activeStudents.length} active · {inactiveStudents.length} inactive</div>
+                  </div>
+                  {all.scholarship > 0 && (
+                    <div style={{ flex: "1 1 160px", background: "#fffaf0", border: `1px solid ${C.gold}44`, borderRadius: 10, padding: "14px 16px" }}>
+                      <div className="pl-body" style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".06em", color: C.muted }}>Scholarships Awarded</div>
+                      <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.gold, marginTop: 2 }}>{money(all.scholarship)}</div>
+                    </div>
+                  )}
+                </div>
+              </Card>
+
+              <Card>
+                <div className="flex items-center justify-between" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                  <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: 0 }}>Active Students &amp; Statements</h3>
+                  <Btn small icon={Receipt} onClick={() => printAllStatements(activeStudents)}>Print all statements</Btn>
+                  <Btn small kind="gold" icon={Send} onClick={() => emailAllStatements(activeStudents)}>Email all statements</Btn>
+                </div>
+                {activeStudents.length ? renderTable(activeStudents) : <span className="pl-body" style={{ color: C.muted }}>No active students.</span>}
+              </Card>
+
+              {inactiveStudents.length > 0 && (
+                <Card style={{ marginTop: 16, opacity: 0.92 }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                    <h3 className="pl-display" style={{ fontSize: 17, color: C.muted, margin: 0 }}>Inactive Students</h3>
+                  </div>
+                  {renderTable(inactiveStudents)}
+                </Card>
+              )}
+            </>
+          );
+        })()}
+    </>
+  );
+}
+
+/* ---------- TUITION (admin: payment plan per level) ---------- */
+function TuitionManager({ tuition, refresh }) {
+  const [rows, setRows] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const m = {};
+    TUITION_LEVELS.forEach((p) => {
+      const t = (tuition || []).find((x) => x.program === p.key) || {};
+      m[p.key] = {
+        amount: t.amount != null ? String(t.amount) : "",
+        registration: t.registration != null ? String(t.registration) : "",
+        books: t.books != null ? String(t.books) : "",
+      };
+    });
+    setRows(m);
+  }, [tuition]);
+
+  const set = (key, field, val) => setRows((r) => ({ ...r, [key]: { ...r[key], [field]: val } }));
+
+  async function save() {
+    setBusy(true); setSaved(false);
+    try {
+      for (const p of TUITION_LEVELS) {
+        const r = rows[p.key] || {};
+        await db.setTuition(p.key, { amount: r.amount, registration: r.registration, books: r.books });
+      }
+      await refresh();
+      setSaved(true);
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  const planNote = (r) => {
+    const total = Number(r?.amount) || 0, reg = Number(r?.registration) || 0, bk = Number(r?.books) || 0;
+    const portion = Math.max(0, total - reg - bk);
+    if (total <= 0) return "";
+    return `Tuition balance ${money(portion)} — students can pay in full (${money(portion)}), half (${money(portion / 2)}), four payments of ${money(portion / 4)}, or seven payments of ${money(portion / 7)}`;
+  };
+
+  return (
+    <>
+      <PageHead title="Tuition" sub="Set the total, registration, and books for each level. Students choose to pay tuition in full, half, or four payments." />
+      <div className="flex flex-col gap-3" style={{ maxWidth: 760 }}>
+        {TUITION_LEVELS.map((p) => {
+          const r = rows[p.key] || {};
+          return (
+            <Card key={p.key}>
+              <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: "0 0 12px" }}>{p.label}</h3>
+              <div className="grid grid-cols-3 gap-3">
+                <Field label="Total (USD)"><input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={r.amount ?? ""} onChange={(e) => set(p.key, "amount", e.target.value)} /></Field>
+                <Field label="Registration"><input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={r.registration ?? ""} onChange={(e) => set(p.key, "registration", e.target.value)} /></Field>
+                <Field label="Books"><input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={r.books ?? ""} onChange={(e) => set(p.key, "books", e.target.value)} /></Field>
+              </div>
+              {planNote(r) && <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{planNote(r)}</div>}
+            </Card>
+          );
+        })}
         <Card>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
-              <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
-                <th style={{ padding: "6px 8px" }}>Student</th>
-                <th style={{ padding: "6px 8px", textAlign: "right" }}>Charged</th>
-                <th style={{ padding: "6px 8px", textAlign: "right" }}>Paid</th>
-                <th style={{ padding: "6px 8px", textAlign: "right" }}>Balance</th><th></th>
-              </tr></thead>
-              <tbody>
-                {students.map((s) => {
-                  const t = totals(s.id);
-                  return (
-                    <tr key={s.id} style={{ borderTop: `1px solid ${C.line}` }}>
-                      <td style={{ padding: "10px 8px", fontWeight: 600, color: C.ink }}>{s.full_name}</td>
-                      <td style={{ padding: "10px 8px", textAlign: "right" }}>{money(t.charged)}</td>
-                      <td style={{ padding: "10px 8px", textAlign: "right", color: C.green }}>{money(t.paid)}</td>
-                      <td style={{ padding: "10px 8px", textAlign: "right", fontWeight: 700, color: t.balance > 0 ? C.rose : C.green }}>{money(t.balance)}</td>
-                      <td style={{ padding: "10px 8px", textAlign: "right" }}><Btn small kind="ghost" onClick={() => setSelected(s.id)}>Manage</Btn></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="flex items-center gap-3">
+            <Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : "Save all levels"}</Btn>
+            {saved && <span className="pl-body" style={{ color: C.green, fontSize: 13 }}>Saved</span>}
           </div>
-        </Card>}
+          <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 10, lineHeight: 1.5 }}>
+            Degree students pay Registration, then Books (due September), then the remaining tuition balance — in full, half, four payments, or seven payments, in any combination. Certificate classes pay from their own fee — 6-week in full, 12-week in full or two installments.
+          </p>
+        </Card>
+      </div>
     </>
   );
 }
 
 /* ---------- TUITION (student) ---------- */
-function StudentTuition({ ledger }) {
+function StudentTuition({ ledger, tuition, profile }) {
   const charged = ledger.filter((e) => e.kind === "charge").reduce((a, e) => a + Number(e.amount || 0), 0);
   const paid = ledger.filter((e) => e.kind === "payment").reduce((a, e) => a + Number(e.amount || 0), 0);
-  const balance = charged - paid;
+  const scholarship = ledger.filter((e) => e.kind === "scholarship").reduce((a, e) => a + Number(e.amount || 0), 0);
+  const balance = charged - paid - scholarship;
   const es = [...ledger].sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  const prog = profile?.program;
+  const isTuitionLevel = TUITION_LEVELS.some((p) => p.key === prog);
+  const myT = prog && isTuitionLevel ? (tuition || []).find((t) => t.program === prog) : null;
+  const total = myT ? Number(myT.amount) || 0 : 0;
+  const regFee = myT ? Number(myT.registration) || 0 : 0;
+  const bookFee = myT ? Number(myT.books) || 0 : 0;
+  const tuitionPortion = Math.max(0, Math.round((total - regFee - bookFee) * 100) / 100);
+  const label = prog ? programLabel(prog) : "";
+
+  const paidFor = (word) => ledger
+    .filter((e) => e.kind === "payment" && (e.description || "").trim().toLowerCase() === `${label} ${word}`.toLowerCase())
+    .reduce((a, e) => a + (Number(e.amount) || 0), 0);
+
+  const regPaid = paidFor("registration");
+  const bookPaid = paidFor("books");
+  const tuitionPaidAmt = paidFor("tuition");
+  const tuitionRemaining = Math.max(0, Math.round((tuitionPortion - tuitionPaidAmt) * 100) / 100);
+  const halfAmt = Math.round((tuitionPortion / 2) * 100) / 100;
+  const fourAmt = Math.round((tuitionPortion / 4) * 100) / 100;
+  const sevenAmt = Math.round((tuitionPortion / 7) * 100) / 100;
+  // Only offer half/four/seven as distinct options while they'd actually leave a
+  // balance afterward — once remaining is that small, "pay full" is the same
+  // thing, so there's no point cluttering the buttons.
+  const showHalf = tuitionRemaining > halfAmt + 0.005;
+  const showFour = tuitionRemaining > fourAmt + 0.005;
+  const showSeven = tuitionRemaining > sevenAmt + 0.005;
+  const fullyPaid = total > 0 && regPaid >= regFee - 0.005 && bookPaid >= bookFee - 0.005 && tuitionRemaining <= 0.005;
+
+  async function pay(bucket, plan, customAmt) {
+    try { const url = await db.startTuitionCheckout(prog, bucket, plan, customAmt ?? null); window.location.href = url; }
+    catch (e) { window.alert(e.message); }
+  }
+  function payCustom(bucket, label, suggested) {
+    const input = window.prompt(`Enter the amount you'd like to pay toward ${label}:`, suggested ? String(suggested) : "");
+    if (input === null) return;
+    const amt = Math.round(Number(input) * 100) / 100;
+    if (isNaN(amt) || amt < 0.5) { window.alert("Please enter an amount of at least $0.50."); return; }
+    pay(bucket, "custom", amt);
+  }
+
+  function bucketRow(title, due, owed, paidAmt, bucket) {
+    const done = owed > 0 && paidAmt >= owed - 0.005;
+    const showAmt = Math.max(0, Math.round((owed - paidAmt) * 100) / 100);
+    return (
+      <div className="flex items-center justify-between" style={{ padding: "12px 0", borderTop: `1px solid ${C.line}`, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="pl-body" style={{ fontWeight: 600, fontSize: 15, color: C.ink }}>{title}{due ? <span className="pl-body" style={{ fontSize: 12, color: C.gold, marginLeft: 8 }}>{due}</span> : null}</div>
+          <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+            {money(owed)}{paidAmt > 0 ? ` • ${money(paidAmt)} paid` : ""}{owed > 0 ? ` • ${money(Math.max(0, owed - paidAmt))} left` : ""}
+          </div>
+        </div>
+        {owed <= 0 ? (
+          <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>—</span>
+        ) : done ? (
+          <span className="pl-body" style={{ fontSize: 14, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={16} /> Paid</span>
+        ) : TUITION_PAY_ENABLED ? (
+          <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+            <Btn small icon={Receipt} onClick={() => pay(bucket)}>Pay {money(showAmt)}</Btn>
+            <Btn small kind="ghost" onClick={() => payCustom(bucket, title, showAmt)}>Other amount</Btn>
+          </div>
+        ) : (
+          <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Contact the office</span>
+        )}
+      </div>
+    );
+  }
+
+  function tuitionRow() {
+    const done = tuitionPortion > 0 && tuitionRemaining <= 0.005;
+    return (
+      <div style={{ padding: "12px 0", borderTop: `1px solid ${C.line}` }}>
+        <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+          <div>
+            <div className="pl-body" style={{ fontWeight: 600, fontSize: 15, color: C.ink }}>Tuition</div>
+            <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+              {money(tuitionPortion)}{tuitionPaidAmt > 0 ? ` • ${money(tuitionPaidAmt)} paid` : ""}{tuitionPortion > 0 ? ` • ${money(tuitionRemaining)} left` : ""}
+            </div>
+          </div>
+          {tuitionPortion <= 0 ? (
+            <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>—</span>
+          ) : done ? (
+            <span className="pl-body" style={{ fontSize: 14, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={16} /> Paid</span>
+          ) : !TUITION_PAY_ENABLED ? (
+            <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Contact the office</span>
+          ) : null}
+        </div>
+        {tuitionPortion > 0 && !done && TUITION_PAY_ENABLED && (
+          <div className="flex items-center gap-2" style={{ flexWrap: "wrap", marginTop: 8 }}>
+            <Btn small icon={Receipt} onClick={() => pay("tuition", "full")}>Pay full {money(tuitionRemaining)}</Btn>
+            {showHalf && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "half")}>Pay half {money(Math.min(halfAmt, tuitionRemaining))}</Btn>}
+            {showFour && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "four")}>Pay 1 of 4 {money(Math.min(fourAmt, tuitionRemaining))}</Btn>}
+            {showSeven && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "seven")}>Pay 1 of 7 {money(Math.min(sevenAmt, tuitionRemaining))}</Btn>}
+            <Btn small kind="ghost" onClick={() => payCustom("tuition", "tuition", tuitionRemaining)}>Other amount</Btn>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <>
-      <PageHead title="Tuition" sub="Your charges, payments, and balance." />
+      <PageHead title="Tuition" sub="Your payment plan, charges, payments, and balance." />
+
+      {prog && total > 0 && (
+        <Card style={{ marginBottom: 20 }}>
+          <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 2 }}>{label} Program — {money(total)} total</div>
+          {bucketRow("Registration", "", regFee, regPaid, "registration")}
+          {bucketRow("Books", "Due September", bookFee, bookPaid, "books")}
+          {tuitionRow()}
+          {fullyPaid && <div className="pl-body" style={{ marginTop: 12, color: C.green, fontWeight: 600, fontSize: 14 }}>Your account is paid in full — thank you.</div>}
+        </Card>
+      )}
+
       <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
         <Stat icon={Receipt} label="Total charged" value={money(charged)} />
         <Stat icon={Check} label="Total paid" value={money(paid)} tone={C.green} />
@@ -2895,14 +4214,17 @@ function StudentTuition({ ledger }) {
                 <th style={{ padding: "6px 8px", textAlign: "right" }}>Charge</th><th style={{ padding: "6px 8px", textAlign: "right" }}>Payment</th>
               </tr></thead>
               <tbody>
-                {es.map((e) => (
+                {es.map((e) => {
+                  const v = ledgerRowView(e);
+                  return (
                   <tr key={e.id} style={{ borderTop: `1px solid ${C.line}` }}>
                     <td style={{ padding: "8px" }}>{fdate(e.date)}</td>
-                    <td style={{ padding: "8px" }}>{e.description || (e.kind === "payment" ? "Payment" : "Charge")}{e.method ? ` · ${e.method}` : ""}</td>
-                    <td style={{ padding: "8px", textAlign: "right", color: C.ink }}>{e.kind === "charge" ? money(e.amount) : ""}</td>
-                    <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{e.kind === "payment" ? money(e.amount) : ""}</td>
+                    <td style={{ padding: "8px", color: v.isRefund ? C.rose : undefined }}>{v.label}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: v.isRefund ? C.rose : C.ink }}>{v.charge}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{v.payment}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>}
@@ -2914,8 +4236,14 @@ function StudentTuition({ ledger }) {
 
 /* ---------- GRADE REPORT (instructor) ---------- */
 function Gradebook({ students, subs, tests, hwSubs, homework, courses }) {
-  const withCode = (courses || []).slice().sort((a, b) => (a.code || a.title || "").localeCompare(b.code || b.title || ""));
-  const [courseId, setCourseId] = useState(withCode[0]?.id || "");
+  const [progFilter, setProgFilter] = useState("all");
+  const filteredCourses = (courses || []).filter((c) => progFilter === "all" || (c.program || "all") === progFilter);
+  const withCode = filteredCourses.slice().sort((a, b) => (a.code || a.title || "").localeCompare(b.code || b.title || ""));
+  const [courseId, setCourseId] = useState("");
+  // If the current course isn't in the filtered list, clear the selection.
+  useEffect(() => {
+    if (courseId && !filteredCourses.some((c) => c.id === courseId)) setCourseId("");
+  }, [progFilter]); // eslint-disable-line
   const course = courses.find((c) => c.id === courseId);
 
   const cols = course ? [
@@ -2960,12 +4288,19 @@ function Gradebook({ students, subs, tests, hwSubs, homework, courses }) {
     <>
       <PageHead title="Gradebook" sub="Every grade for a course on one screen." action={course && cols.length > 0 ? <Btn icon={ExternalLink} onClick={exportCsv}>Export CSV</Btn> : null} />
       <Card style={{ marginBottom: 18, maxWidth: 520 }}>
+        <Field label="Program">
+          <select style={inputStyle} value={progFilter} onChange={(e) => setProgFilter(e.target.value)}>
+            <option value="all">All programs</option>
+            {PROGRAMS.filter((p) => p.key !== "all").map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+        </Field>
         <Field label="Course">
           <select style={inputStyle} value={courseId} onChange={(e) => setCourseId(e.target.value)}>
             <option value="">— Choose a course —</option>
             {withCode.map((c) => <option key={c.id} value={c.id}>{c.code ? `${c.code} — ` : ""}{c.title}</option>)}
           </select>
         </Field>
+        <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{withCode.length} course{withCode.length === 1 ? "" : "s"}{progFilter !== "all" ? ` in ${programLabel(progFilter)}` : ""}</div>
       </Card>
 
       {!course ? (
@@ -3113,4 +4448,1056 @@ function openTranscript(studentName, items, summary) {
   </body></html>`;
   const w = window.open("", "_blank");
   if (w) { w.document.write(html); w.document.close(); } else window.alert("Please allow pop-ups to view the transcript.");
+}
+
+/* ============================================================ CE HOURS DASHBOARD (admin) */
+function CEHoursDashboard({ students, courses, subs, tests, certificates, refresh }) {
+  const [filterStudent, setFilterStudent] = useState("");
+  const [filterCourse, setFilterCourse] = useState("");
+  const ceCourses = courses.filter((c) => isCEType(c.ce_type));
+
+  function ceEarned(studentId) {
+    const rows = [];
+    for (const course of ceCourses) {
+      const courseTests = tests.filter((t) => t.course_id === course.id);
+      for (const test of courseTests) {
+        const sub = subs.find((s) => s.student_id === studentId && s.test_id === test.id && s.status === "graded");
+        if (!sub || !sub.max_score) continue;
+        const pct = Math.round((sub.score / sub.max_score) * 100);
+        const passing = Number(course.passing_score) || 75;
+        if (pct < passing) continue;
+        rows.push({ courseId: course.id, courseTitle: course.title, ceType: course.ce_type, ceHours: Number(course.ce_hours) || 0, approvalNumber: course.approval_number || "", completedDate: sub.graded_at || sub.submitted_at || "", score: pct });
+      }
+    }
+    return rows;
+  }
+
+  const allRows = students.filter((s) => !filterStudent || s.id === filterStudent).map((s) => ({ student: s, earned: ceEarned(s.id) }));
+  const filtered = allRows.map((r) => ({ ...r, earned: filterCourse ? r.earned.filter((e) => e.courseId === filterCourse) : r.earned })).filter((r) => r.earned.length > 0 || !filterStudent);
+
+  function exportCSV() {
+    const lines = [["Student", "Course", "Type", "CE Hours", "Approval #", "Score %", "Completed"].join(",")];
+    for (const { student, earned } of filtered) {
+      for (const e of earned) {
+        lines.push([`"${student.full_name}"`, `"${e.courseTitle}"`, e.ceType === "faith_ce" ? "Faith CE" : "CE", e.ceHours, `"${e.approvalNumber}"`, e.score + "%", fdate(e.completedDate)].join(","));
+      }
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "ce-hours.csv"; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <>
+      <PageHead title="CE Hours" sub="Continuing education hours earned by learner. Export for reporting." action={<Btn icon={ExternalLink} onClick={exportCSV}>Export CSV</Btn>} />
+      {ceCourses.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No CE courses yet. Create a course and set its type to CE or Faith-Based CE.</span></Card>
+      ) : (
+        <>
+          <Card style={{ marginBottom: 18 }}>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Filter by learner">
+                <select style={inputStyle} value={filterStudent} onChange={(e) => setFilterStudent(e.target.value)}>
+                  <option value="">All learners</option>
+                  {students.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                </select>
+              </Field>
+              <Field label="Filter by course">
+                <select style={inputStyle} value={filterCourse} onChange={(e) => setFilterCourse(e.target.value)}>
+                  <option value="">All CE courses</option>
+                  {ceCourses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+                </select>
+              </Field>
+            </div>
+          </Card>
+          <div className="flex flex-col gap-3">
+            {filtered.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No CE hours recorded yet.</span></Card>}
+            {filtered.map(({ student, earned }) => {
+              const totalHours = earned.reduce((a, e) => a + e.ceHours, 0);
+              const ceOnly = earned.filter((e) => e.ceType === "ce").reduce((a, e) => a + e.ceHours, 0);
+              const faithOnly = earned.filter((e) => e.ceType === "faith_ce").reduce((a, e) => a + e.ceHours, 0);
+              return (
+                <Card key={student.id}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: earned.length ? 12 : 0 }}>
+                    <div className="flex items-center gap-3">
+                      <Initials name={student.full_name} size={38} />
+                      <div>
+                        <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5, color: C.ink }}>{student.full_name}</div>
+                        <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{totalHours.toFixed(1)} total hours{ceOnly > 0 ? ` · ${ceOnly.toFixed(1)} CE` : ""}{faithOnly > 0 ? ` · ${faithOnly.toFixed(1)} Faith CE` : ""}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="pl-display" style={{ fontSize: 22, fontWeight: 600, color: C.green }}>{totalHours.toFixed(1)}</span>
+                      <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>hrs</span>
+                    </div>
+                  </div>
+                  {earned.length > 0 && (
+                    <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 10 }}>
+                      {earned.map((e, i) => {
+                        const cert = certificates.find((cx) => cx.student_id === student.id && cx.course_id === e.courseId);
+                        return (
+                          <div key={i} className="flex items-center justify-between" style={{ padding: "7px 0", borderBottom: i < earned.length - 1 ? `1px solid ${C.line}` : "none" }}>
+                            <div style={{ flex: 1 }}>
+                              <div className="pl-body" style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{e.courseTitle}</div>
+                              <div className="pl-body" style={{ fontSize: 12, color: C.muted }}>{e.ceType === "faith_ce" ? "Faith CE" : "CE"} · {e.score}% · completed {fdate(e.completedDate)}{e.approvalNumber ? ` · ${e.approvalNumber}` : ""}</div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="pl-body" style={{ fontSize: 13, fontWeight: 700, color: C.green }}>{e.ceHours.toFixed(1)} hrs</span>
+                              {cert && <Btn small kind="ghost" icon={ExternalLink} onClick={() => openCECertificate(cert, student.full_name, courses.find((c) => c.id === e.courseId))}>Cert</Btn>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ============================================================ STUDENT CE HOURS */
+function StudentCEHours({ profile, courses, tests, subs, certificates }) {
+  const ceCourses = courses.filter((c) => isCEType(c.ce_type));
+  const earned = [];
+  for (const course of ceCourses) {
+    const courseTests = tests.filter((t) => t.course_id === course.id);
+    for (const test of courseTests) {
+      const sub = subs.find((s) => s.student_id === profile.id && s.test_id === test.id && s.status === "graded");
+      if (!sub || !sub.max_score) continue;
+      const pct = Math.round((sub.score / sub.max_score) * 100);
+      const passing = Number(course.passing_score) || 75;
+      if (pct < passing) continue;
+      earned.push({ courseId: course.id, courseTitle: course.title, ceType: course.ce_type, ceHours: Number(course.ce_hours) || 0, approvalNumber: course.approval_number || "", providerName: course.provider_name || BRAND.name, completedDate: sub.graded_at || sub.submitted_at || "", score: pct });
+    }
+  }
+  const totalHours = earned.reduce((a, e) => a + e.ceHours, 0);
+  const ceOnly = earned.filter((e) => e.ceType === "ce").reduce((a, e) => a + e.ceHours, 0);
+  const faithOnly = earned.filter((e) => e.ceType === "faith_ce").reduce((a, e) => a + e.ceHours, 0);
+
+  return (
+    <>
+      <PageHead title="CE Hours" sub="Your continuing education hours and CE certificates." />
+      <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
+        <Stat icon={Clock} label="Total CE hours" value={totalHours.toFixed(1)} tone={C.green} />
+        <Stat icon={Award} label="CE hours" value={ceOnly.toFixed(1)} />
+        <Stat icon={Award} label="Faith CE hours" value={faithOnly.toFixed(1)} tone={C.gold} />
+      </div>
+      {earned.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No CE hours earned yet. Complete a CE course post-test with a passing score to earn hours.</span></Card>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {earned.map((e, i) => {
+            const cert = certificates.find((cx) => cx.student_id === profile.id && cx.course_id === e.courseId);
+            const course = courses.find((c) => c.id === e.courseId);
+            return (
+              <Card key={i}>
+                <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center justify-center" style={{ width: 44, height: 44, borderRadius: 10, background: C.paper2, border: `1px solid ${C.goldSoft}` }}><Award size={20} color={C.gold} /></div>
+                    <div>
+                      <div className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink }}>{e.courseTitle}</div>
+                      <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{e.ceType === "faith_ce" ? "Faith-Based CE" : "CE"} · {e.score}% · {fdate(e.completedDate)}</div>
+                      {e.approvalNumber && <div className="pl-body" style={{ fontSize: 12, color: C.gold, marginTop: 2 }}>{e.approvalNumber}</div>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div style={{ textAlign: "right" }}>
+                      <div className="pl-display" style={{ fontSize: 22, fontWeight: 600, color: C.green }}>{e.ceHours.toFixed(1)}</div>
+                      <div className="pl-body" style={{ fontSize: 11, color: C.muted }}>hours</div>
+                    </div>
+                    {cert && <Btn small icon={ExternalLink} onClick={() => openCECertificate(cert, profile.full_name, course)}>CE Cert</Btn>}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 14, lineHeight: 1.5 }}>CE certificates are issued automatically when you pass a post-test with the required score. Your provider is responsible for reporting hours to the appropriate licensing board.</p>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN — FORMS MANAGER
+   ═══════════════════════════════════════════════════════════════ */
+function FormsManager({ forms, formSubs, profiles, refresh }) {
+  const [mode, setMode] = useState("list"); // "list" | "build" | "subs"
+  const [draft, setDraft] = useState(null);
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [viewForm, setViewForm] = useState(null); // form whose subs we're viewing
+
+  const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
+
+  function startNew() {
+    setDraft({ title: "", description: "", type: "upload", file_path: null, program: "all", required: true, sort_order: 0, active: true });
+    setFile(null); setMode("build");
+  }
+  function startEdit(f) {
+    setDraft({ ...f }); setFile(null); setMode("build");
+  }
+
+  async function save() {
+    if (!draft.title.trim()) { window.alert("Give the form a title."); return; }
+    setBusy(true);
+    try { await db.saveForm({ ...draft, _file: file }); await refresh(); setMode("list"); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  async function remove(id) {
+    if (!window.confirm("Delete this form?")) return;
+    try { await db.deleteForm(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  async function markStatus(subId, status) {
+    try { await db.reviewFormSubmission(subId, status); await refresh(); }
+    catch (e) { window.alert(e.message); }
+  }
+
+  const STATUS_COLOR = { submitted: C.gold, reviewed: C.navy, accepted: C.green };
+
+  if (mode === "build" && draft) {
+    return (
+      <>
+        <PageHead title={draft.id ? "Edit Form" : "New Form"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
+        <Card style={{ maxWidth: 680 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></Field>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 70 }} value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></Field>
+          <Field label="Type">
+            <select style={inputStyle} value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })}>
+              <option value="upload">Upload only — student uploads completed form</option>
+              <option value="pdf">PDF + Upload — show PDF to fill, student uploads completed</option>
+            </select>
+          </Field>
+          {draft.type === "pdf" && (
+            <Field label="PDF form (for students to view/fill)">
+              <input type="file" accept=".pdf" onChange={(e) => setFile(e.target.files?.[0])} />
+              {draft.file_path && !file && <FileLink path={draft.file_path} label="Current PDF" />}
+            </Field>
+          )}
+          <Field label="Program">
+            <select style={inputStyle} value={draft.program} onChange={(e) => setDraft({ ...draft, program: e.target.value })}>
+              <option value="all">All programs</option>
+              {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </Field>
+          <div className="flex items-center gap-4" style={{ marginTop: 8 }}>
+            <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" checked={draft.required} onChange={(e) => setDraft({ ...draft, required: e.target.checked })} />
+              Required for enrollment
+            </label>
+            <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
+              Active (visible to students)
+            </label>
+          </div>
+          <div className="flex gap-2" style={{ marginTop: 14 }}>
+            <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save form"}</Btn>
+            <Btn kind="ghost" onClick={() => setMode("list")}>Cancel</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  if (mode === "subs" && viewForm) {
+    const subs = formSubs.filter((s) => s.form_id === viewForm.id);
+    return (
+      <>
+        <PageHead title={viewForm.title + " — Submissions"} sub={`${subs.length} received`} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => { setMode("list"); setViewForm(null); }}>Back</Btn>} />
+        {subs.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No submissions yet.</span></Card>}
+        {subs.map((s) => (
+          <Card key={s.id} style={{ marginBottom: 10 }}>
+            <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <div className="pl-body" style={{ fontWeight: 600, fontSize: 15 }}>{nameOf(s.student_id)}</div>
+                <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>Submitted {fdate(s.submitted_at)}</div>
+                {s.notes && <div className="pl-body" style={{ fontSize: 13, marginTop: 4, color: C.ink }}>{s.notes}</div>}
+              </div>
+              <div className="flex items-center gap-2">
+                {s.file_path && <FileLink path={s.file_path} label="Download" />}
+                <span className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: STATUS_COLOR[s.status] || C.muted, textTransform: "uppercase" }}>{s.status}</span>
+                {s.status !== "accepted" && <Btn small icon={ThumbsUp} onClick={() => markStatus(s.id, "accepted")}>Accept</Btn>}
+                {s.status === "submitted" && <Btn small kind="ghost" onClick={() => markStatus(s.id, "reviewed")}>Mark reviewed</Btn>}
+              </div>
+            </div>
+          </Card>
+        ))}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Forms" sub="Onboarding and registration forms for students." action={<Btn icon={Plus} onClick={startNew}>New form</Btn>} />
+      <div className="flex flex-col gap-3">
+        {forms.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No forms yet. Click New form to create one.</span></Card>}
+        {forms.map((f) => {
+          const count = formSubs.filter((s) => s.form_id === f.id).length;
+          const pending = formSubs.filter((s) => s.form_id === f.id && s.status === "submitted").length;
+          return (
+            <Card key={f.id}>
+              <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{f.title}</span>
+                    {!f.active && <span className="pl-body" style={{ fontSize: 11, color: C.muted, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>Inactive</span>}
+                    {f.required && <span className="pl-body" style={{ fontSize: 11, color: C.rose, background: "#fff1f0", borderRadius: 6, padding: "2px 8px" }}>Required</span>}
+                  </div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+                    {f.type === "pdf" ? "PDF + Upload" : "Upload"} · {f.program === "all" ? "All programs" : f.program} · {count} submitted{pending > 0 ? ` · ${pending} pending review` : ""}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Btn small kind="ghost" icon={Users} onClick={() => { setViewForm(f); setMode("subs"); }}>{count} {count === 1 ? "submission" : "submissions"}</Btn>
+                  <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(f)}>Edit</Btn>
+                  <button onClick={() => remove(f.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STUDENT — FORMS PAGE
+   ═══════════════════════════════════════════════════════════════ */
+function StudentForms({ forms, myFormSubs, profile, refresh }) {
+  const [uploading, setUploading] = useState(null); // form id being submitted
+  const [file, setFile] = useState(null);
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [pdfUrl, setPdfUrl] = useState(null); // signed URL for Adobe viewer
+  const [pdfName, setPdfName] = useState("");
+
+  const visibleForms = forms.filter((f) => f.active && (f.program === "all" || f.program === profile.program));
+  const submittedIds = new Set(myFormSubs.map((s) => s.form_id));
+
+  async function openPdf(f) {
+    try {
+      const url = await db.signedUrl(f.file_path);
+      setPdfUrl(url); setPdfName(f.title);
+    } catch (e) { window.alert(e.message); }
+  }
+
+  async function submit(form_id) {
+    if (!file && !notes.trim()) { window.alert("Please attach a file or add a note before submitting."); return; }
+    setBusy(true);
+    try { await db.submitForm({ form_id, file, notes }); await refresh(); setUploading(null); setFile(null); setNotes(""); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  const STATUS_LABEL = { submitted: "Under review", reviewed: "Reviewed", accepted: "Accepted ✓" };
+  const STATUS_COLOR = { submitted: C.gold, reviewed: C.navy, accepted: C.green };
+
+  // Adobe PDF Embed viewer component (uses API key from env if available)
+  function PdfViewer({ url, name }) {
+    const containerId = "adobe-pdf-viewer";
+    useEffect(() => {
+      if (!url) return;
+      const clientId = typeof import.meta !== "undefined" && import.meta.env?.VITE_ADOBE_CLIENT_ID;
+      if (clientId && window.AdobeDC) {
+        const view = new window.AdobeDC.View({ clientId, divId: containerId });
+        view.previewFile({ content: { location: { url } }, metaData: { fileName: name + ".pdf" } }, { embedMode: "IN_LINE", showDownloadPDF: true, showPrintPDF: true });
+      }
+    }, [url, name]);
+
+    const clientId = typeof import.meta !== "undefined" && import.meta.env?.VITE_ADOBE_CLIENT_ID;
+    return (
+      <div style={{ marginBottom: 24 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+          <span className="pl-body" style={{ fontWeight: 600, color: C.ink }}>{name}</span>
+          <Btn small kind="ghost" icon={X} onClick={() => { setPdfUrl(null); setPdfName(""); }}>Close</Btn>
+        </div>
+        {clientId && window.AdobeDC ? (
+          <div id={containerId} style={{ height: 600, border: `1px solid ${C.line}`, borderRadius: 8 }} />
+        ) : (
+          <div style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: 24, textAlign: "center" }}>
+            <FileText size={32} style={{ color: C.muted, marginBottom: 8 }} />
+            <p className="pl-body" style={{ color: C.muted, marginBottom: 12 }}>Inline viewer requires an Adobe API key. Open the PDF to view and fill it, then upload your completed copy below.</p>
+            <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: C.gold, fontWeight: 600 }}>Open PDF in new tab</a>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Forms" sub="Required and onboarding forms for your program." />
+      {pdfUrl && <PdfViewer url={pdfUrl} name={pdfName} />}
+      <div className="flex flex-col gap-3">
+        {visibleForms.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No forms have been assigned to your program yet.</span></Card>}
+        {visibleForms.map((f) => {
+          const mySub = myFormSubs.find((s) => s.form_id === f.id);
+          const isOpen = uploading === f.id;
+          return (
+            <Card key={f.id}>
+              <div className="flex items-start justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div className="flex items-center gap-2">
+                    <ClipboardList size={16} style={{ color: C.gold }} />
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{f.title}</span>
+                    {f.required && <span className="pl-body" style={{ fontSize: 11, color: C.rose }}>Required</span>}
+                  </div>
+                  {f.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 4 }}>{f.description}</p>}
+                  {mySub && (
+                    <div className="pl-body" style={{ fontSize: 12.5, marginTop: 6, color: STATUS_COLOR[mySub.status] || C.muted, fontWeight: 600 }}>
+                      {STATUS_LABEL[mySub.status] || mySub.status} · Submitted {fdate(mySub.submitted_at)}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                  {f.type === "pdf" && f.file_path && (
+                    <Btn small kind="ghost" icon={FileText} onClick={() => openPdf(f)}>View / Fill PDF</Btn>
+                  )}
+                  {!mySub && (
+                    <Btn small icon={Upload} onClick={() => { setUploading(isOpen ? null : f.id); setFile(null); setNotes(""); }}>
+                      {isOpen ? "Cancel" : "Submit form"}
+                    </Btn>
+                  )}
+                  {mySub && mySub.status !== "accepted" && (
+                    <Btn small kind="ghost" icon={Upload} onClick={() => { setUploading(isOpen ? null : f.id); setFile(null); setNotes(""); }}>
+                      Resubmit
+                    </Btn>
+                  )}
+                </div>
+              </div>
+              {isOpen && (
+                <div style={{ marginTop: 14, borderTop: `1px solid ${C.line}`, paddingTop: 14 }}>
+                  <Field label="Upload completed form (PDF, DOCX, image)">
+                    <input type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onChange={(e) => setFile(e.target.files?.[0])} />
+                  </Field>
+                  <Field label="Notes (optional)">
+                    <textarea style={{ ...inputStyle, minHeight: 60 }} value={notes} placeholder="Any notes for the coordinator…" onChange={(e) => setNotes(e.target.value)} />
+                  </Field>
+                  <Btn icon={Send} kind="gold" onClick={() => submit(f.id)} disabled={busy}>{busy ? "Submitting…" : "Submit"}</Btn>
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN — SURVEY BUILDER
+   ═══════════════════════════════════════════════════════════════ */
+const SURVEY_CATEGORIES = [
+  { key: "lms",        label: "LMS System" },
+  { key: "class",      label: "Class Flow" },
+  { key: "experience", label: "Overall Experience" },
+  { key: "general",    label: "General" },
+];
+const QTYPE_SURVEY = { text: "Open text", rating: "Rating 1–5", choice: "Multiple choice", yesno: "Yes / No" };
+
+function SurveyBuilder({ surveys, surveyResps, profiles, refresh }) {
+  const [mode, setMode] = useState("list"); // "list" | "build" | "results"
+  const [draft, setDraft] = useState(null);
+  const [qs, setQs] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [viewSurvey, setViewSurvey] = useState(null);
+
+  const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
+
+  function startNew() {
+    setDraft({ title: "", description: "", category: "general", program: "all", active: true });
+    setQs([]); setMode("build");
+  }
+  function startEdit(s) {
+    setDraft({ ...s }); setQs(s.questions.map((q) => ({ ...q, options: [...(q.options || [])] }))); setMode("build");
+  }
+
+  function addQ(type) {
+    setQs([...qs, { id: "tmp" + Date.now(), type, prompt: "", options: type === "choice" ? ["", "", ""] : [] }]);
+  }
+  const upQ = (id, patch) => setQs(qs.map((q) => (q.id === id ? { ...q, ...patch } : q)));
+  const delQ = (id) => setQs(qs.filter((q) => q.id !== id));
+
+  async function save() {
+    if (!draft.title.trim()) { window.alert("Give the survey a title."); return; }
+    if (qs.length === 0) { window.alert("Add at least one question."); return; }
+    setBusy(true);
+    try { await db.saveSurvey(draft, qs); await refresh(); setMode("list"); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  async function remove(id) {
+    if (!window.confirm("Delete this survey and all responses?")) return;
+    try { await db.deleteSurvey(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  async function toggleActive(s) {
+    try { await db.saveSurvey({ ...s, active: !s.active }, s.questions); await refresh(); }
+    catch (e) { window.alert(e.message); }
+  }
+
+  if (mode === "build" && draft) {
+    return (
+      <>
+        <PageHead title={draft.id ? "Edit Survey" : "New Survey"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
+        <Card style={{ maxWidth: 720, marginBottom: 16 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></Field>
+          <Field label="Description (optional)"><textarea style={{ ...inputStyle, minHeight: 60 }} value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Category">
+              <select style={inputStyle} value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+                {SURVEY_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+            </Field>
+            <Field label="Program">
+              <select style={inputStyle} value={draft.program} onChange={(e) => setDraft({ ...draft, program: e.target.value })}>
+                <option value="all">All programs</option>
+                {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+              </select>
+            </Field>
+          </div>
+          <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+            <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
+            Active (visible to students)
+          </label>
+        </Card>
+
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>Questions</h3>
+        <div className="flex flex-col gap-3" style={{ marginBottom: 14 }}>
+          {qs.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No questions yet — add one below.</span></Card>}
+          {qs.map((q, i) => (
+            <Card key={q.id}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                <span className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase" }}>Q{i + 1} · {QTYPE_SURVEY[q.type]}</span>
+                <button onClick={() => delQ(q.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
+              </div>
+              <Field label="Question text">
+                <input style={inputStyle} value={q.prompt} onChange={(e) => upQ(q.id, { prompt: e.target.value })} placeholder="Enter your question…" />
+              </Field>
+              {q.type === "choice" && (
+                <div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginBottom: 6 }}>Options (one per line)</div>
+                  {q.options.map((opt, oi) => (
+                    <div key={oi} className="flex items-center gap-2" style={{ marginBottom: 6 }}>
+                      <input style={{ ...inputStyle, flex: 1 }} value={opt} placeholder={`Option ${oi + 1}`}
+                        onChange={(e) => { const o = [...q.options]; o[oi] = e.target.value; upQ(q.id, { options: o }); }} />
+                      <button onClick={() => { const o = q.options.filter((_, x) => x !== oi); upQ(q.id, { options: o }); }}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: C.muted }}><X size={14} /></button>
+                    </div>
+                  ))}
+                  <button className="pl-body" style={{ background: "none", border: "none", color: C.gold, cursor: "pointer", fontSize: 13 }}
+                    onClick={() => upQ(q.id, { options: [...q.options, ""] })}>+ Add option</button>
+                </div>
+              )}
+            </Card>
+          ))}
+        </div>
+        <Card style={{ marginBottom: 14 }}>
+          <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginBottom: 8 }}>Add question:</div>
+          <div className="flex gap-2" style={{ flexWrap: "wrap" }}>
+            {Object.entries(QTYPE_SURVEY).map(([type, label]) => (
+              <Btn key={type} small kind="ghost" icon={Plus} onClick={() => addQ(type)}>{label}</Btn>
+            ))}
+          </div>
+        </Card>
+        <div className="flex gap-2">
+          <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save survey"}</Btn>
+          <Btn kind="ghost" onClick={() => setMode("list")}>Cancel</Btn>
+        </div>
+      </>
+    );
+  }
+
+  if (mode === "results" && viewSurvey) {
+    const resps = surveyResps.filter((r) => r.survey_id === viewSurvey.id);
+    return (
+      <>
+        <PageHead title={viewSurvey.title + " — Results"} sub={`${resps.length} response${resps.length !== 1 ? "s" : ""}`} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => { setMode("list"); setViewSurvey(null); }}>Back</Btn>} />
+        {resps.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No responses yet.</span></Card>}
+
+        {/* Summary per question */}
+        {viewSurvey.questions.map((q, i) => {
+          const answers = resps.map((r) => r.answers?.[q.id]).filter(Boolean);
+          return (
+            <Card key={q.id} style={{ marginBottom: 14 }}>
+              <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase", marginBottom: 4 }}>Q{i + 1} · {QTYPE_SURVEY[q.type]}</div>
+              <p className="pl-body" style={{ fontWeight: 600, marginBottom: 10 }}>{q.prompt}</p>
+              {q.type === "rating" && (
+                <div>
+                  <div className="pl-body" style={{ fontSize: 22, fontWeight: 700, color: C.green }}>
+                    {answers.length ? (answers.reduce((a, v) => a + Number(v), 0) / answers.length).toFixed(1) : "—"} <span style={{ fontSize: 14, color: C.muted }}>avg / 5</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <div key={n} style={{ textAlign: "center" }}>
+                        <div className="pl-body" style={{ fontSize: 18, fontWeight: 700 }}>{answers.filter((a) => Number(a) === n).length}</div>
+                        <div className="pl-body" style={{ fontSize: 11, color: C.muted }}>{n}★</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(q.type === "choice" || q.type === "yesno") && (
+                <div className="flex flex-col gap-2">
+                  {(q.type === "yesno" ? ["Yes", "No"] : q.options).map((opt) => {
+                    const count = answers.filter((a) => a === opt).length;
+                    const pct = answers.length ? Math.round((count / answers.length) * 100) : 0;
+                    return (
+                      <div key={opt}>
+                        <div className="flex items-center justify-between" style={{ marginBottom: 2 }}>
+                          <span className="pl-body" style={{ fontSize: 13.5 }}>{opt}</span>
+                          <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{count} ({pct}%)</span>
+                        </div>
+                        <div style={{ height: 6, background: C.line, borderRadius: 3 }}>
+                          <div style={{ height: 6, background: C.gold, borderRadius: 3, width: pct + "%" }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {q.type === "text" && (
+                <div className="flex flex-col gap-2">
+                  {answers.map((a, j) => (
+                    <div key={j} style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 12px" }}>
+                      <p className="pl-body" style={{ fontSize: 13.5, margin: 0 }}>{a}</p>
+                    </div>
+                  ))}
+                  {answers.length === 0 && <span className="pl-body" style={{ color: C.muted }}>No text responses yet.</span>}
+                </div>
+              )}
+            </Card>
+          );
+        })}
+
+        {/* Individual responses */}
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "20px 0 10px" }}>Individual responses</h3>
+        {resps.map((r) => (
+          <Card key={r.id} style={{ marginBottom: 10 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+              <span className="pl-body" style={{ fontWeight: 600 }}>{nameOf(r.student_id)}</span>
+              <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>{fdate(r.submitted_at)}</span>
+            </div>
+            {viewSurvey.questions.map((q) => (
+              <div key={q.id} style={{ marginBottom: 6 }}>
+                <div className="pl-body" style={{ fontSize: 12, color: C.muted }}>{q.prompt}</div>
+                <div className="pl-body" style={{ fontSize: 13.5 }}>{r.answers?.[q.id] ?? <i style={{ color: C.muted }}>No answer</i>}</div>
+              </div>
+            ))}
+          </Card>
+        ))}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Surveys" sub="Build feedback surveys and review student responses." action={<Btn icon={Plus} onClick={startNew}>New survey</Btn>} />
+      <div className="flex flex-col gap-3">
+        {surveys.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No surveys yet. Click New survey to build one.</span></Card>}
+        {surveys.map((s) => {
+          const count = surveyResps.filter((r) => r.survey_id === s.id).length;
+          const cat = SURVEY_CATEGORIES.find((c) => c.key === s.category);
+          return (
+            <Card key={s.id}>
+              <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{s.title}</span>
+                    {!s.active && <span className="pl-body" style={{ fontSize: 11, color: C.muted, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>Inactive</span>}
+                  </div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+                    {cat?.label || s.category} · {s.questions?.length || 0} questions · {count} {count === 1 ? "response" : "responses"}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Btn small kind="ghost" icon={BarChart2} onClick={() => { setViewSurvey(s); setMode("results"); }}>Results</Btn>
+                  <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(s)}>Edit</Btn>
+                  <button title={s.active ? "Deactivate" : "Activate"} onClick={() => toggleActive(s)}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: s.active ? C.green : C.muted }}>
+                    {s.active ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
+                  </button>
+                  <button onClick={() => remove(s.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STUDENT — SURVEYS PAGE
+   ═══════════════════════════════════════════════════════════════ */
+function StudentSurveys({ surveys, mySurveyResps, profile, refresh }) {
+  const [taking, setTaking] = useState(null); // survey being filled
+  const [answers, setAnswers] = useState({});
+  const [busy, setBusy] = useState(false);
+
+  const completedIds = new Set(mySurveyResps.map((r) => r.survey_id));
+  const visible = surveys.filter((s) => s.active && (s.program === "all" || s.program === profile.program));
+  const available = visible.filter((s) => !completedIds.has(s.id));
+  const completed = visible.filter((s) => completedIds.has(s.id));
+
+  async function submit() {
+    for (const q of taking.questions) {
+      if (!answers[q.id] || String(answers[q.id]).trim() === "") {
+        window.alert("Please answer all questions before submitting."); return;
+      }
+    }
+    setBusy(true);
+    try { await db.submitSurveyResponse(taking.id, answers); await refresh(); setTaking(null); setAnswers({}); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  if (taking) {
+    return (
+      <>
+        <PageHead title={taking.title} sub={taking.description || "Please answer all questions and submit."} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => { setTaking(null); setAnswers({}); }}>Back</Btn>} />
+        {taking.questions.map((q, i) => (
+          <Card key={q.id} style={{ marginBottom: 12 }}>
+            <div className="pl-body" style={{ fontWeight: 600, fontSize: 15, marginBottom: 10 }}>
+              {i + 1}. {q.prompt}
+            </div>
+            {q.type === "text" && (
+              <textarea style={{ ...inputStyle, minHeight: 90 }} value={answers[q.id] || ""} placeholder="Your answer…" onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
+            )}
+            {q.type === "rating" && (
+              <div className="flex gap-3">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button key={n} onClick={() => setAnswers({ ...answers, [q.id]: String(n) })}
+                    style={{ width: 44, height: 44, borderRadius: 10, border: `2px solid ${answers[q.id] === String(n) ? C.gold : C.line}`, background: answers[q.id] === String(n) ? C.gold : "transparent", color: answers[q.id] === String(n) ? "#fff" : C.ink, cursor: "pointer", fontWeight: 700, fontSize: 18 }}>
+                    {n}
+                  </button>
+                ))}
+                <span className="pl-body" style={{ fontSize: 12, color: C.muted, alignSelf: "center" }}>1 = Poor · 5 = Excellent</span>
+              </div>
+            )}
+            {q.type === "yesno" && (
+              <div className="flex gap-3">
+                {["Yes", "No"].map((opt) => (
+                  <button key={opt} onClick={() => setAnswers({ ...answers, [q.id]: opt })}
+                    style={{ padding: "8px 24px", borderRadius: 8, border: `2px solid ${answers[q.id] === opt ? C.gold : C.line}`, background: answers[q.id] === opt ? C.gold : "transparent", color: answers[q.id] === opt ? "#fff" : C.ink, cursor: "pointer", fontWeight: 600, fontSize: 15 }}>
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            )}
+            {q.type === "choice" && (
+              <div className="flex flex-col gap-2">
+                {(q.options || []).map((opt) => (
+                  <button key={opt} onClick={() => setAnswers({ ...answers, [q.id]: opt })}
+                    style={{ textAlign: "left", padding: "10px 14px", borderRadius: 8, border: `2px solid ${answers[q.id] === opt ? C.gold : C.line}`, background: answers[q.id] === opt ? "#fffbf2" : "transparent", cursor: "pointer" }}>
+                    <span className="pl-body" style={{ fontSize: 14, color: answers[q.id] === opt ? C.gold : C.ink, fontWeight: answers[q.id] === opt ? 600 : 400 }}>{opt}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </Card>
+        ))}
+        <div className="flex gap-2">
+          <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : "Submit survey"}</Btn>
+          <Btn kind="ghost" onClick={() => { setTaking(null); setAnswers({}); }}>Cancel</Btn>
+        </div>
+      </>
+    );
+  }
+
+  const cat = (key) => SURVEY_CATEGORIES.find((c) => c.key === key)?.label || key;
+
+  return (
+    <>
+      <PageHead title="Surveys" sub="Share your feedback to help improve the program." />
+      {available.length > 0 && (
+        <>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>Available</h3>
+          <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
+            {available.map((s) => (
+              <Card key={s.id}>
+                <div className="flex items-start justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <MessageSquare size={16} style={{ color: C.gold }} />
+                      <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{s.title}</span>
+                    </div>
+                    <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{cat(s.category)} · {s.questions?.length || 0} questions</div>
+                    {s.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 4 }}>{s.description}</p>}
+                  </div>
+                  <Btn icon={ChevronRight} onClick={() => { setTaking(s); setAnswers({}); }}>Take survey</Btn>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+      {available.length === 0 && completed.length === 0 && (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No surveys available right now. Check back later.</span></Card>
+      )}
+      {completed.length > 0 && (
+        <>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>Completed</h3>
+          <div className="flex flex-col gap-3">
+            {completed.map((s) => {
+              const myResp = mySurveyResps.find((r) => r.survey_id === s.id);
+              return (
+                <Card key={s.id} style={{ opacity: 0.75 }}>
+                  <div className="flex items-center gap-2">
+                    <ThumbsUp size={16} style={{ color: C.green }} />
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15 }}>{s.title}</span>
+                    <span className="pl-body" style={{ fontSize: 12.5, color: C.green }}>Completed {myResp ? fdate(myResp.submitted_at) : ""}</span>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN — RESOURCES MANAGER (instructions & policy manuals)
+   ═══════════════════════════════════════════════════════════════ */
+const RESOURCE_CATEGORIES = [
+  { key: "instructions", label: "Instructions & Guides" },
+  { key: "policy",       label: "Policy Manuals" },
+  { key: "handbook",     label: "Handbooks" },
+  { key: "other",        label: "Other" },
+];
+
+function ResourcesManager({ resources, refresh }) {
+  const [draft, setDraft] = useState(null);
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  function startNew() {
+    setDraft({ title: "", description: "", category: "instructions", file_path: null, link_url: "", program: "all", sort_order: 0, active: true });
+    setFile(null);
+  }
+  function startEdit(r) { setDraft({ ...r }); setFile(null); }
+
+  async function save() {
+    if (!draft.title.trim()) { window.alert("Give the resource a title."); return; }
+    if (!file && !draft.file_path && !draft.link_url) { window.alert("Attach a file or add a link."); return; }
+    setBusy(true);
+    try { await db.saveResource({ ...draft, _file: file }); await refresh(); setDraft(null); setFile(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this resource?")) return;
+    try { await db.deleteResource(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  if (draft) {
+    return (
+      <>
+        <PageHead title={draft.id ? "Edit Resource" : "New Resource"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setDraft(null)}>Back</Btn>} />
+        <Card style={{ maxWidth: 680 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Student Handbook 2026" /></Field>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 70 }} value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What is this document about?" /></Field>
+          <Field label="Category">
+            <select style={inputStyle} value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+              {RESOURCE_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </Field>
+          <Field label="Upload a document (PDF, DOCX)">
+            <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setFile(e.target.files?.[0])} />
+            {draft.file_path && !file && <FileLink path={draft.file_path} label="Current file" />}
+          </Field>
+          <Field label="…or link to an external document (optional)">
+            <input style={inputStyle} value={draft.link_url || ""} onChange={(e) => setDraft({ ...draft, link_url: e.target.value })} placeholder="https://…" />
+          </Field>
+          <Field label="Program">
+            <select style={inputStyle} value={draft.program} onChange={(e) => setDraft({ ...draft, program: e.target.value })}>
+              <option value="all">All programs</option>
+              {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </Field>
+          <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+            <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
+            Active (visible to students)
+          </label>
+          <div className="flex gap-2" style={{ marginTop: 14 }}>
+            <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save resource"}</Btn>
+            <Btn kind="ghost" onClick={() => setDraft(null)}>Cancel</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  const byCat = RESOURCE_CATEGORIES.map((c) => ({ ...c, items: resources.filter((r) => r.category === c.key) })).filter((c) => c.items.length);
+
+  return (
+    <>
+      <PageHead title="Resources" sub="Instruction guides and policy manuals for students." action={<Btn icon={Plus} onClick={startNew}>New resource</Btn>} />
+      {resources.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No resources yet. Click New resource to post an instruction guide or policy manual.</span></Card>}
+      {byCat.map((cat) => (
+        <div key={cat.key} style={{ marginBottom: 22 }}>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>{cat.label}</h3>
+          <div className="flex flex-col gap-3">
+            {cat.items.map((r) => (
+              <Card key={r.id}>
+                <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{r.title}</span>
+                      {!r.active && <span className="pl-body" style={{ fontSize: 11, color: C.muted, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>Inactive</span>}
+                    </div>
+                    {r.description && <p className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{r.description}</p>}
+                    <div className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{r.program === "all" ? "All programs" : programLabel(r.program)}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {r.file_path && <FileLink path={r.file_path} label="View" />}
+                    {r.link_url && <Btn small kind="ghost" icon={ExternalLink} onClick={() => window.open(r.link_url, "_blank")}>Open link</Btn>}
+                    <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(r)}>Edit</Btn>
+                    <button onClick={() => remove(r.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STUDENT — RESOURCES PAGE (read / download only)
+   ═══════════════════════════════════════════════════════════════ */
+function StudentResources({ resources, profile }) {
+  const visible = resources.filter((r) => r.active && (r.program === "all" || r.program === profile.program));
+  const byCat = RESOURCE_CATEGORIES.map((c) => ({ ...c, items: visible.filter((r) => r.category === c.key) })).filter((c) => c.items.length);
+
+  return (
+    <>
+      <PageHead title="Resources" sub="Instruction guides, handbooks, and policy manuals. View or download anytime." />
+      {visible.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No resources have been posted yet. Check back soon.</span></Card>}
+      {byCat.map((cat) => (
+        <div key={cat.key} style={{ marginBottom: 22 }}>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>{cat.label}</h3>
+          <div className="flex flex-col gap-3">
+            {cat.items.map((r) => (
+              <Card key={r.id}>
+                <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                  <div className="flex items-start gap-3" style={{ flex: 1 }}>
+                    <div className="inline-flex items-center justify-center" style={{ width: 38, height: 38, borderRadius: 10, background: C.paper2, color: C.gold, flexShrink: 0 }}><BookOpen size={18} /></div>
+                    <div>
+                      <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{r.title}</span>
+                      {r.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 2, lineHeight: 1.5 }}>{r.description}</p>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {r.file_path && <FileLink path={r.file_path} label="View / Download" />}
+                    {r.link_url && <Btn small kind="ghost" icon={ExternalLink} onClick={() => window.open(r.link_url, "_blank")}>Open</Btn>}
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN — ANNOUNCEMENTS MANAGER
+   ═══════════════════════════════════════════════════════════════ */
+function AnnouncementsManager({ announcements, refresh }) {
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  function startNew() { setDraft({ title: "", body: "", program: "all", active: true }); }
+  function startEdit(a) { setDraft({ ...a }); }
+
+  async function save() {
+    if (!draft.title.trim() || !draft.body.trim()) { window.alert("Add a title and message."); return; }
+    setBusy(true);
+    try { await db.saveAnnouncement(draft); await refresh(); setDraft(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this announcement?")) return;
+    try { await db.deleteAnnouncement(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function toggle(a) {
+    try { await db.saveAnnouncement({ ...a, active: !a.active }); await refresh(); }
+    catch (e) { window.alert(e.message); }
+  }
+
+  if (draft) {
+    return (
+      <>
+        <PageHead title={draft.id ? "Edit Announcement" : "New Announcement"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setDraft(null)}>Back</Btn>} />
+        <Card style={{ maxWidth: 640 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Class canceled this Thursday" /></Field>
+          <Field label="Message"><textarea style={{ ...inputStyle, minHeight: 120 }} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} placeholder="Write your announcement…" /></Field>
+          <Field label="Who sees this?">
+            <select style={inputStyle} value={draft.program} onChange={(e) => setDraft({ ...draft, program: e.target.value })}>
+              <option value="all">All students</option>
+              {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label} students only</option>)}
+            </select>
+          </Field>
+          <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+            <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
+            Active (showing on dashboards now)
+          </label>
+          <div className="flex gap-2" style={{ marginTop: 14 }}>
+            <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Post announcement"}</Btn>
+            <Btn kind="ghost" onClick={() => setDraft(null)}>Cancel</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Announcements" sub="Posted to the top of student dashboards." action={<Btn icon={Plus} onClick={startNew}>New announcement</Btn>} />
+      <div className="flex flex-col gap-3">
+        {announcements.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No announcements yet. Click New announcement to post one to student dashboards.</span></Card>}
+        {announcements.map((a) => (
+          <Card key={a.id} style={{ borderLeft: a.active ? `4px solid ${C.gold}` : `4px solid ${C.line}` }}>
+            <div className="flex items-start justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+              <div style={{ flex: 1 }}>
+                <div className="flex items-center gap-2">
+                  <span className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink }}>{a.title}</span>
+                  {!a.active && <span className="pl-body" style={{ fontSize: 11, color: C.muted, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>Hidden</span>}
+                  <span className="pl-body" style={{ fontSize: 11, color: C.gold, fontWeight: 600 }}>{a.program === "all" ? "All students" : programLabel(a.program)}</span>
+                </div>
+                <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 4, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{a.body}</p>
+                <div className="pl-body" style={{ fontSize: 11.5, color: C.muted, marginTop: 4 }}>{fdate(a.created_at)}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button title={a.active ? "Hide" : "Show"} onClick={() => toggle(a)} style={{ background: "none", border: "none", cursor: "pointer", color: a.active ? C.green : C.muted }}>
+                  {a.active ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
+                </button>
+                <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(a)}>Edit</Btn>
+                <button onClick={() => remove(a.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </>
+  );
 }
