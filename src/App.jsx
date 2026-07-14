@@ -267,10 +267,11 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [recovery, setRecovery] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    const { data: sub } = supabase.auth.onAuthStateChange((e, s) => { setSession(s); if (e === "PASSWORD_RECOVERY") setRecovery(true); });
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -294,7 +295,9 @@ export default function App() {
   return (
     <div className="pl-body" style={{ minHeight: "100vh", background: C.paper, color: C.text }}>
       <style>{FONTS}</style>
-      {!session ? (
+      {recovery ? (
+        <ResetPassword onDone={() => setRecovery(false)} />
+      ) : !session ? (
         <Auth />
       ) : loading ? (
         <div className="flex items-center justify-center" style={{ minHeight: "100vh" }}><Spinner label="Preparing your portal…" /></div>
@@ -327,6 +330,10 @@ function Auth() {
       if (tab === "signin") {
         const { error } = await supabase.auth.signInWithPassword({ email: form.email.trim(), password: form.password });
         if (error) throw error;
+      } else if (tab === "forgot") {
+        const { error } = await supabase.auth.resetPasswordForEmail(form.email.trim(), { redirectTo: window.location.origin });
+        if (error) throw error;
+        setMsg({ ok: true, text: "If that email is registered, a password reset link is on its way. Check your inbox (and spam)." });
       } else {
         const { error } = await supabase.auth.signUp({
           email: form.email.trim(), password: form.password,
@@ -367,26 +374,45 @@ function Auth() {
         </div>
 
         <Card style={{ padding: 26 }}>
-          <div className="grid grid-cols-2 gap-2" style={{ marginBottom: 20 }}>
-            {[["signin", "Sign In"], ["signup", "Create Account"]].map(([k, label]) => (
-              <button key={k} onClick={() => { setTab(k); setMsg(null); }} className="pl-body pl-press" style={{
-                padding: 10, borderRadius: 9, cursor: "pointer", fontWeight: 600, fontSize: 14,
-                border: `1px solid ${tab === k ? C.ink : C.line}`, background: tab === k ? C.ink : "#fff", color: tab === k ? "#fff" : C.muted }}>{label}</button>
-            ))}
-          </div>
+          {tab === "forgot" ? (
+            <div style={{ marginBottom: 16 }}>
+              <div className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.ink }}>Reset your password</div>
+              <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>Enter your account email and we'll send you a link to set a new password.</div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2" style={{ marginBottom: 20 }}>
+              {[["signin", "Sign In"], ["signup", "Create Account"]].map(([k, label]) => (
+                <button key={k} onClick={() => { setTab(k); setMsg(null); }} className="pl-body pl-press" style={{
+                  padding: 10, borderRadius: 9, cursor: "pointer", fontWeight: 600, fontSize: 14,
+                  border: `1px solid ${tab === k ? C.ink : C.line}`, background: tab === k ? C.ink : "#fff", color: tab === k ? "#fff" : C.muted }}>{label}</button>
+              ))}
+            </div>
+          )}
 
           {tab === "signup" && (
             <Field label="Full name"><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Your name" /></Field>
           )}
           <Field label="Email"><input style={inputStyle} type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" /></Field>
-          <Field label="Password"><input style={inputStyle} type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="••••••••" onKeyDown={(e) => e.key === "Enter" && submit()} /></Field>
+          {tab !== "forgot" && (
+            <Field label="Password"><input style={inputStyle} type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="••••••••" onKeyDown={(e) => e.key === "Enter" && submit()} /></Field>
+          )}
 
           {msg && (
             <div className="pl-body" style={{ fontSize: 13, padding: "9px 12px", borderRadius: 8, marginBottom: 12,
               background: msg.ok ? C.greenSoft : C.roseSoft, color: msg.ok ? C.green : C.rose }}>{msg.text}</div>
           )}
 
-          <Btn full kind="gold" onClick={submit} disabled={busy}>{busy ? "Please wait…" : tab === "signin" ? "Sign in" : "Create account"}</Btn>
+          <Btn full kind="gold" onClick={submit} disabled={busy}>{busy ? "Please wait…" : tab === "signin" ? "Sign in" : tab === "forgot" ? "Send reset link" : "Create account"}</Btn>
+          {tab === "signin" && (
+            <div className="text-center" style={{ marginTop: 12 }}>
+              <button onClick={() => { setTab("forgot"); setMsg(null); }} className="pl-body pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.ink, fontSize: 13, textDecoration: "underline" }}>Forgot password?</button>
+            </div>
+          )}
+          {tab === "forgot" && (
+            <div className="text-center" style={{ marginTop: 12 }}>
+              <button onClick={() => { setTab("signin"); setMsg(null); }} className="pl-body pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 13 }}>← Back to sign in</button>
+            </div>
+          )}
         </Card>
         <div className="text-center pl-body" style={{ color: "#ffffff88", fontSize: 12, marginTop: 16 }}>New students create an account. Instructor access is granted by the administrator.</div>
       </div>
@@ -395,6 +421,43 @@ function Auth() {
 }
 
 /* ============================================================ INSTRUCTOR */
+function ResetPassword({ onDone }) {
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  async function submit() {
+    setMsg(null);
+    if (pw.length < 6) { setMsg({ ok: false, text: "Password must be at least 6 characters." }); return; }
+    if (pw !== pw2) { setMsg({ ok: false, text: "The two passwords don't match." }); return; }
+    setBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: pw });
+      if (error) throw error;
+      setMsg({ ok: true, text: "Password updated. Signing you out so you can sign in with your new password…" });
+      setTimeout(async () => { try { await supabase.auth.signOut(); } catch (e) {} onDone(); }, 1600);
+    } catch (e) { setMsg({ ok: false, text: e.message || "Couldn't update password." }); setBusy(false); }
+  }
+  return (
+    <div className="flex items-center justify-center" style={{ minHeight: "100vh", padding: 20, background: `radial-gradient(1200px 600px at 50% -10%, ${C.ink2} 0%, ${C.ink} 55%, #0d1528 100%)` }}>
+      <div className="pl-fade w-full" style={{ maxWidth: 430 }}>
+        <div className="text-center" style={{ marginBottom: 24 }}>
+          <div className="pl-display" style={{ color: "#fff", fontSize: 30, fontWeight: 600 }}>{BRAND.name}</div>
+          <div className="pl-body" style={{ color: C.goldSoft, fontSize: 13, letterSpacing: ".22em", textTransform: "uppercase", marginTop: 4 }}>Set a new password</div>
+        </div>
+        <Card style={{ padding: 26 }}>
+          <Field label="New password"><input style={inputStyle} type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••" /></Field>
+          <Field label="Confirm new password"><input style={inputStyle} type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} placeholder="••••••••" onKeyDown={(e) => e.key === "Enter" && submit()} /></Field>
+          {msg && (
+            <div className="pl-body" style={{ fontSize: 13, padding: "9px 12px", borderRadius: 8, marginBottom: 12, background: msg.ok ? C.greenSoft : C.roseSoft, color: msg.ok ? C.green : C.rose }}>{msg.text}</div>
+          )}
+          <Btn full kind="gold" onClick={submit} disabled={busy}>{busy ? "Please wait…" : "Update password"}</Btn>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 function TranscriptManager({ students, courses, subs, tests, hwSubs, homework }) {
   const [studentId, setStudentId] = useState("");
   const [program, setProgram] = useState("associate");
