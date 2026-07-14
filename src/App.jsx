@@ -157,18 +157,18 @@ const TRANSCRIPT_PROGRAMS = [
 // Which app-course codes fall in which semester (guided by the campus grade sheets). Codes are normalized (dashes ignored) when matched to your catalog.
 const TRANSCRIPT_LAYOUT = {
   associate: [
-    { sem: "Fall Semester", codes: ["ABS-101", "ABS-102", "ABS-103", "ABS-104", "ABS-105", "ABS-106", "ATS-115"] },
-    { sem: "Spring Semester", codes: ["ABS-107", "ABS-108", "ABS-109", "ABS-110", "ABS-111", "ATS-116"] },
+    { sem: "Fall Semester", term: ["fall"], codes: ["ABS-101", "ABS-102", "ABS-103", "ABS-104", "ABS-105", "ABS-106", "ATS-115"] },
+    { sem: "Spring Semester", term: ["spring"], codes: ["ABS-107", "ABS-108", "ABS-109", "ABS-110", "ABS-111", "ATS-116"] },
   ],
   bachelor: [
-    { sem: "Fall Semester", codes: ["BBS-201", "BBS-202", "BBS-203", "BBS-204", "BBS-205", "BBS-206", "BBS-207", "BBS-208", "BBS-209", "BBS-210", "BBS-211", "BTS-215", "BTS-216", "BTS-217"] },
-    { sem: "Spring Semester", codes: ["BBS-212", "BBS-213", "BBS-214", "BBS-215", "BBS-216", "BBS-217", "BBS-218", "BTS-218"] },
+    { sem: "Fall Semester", term: ["fall"], codes: ["BBS-201", "BBS-202", "BBS-203", "BBS-204", "BBS-205", "BBS-206", "BBS-207", "BBS-208", "BBS-209", "BBS-210", "BBS-211", "BTS-215", "BTS-216", "BTS-217"] },
+    { sem: "Spring Semester", term: ["spring"], codes: ["BBS-212", "BBS-213", "BBS-214", "BBS-215", "BBS-216", "BBS-217", "BBS-218", "BTS-218"] },
   ],
   master: [
-    { sem: "Year I \u2014 Fall Semester", codes: ["MBS-401", "MBS-402", "MBS-403", "MBS-404", "MBS-405", "MBS-406", "MBS-407", "MTS-415", "MTS-416", "MTS-417", "MTS-418", "MTS-419", "MTS-420"] },
-    { sem: "Year I \u2014 Spring Semester", codes: ["MBS-408", "MBS-409", "MBS-410", "MTS-421", "MTS-422", "MTS-423"] },
-    { sem: "Year II \u2014 Fall Semester", codes: ["MBS-416", "MBS-417", "MBS-418", "MBS-419", "MBS-420", "MBS-421", "MTS-432", "MTS-434"] },
-    { sem: "Year II \u2014 Spring Semester", codes: ["MBS-422", "MBS-423", "MBS-424", "MBS-425", "MTS-433", "MTS-435", "MTS-436"] },
+    { sem: "Year I \u2014 Fall Semester", term: ["year i", "fall"], not: ["year ii"], codes: ["MBS-401", "MBS-402", "MBS-403", "MBS-404", "MBS-405", "MBS-406", "MBS-407", "MTS-415", "MTS-416", "MTS-417", "MTS-418", "MTS-419", "MTS-420"] },
+    { sem: "Year I \u2014 Spring Semester", term: ["year i", "spring"], not: ["year ii"], codes: ["MBS-408", "MBS-409", "MBS-410", "MTS-421", "MTS-422", "MTS-423"] },
+    { sem: "Year II \u2014 Fall Semester", term: ["year ii", "fall"], codes: ["MBS-416", "MBS-417", "MBS-418", "MBS-419", "MBS-420", "MBS-421", "MTS-432", "MTS-434"] },
+    { sem: "Year II \u2014 Spring Semester", term: ["year ii", "spring"], codes: ["MBS-422", "MBS-423", "MBS-424", "MBS-425", "MTS-433", "MTS-435", "MTS-436"] },
   ],
 };
 
@@ -414,12 +414,12 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
     semesters = layout.map((b) => {
       const list = b.codes.map((cd) => progCourses.find((c) => norm(c.code) === norm(cd))).filter(Boolean);
       list.forEach((c) => used.add(c.id));
-      return { sem: b.sem, courses: list };
+      return { sem: b.sem, term: b.term || [], not: b.not || [], courses: list, exams: true };
     });
     const other = progCourses.filter((c) => !used.has(c.id));
-    if (other.length) semesters.push({ sem: "Other Courses", courses: other });
+    if (other.length) semesters.push({ sem: "Other Courses", term: [], not: [], courses: other, exams: false });
   } else {
-    semesters = [{ sem: "Program Courses", courses: progCourses }];
+    semesters = [{ sem: "Program Courses", term: [], not: [], courses: progCourses, exams: false }];
   }
 
   useEffect(() => {
@@ -437,6 +437,8 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
     return () => { alive = false; };
   }, [studentId, program]);
 
+  function setScore(key, v) { setManual((p) => ({ ...p, [key]: v })); setSavedNote(""); }
+
   function autoScore(courseId) {
     if (!studentId || !courseId) return null;
     const pcts = [];
@@ -447,26 +449,47 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
     if (!pcts.length) return null;
     return Math.round((pcts.reduce((a, b) => a + b, 0) / pcts.length) * 100) / 100;
   }
-  function effective(courseId) {
-    const m = manual[courseId];
-    if (m !== undefined && m !== "" && m != null && !isNaN(Number(m))) return Number(m);
-    return autoScore(courseId);
+  function examAuto(sem, type) {
+    if (!studentId) return null;
+    const kw = type === "mid" ? "mid" : "final";
+    const cands = (tests || []).filter((t) => {
+      if (t.program !== program) return false;
+      const title = (t.title || "").toLowerCase();
+      if (!title.includes(kw)) return false;
+      if ((sem.term || []).some((x) => !title.includes(x))) return false;
+      if ((sem.not || []).some((x) => title.includes(x))) return false;
+      return true;
+    });
+    for (const t of cands) {
+      const s = (subs || []).find((x) => x.test_id === t.id && x.student_id === studentId && x.status === "graded" && x.max_score);
+      if (s) return Math.round((s.score / s.max_score) * 100 * 100) / 100;
+    }
+    return null;
   }
-  function setScore(courseId, v) { setManual((p) => ({ ...p, [courseId]: v })); setSavedNote(""); }
 
-  function semStats(sem) {
+  function effCourse(courseId) { const m = manual[courseId]; if (m !== undefined && m !== "" && m != null && !isNaN(Number(m))) return Number(m); return autoScore(courseId); }
+  function effExam(sem, si, type) { const m = manual[`EXAM-${type}-${si}`]; if (m !== undefined && m !== "" && m != null && !isNaN(Number(m))) return Number(m); return examAuto(sem, type); }
+
+  function semStats(sem, si) {
     let hours = 0; const sc = [];
-    sem.courses.forEach((c) => { hours += Number(c.credit_hours) || 0; const e = effective(c.id); if (e != null) sc.push(e); });
+    sem.courses.forEach((c) => { hours += Number(c.credit_hours) || 0; const e = effCourse(c.id); if (e != null) sc.push(e); });
+    if (sem.exams) { const em = effExam(sem, si, "mid"); if (em != null) sc.push(em); const ef = effExam(sem, si, "final"); if (ef != null) sc.push(ef); }
     return { hours, avg: sc.length ? sc.reduce((a, b) => a + b, 0) / sc.length : null };
   }
-  const cumHours = semesters.reduce((a, s) => a + semStats(s).hours, 0);
+  const cumHours = semesters.reduce((a, s, si) => a + semStats(s, si).hours, 0);
 
   async function save() {
     if (!studentId) return;
     setSaving(true);
     try {
       const rows = [];
-      semesters.forEach((sem) => sem.courses.forEach((c) => { rows.push({ line_key: c.id, score: manual[c.id] ?? "" }); }));
+      semesters.forEach((sem, si) => {
+        sem.courses.forEach((c) => rows.push({ line_key: c.id, score: manual[c.id] ?? "" }));
+        if (sem.exams) {
+          rows.push({ line_key: `EXAM-mid-${si}`, score: manual[`EXAM-mid-${si}`] ?? "" });
+          rows.push({ line_key: `EXAM-final-${si}`, score: manual[`EXAM-final-${si}`] ?? "" });
+        }
+      });
       await db.saveTranscriptGrades(studentId, program, rows);
       setSavedNote("Saved.");
     } catch (e) { window.alert(e.message); }
@@ -485,15 +508,17 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
   function generate() {
     if (!student) { window.alert("Choose a student first."); return; }
     const progLabel = TRANSCRIPT_PROGRAMS.find((p) => p.key === program)?.label || "";
-    const semBlock = semesters.map((sem) => {
-      const st = semStats(sem);
+    const examRow = (label, e) => `<tr><td></td><td>${label}</td><td class="c"></td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`;
+    const semBlock = semesters.map((sem, si) => {
+      const st = semStats(sem, si);
       const rows = sem.courses.map((c) => {
-        const e = effective(c.id);
+        const e = effCourse(c.id);
         return `<tr><td>${c.code || ""}</td><td>${(c.title || "").replace(/</g, "&lt;")}</td><td class="c">${c.credit_hours ?? ""}</td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`;
       }).join("");
+      const exams = sem.exams ? examRow("Mid-Term Exam", effExam(sem, si, "mid")) + examRow("Final Exam", effExam(sem, si, "final")) : "";
       return `<div class="semt">${sem.sem}</div>
         <table><thead><tr><th>Code</th><th>Course</th><th class="c">Cr. Hrs</th><th class="c">Grade</th><th class="c">Alpha</th></tr></thead>
-        <tbody>${rows}
+        <tbody>${rows}${exams}
         <tr class="tot"><td></td><td>Semester Totals</td><td class="c">${st.hours}</td><td class="c">${st.avg != null ? st.avg.toFixed(2) : ""}</td><td class="c">${gradeLetter(st.avg)}</td></tr></tbody></table>`;
     }).join("");
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Official Academic Record \u2014 ${student.full_name}</title>
@@ -516,9 +541,29 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
     openHtml(html);
   }
 
+  const examInputRow = (sem, si, type, label) => {
+    const auto = examAuto(sem, type);
+    const key = `EXAM-${type}-${si}`;
+    const m = manual[key];
+    const hasManual = m !== undefined && m !== "" && m != null;
+    const eff = effExam(sem, si, type);
+    const lt = gradeLetter(eff);
+    return (
+      <tr key={key} style={{ borderTop: `1px solid ${C.line}`, background: C.paper2 }}>
+        <td style={{ padding: "6px 8px", color: C.muted, fontSize: 12.5 }}></td>
+        <td style={{ padding: "6px 8px", color: C.ink, fontStyle: "italic" }}>{label}</td>
+        <td style={{ padding: "6px 8px", textAlign: "center", color: C.muted }}>—</td>
+        <td style={{ padding: "4px 8px", textAlign: "center" }}>
+          <input value={hasManual ? m : ""} onChange={(e) => setScore(key, e.target.value)} inputMode="decimal" placeholder={auto != null ? `${auto}` : "—"} style={{ ...inputStyle, width: 96, textAlign: "center", padding: "5px 6px" }} />
+        </td>
+        <td style={{ padding: "6px 8px", textAlign: "center", fontWeight: 700, color: lt === "F" ? C.rose : lt ? C.green : C.muted }}>{lt || "—"}</td>
+      </tr>
+    );
+  };
+
   return (
     <>
-      <PageHead title="Transcripts" sub="Scores auto-fill from the gradebook where courses are graded; type to override. Grades, averages, and hours compute automatically." />
+      <PageHead title="Transcripts" sub="Scores auto-fill from the gradebook where courses are graded; type to override. Mid-Term and Final exams appear per semester. Grades, averages, and hours compute automatically." />
       <Card style={{ marginBottom: 16 }}>
         <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
           <Field label="Student"><select style={{ ...inputStyle, minWidth: 220 }} value={studentId} onChange={(e) => setStudentId(e.target.value)}>
@@ -541,11 +586,10 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
         progCourses.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No courses found for this program in your catalog.</span></Card> : (
         <>
           {semesters.map((sem, si) => {
-            const st = semStats(sem);
+            const st = semStats(sem, si);
             return (
               <Card key={si} style={{ marginBottom: 16 }}>
                 <h3 className="pl-display" style={{ fontSize: 16, color: C.ink, margin: "0 0 10px" }}>{sem.sem}</h3>
-                {sem.courses.length === 0 ? <span className="pl-body" style={{ color: C.muted, fontSize: 13 }}>No courses.</span> : (
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
                     <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12, textTransform: "uppercase", letterSpacing: ".05em" }}>
@@ -560,7 +604,7 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
                         const auto = autoScore(c.id);
                         const m = manual[c.id];
                         const hasManual = m !== undefined && m !== "" && m != null;
-                        const eff = effective(c.id);
+                        const eff = effCourse(c.id);
                         const lt = gradeLetter(eff);
                         return (
                           <tr key={c.id} style={{ borderTop: `1px solid ${C.line}` }}>
@@ -574,6 +618,8 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
                           </tr>
                         );
                       })}
+                      {sem.exams && examInputRow(sem, si, "mid", "Mid-Term Exam")}
+                      {sem.exams && examInputRow(sem, si, "final", "Final Exam")}
                       <tr style={{ borderTop: `2px solid ${C.line}` }}>
                         <td></td>
                         <td style={{ padding: "8px", fontWeight: 700 }}>Semester Totals</td>
@@ -584,7 +630,6 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
                     </tbody>
                   </table>
                 </div>
-                )}
               </Card>
             );
           })}
@@ -2368,13 +2413,13 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
     const sub = hwSubs.find((s) => s.id === gradeId);
     const hw = homework.find((h) => h.id === sub.homework_id);
     const hasQs = hw && hw.questions.length > 0;
-    let total, max;
+    let total, max = 100;
     if (hasQs) {
       const auto = autoScore({ questions: hw.questions }, sub);
       const manualTotal = hw.questions.filter((q) => q.type === "short" || q.type === "essay").reduce((a, q) => a + (Number(manual[q.id] ?? 0) || 0), 0);
-      max = sumPoints(hw.questions); total = auto + manualTotal;
+      const raw = sumPoints(hw.questions); total = raw ? Math.round(((auto + manualTotal) / raw) * 100) : 0;
     } else {
-      max = sub.max_points || hw?.points || 0; total = Number(score) || 0;
+      total = Math.max(0, Math.min(100, Number(score) || 0));
     }
     setBusy(true);
     try { await db.gradeHomework(gradeId, { manual, score: total, max_points: max, feedback }); await refresh(); setMode("list"); setGradeId(null); }
@@ -2386,13 +2431,13 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
     const sub = hwSubs.find((s) => s.id === gradeId);
     const hw = homework.find((h) => h.id === sub.homework_id);
     const hasQs = hw && hw.questions.length > 0;
-    let total = 0, max = 0;
+    let total = 0, max = 100;
     if (hasQs) {
       const auto = autoScore({ questions: hw.questions }, sub);
       const manualTotal = hw.questions.filter((q) => q.type === "short" || q.type === "essay").reduce((a, q) => a + (Number(manual[q.id] ?? 0) || 0), 0);
-      max = sumPoints(hw.questions); total = auto + manualTotal;
+      const raw = sumPoints(hw.questions); total = raw ? Math.round(((auto + manualTotal) / raw) * 100) : 0;
     } else {
-      max = sub.max_points || hw?.points || 0; total = Number(score) || 0;
+      total = Math.max(0, Math.min(100, Number(score) || 0));
     }
     setBusy(true);
     try { await db.saveGradeDraft(gradeId, { manual, score: total, max_points: max, feedback }); await refresh(); setMode("list"); setGradeId(null); }
@@ -2487,7 +2532,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
     const hasQs = hw && hw.questions.length > 0;
     const auto = hasQs ? autoScore({ questions: hw.questions }, sub) : 0;
     const manualTotal = hasQs ? hw.questions.filter((q) => q.type === "short" || q.type === "essay").reduce((a, q) => a + (Number(manual[q.id] ?? 0) || 0), 0) : 0;
-    const max = hasQs ? sumPoints(hw.questions) : (sub.max_points || hw?.points || 0);
+    const max = hasQs ? sumPoints(hw.questions) : 100;
     const total = hasQs ? auto + manualTotal : (Number(score) || 0);
     return (
       <>
