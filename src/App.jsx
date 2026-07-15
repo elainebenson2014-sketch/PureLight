@@ -625,7 +625,7 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
     return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
       <style>*{box-sizing:border-box}body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;margin:0;padding:0}
       .rec{max-width:820px;margin:0 auto;padding:28px;page-break-after:always}.rec:last-child{page-break-after:auto}
-      .hdr{position:relative;text-align:center;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px}.hdr h1{font-size:20px;margin:0}.logo{position:absolute;top:0;right:0;width:74px;height:auto}.hdr .sub{font-size:12px;color:#333;margin-top:3px}
+      .hdr{position:relative;text-align:center;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px}.hdr h1{font-size:20px;margin:0}.logo{position:absolute;top:0;left:0;width:74px;height:auto}.hdr .sub{font-size:12px;color:#333;margin-top:3px}
       .title{text-align:center;font-weight:bold;letter-spacing:.08em;margin:14px 0 8px}.meta{font-size:13px;margin:2px 0}.meta b{display:inline-block;min-width:150px}
       .semt{font-weight:bold;margin:16px 0 4px;background:#f0ece2;padding:4px 8px}table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:4px}
       th,td{border:1px solid #cfcabb;padding:4px 6px;text-align:left}th{background:#faf8f2}td.c,th.c{text-align:center}
