@@ -882,7 +882,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "tests" && <TestsManager tests={tests} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <HomeworkManager homework={scopedHomework} hwSubs={scopedHwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
           {active === "classes" && <ScheduleManager sessions={sessions} courses={courses} students={students} profile={profile} refresh={refresh} />}
-          {active === "attendance" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} refresh={refresh} />}
+          {active === "attendance" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} certEnrollments={certEnrollments} refresh={refresh} />}
           {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} />}
           {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
@@ -3173,9 +3173,51 @@ const todayStr = () => {
   return local.toISOString().slice(0, 10);
 };
 
-function AttendanceManager({ students, attendance, subs, hwSubs, refresh }) {
+function AttendanceManager({ students, attendance, subs, hwSubs, certEnrollments, refresh }) {
   const [date, setDate] = useState(todayStr());
   const [savingId, setSavingId] = useState(null);
+  const isCertStudent = (id) => (certEnrollments || []).some((e) => e.student_id === id);
+
+  function attendanceReport() {
+    const now = new Date();
+    const when = now.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
+    const degree = students.filter((s) => !isCertStudent(s.id)).slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
+    const dates = [...new Set((attendance || []).map((a) => a.date).filter(Boolean))];
+    const totalSessions = dates.length;
+    const rows = degree.map((s) => {
+      const my = (attendance || []).filter((a) => a.student_id === s.id);
+      const present = my.filter((a) => a.status === "present").length;
+      const excused = my.filter((a) => a.status === "excused").length;
+      const absent = my.filter((a) => a.status === "absent").length;
+      const attended = present + excused;
+      const rate = totalSessions ? Math.round((attended / totalSessions) * 100) : (my.length ? Math.round((attended / my.length) * 100) : 0);
+      return { s, present, excused, absent, rate };
+    });
+    const avgRate = rows.length ? Math.round(rows.reduce((a, r) => a + r.rate, 0) / rows.length) : 0;
+    const body = rows.map((r) => `<tr><td>${(r.s.full_name || "").replace(/</g, "&lt;")}</td><td class="c">${totalSessions}</td><td class="c" style="color:#2e7d32">${r.present}</td><td class="c" style="color:#C5922E">${r.excused}</td><td class="c" style="color:#B23A3A">${r.absent}</td><td class="c" style="font-weight:700;color:${r.rate >= 70 ? "#2e7d32" : "#B23A3A"}">${r.rate}%</td></tr>`).join("");
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Attendance Report</title>
+      <style>body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;max-width:820px;margin:24px auto;padding:0 20px}
+      .head{text-align:center;border-bottom:3px solid #1B3A6B;padding-bottom:12px;margin-bottom:8px}.head .n{color:#C5922E;font-family:Arial,sans-serif;font-size:12px;letter-spacing:2px;font-weight:bold}
+      h1{color:#1B3A6B;font-size:22px;margin:6px 0 2px}.sub2{color:#666;font-size:13px;margin-bottom:20px;text-align:center}
+      table{width:100%;border-collapse:collapse;font-size:13.5px}th{font-family:Arial,sans-serif;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#666;border-bottom:2px solid #1B3A6B;padding:8px}
+      td{padding:7px 8px;border-bottom:1px solid #eee}td.c,th.c{text-align:center}.foot{margin-top:22px;text-align:center;color:#888;font-size:11px;font-family:Arial,sans-serif}
+      @media print{.noprint{display:none}}</style></head><body>
+      <div class="head"><div class="n">NCTS PURE LIGHT SCHOOL OF MINISTRY</div><h1>Attendance Report</h1></div>
+      <div class="sub2">Degree Students &bull; ${when}</div>
+      <button class="noprint" onclick="window.print()" style="display:block;margin:0 auto 20px;padding:8px 18px;background:#1B3A6B;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Print / Save as PDF</button>
+      <div class="sub2" style="text-align:left;margin-bottom:8px">${degree.length} students &bull; ${totalSessions} session${totalSessions === 1 ? "" : "s"} held &bull; average attendance ${avgRate}%</div>
+      <table><thead><tr><th>Student</th><th class="c">Sessions</th><th class="c">Present</th><th class="c">Excused</th><th class="c">Absent</th><th class="c">Attendance</th></tr></thead>
+      <tbody>${body || '<tr><td colspan="6">No degree students.</td></tr>'}</tbody></table>
+      <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
+      </body></html>`;
+    let w = null;
+    try { w = window.open("", "_blank"); } catch (e) { w = null; }
+    if (w && w.document) { w.document.write(html); w.document.close(); }
+    else {
+      try { const url = URL.createObjectURL(new Blob([html], { type: "text/html" })); const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(() => URL.revokeObjectURL(url), 10000); }
+      catch (e) { window.alert("Please allow pop-ups to view the report."); }
+    }
+  }
 
   async function mark(sid, status) {
     setSavingId(sid);
@@ -3205,7 +3247,7 @@ function AttendanceManager({ students, attendance, subs, hwSubs, refresh }) {
 
   return (
     <>
-      <PageHead title="Attendance & Progress" sub="Mark attendance by date and track each student's progress." />
+      <PageHead title="Attendance & Progress" sub="Mark attendance by date and track each student's progress." action={<Btn small kind="gold" icon={FileText} onClick={attendanceReport}>Management report</Btn>} />
 
       <Card style={{ marginBottom: 20 }}>
         <div className="flex items-center justify-between" style={{ marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
