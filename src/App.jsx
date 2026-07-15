@@ -888,7 +888,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "transcripts" && profile.role === "admin" && <TranscriptManager students={students} courses={courses} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} />}
           {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
-          {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} courses={courses} tuition={tuition} refresh={refresh} />}
+          {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} courses={courses} tuition={tuition} certEnrollments={certEnrollments} refresh={refresh} />}
           {active === "tuition" && profile.role === "admin" && <TuitionManager tuition={tuition} refresh={refresh} />}
           {active === "certificates" && profile.role === "admin" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
           {active === "certprograms" && profile.role === "admin" && <CertClassesManager courses={courses} students={students} profiles={profiles} tests={tests} homework={homework} subs={subs} hwSubs={hwSubs} certificates={certificates} enrollments={certEnrollments} ledger={ledger} refresh={refresh} />}
@@ -3894,14 +3894,16 @@ function parseCSV(text) {
 }
 
 /* ---------- BILLING (instructor) ---------- */
-function BillingManager({ students, ledger, courses, tuition, refresh }) {
+function BillingManager({ students, ledger, courses, tuition, certEnrollments, refresh }) {
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
   const [csvNote, setCsvNote] = useState(null);
+  const [scope, setScope] = useState("degree");
   const [charge, setCharge] = useState({ description: "", amount: "", date: todayStr() });
   const [pay, setPay] = useState({ amount: "", date: todayStr(), method: "Wave", note: "", applyTo: "" });
 
   const certClasses = (courses || []).filter((c) => c.is_certificate);
+  const isCertStudent = (id) => (certEnrollments || []).some((e) => e.student_id === id);
 
   const entriesFor = (id) => ledger.filter((e) => e.student_id === id);
   const totals = (id) => {
@@ -4376,7 +4378,12 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
 
   return (
     <>
-      <PageHead title="Billing" sub="Charges, payments, and balances. Add entries by hand or import a CSV." />
+      <PageHead title="Billing" sub="Charges, payments, and balances. Add entries by hand or import a CSV." action={
+        <div className="flex gap-2">
+          <Btn small kind={scope === "degree" ? "gold" : "ghost"} onClick={() => setScope("degree")}>Degree</Btn>
+          <Btn small kind={scope === "certificate" ? "gold" : "ghost"} onClick={() => setScope("certificate")}>Certificate</Btn>
+        </div>
+      } />
       <Card style={{ marginBottom: 18 }}>
         <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 6px" }}>Import from CSV</h3>
         <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, margin: "0 0 10px", lineHeight: 1.5 }}>
@@ -4387,24 +4394,28 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
       </Card>
       {students.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card> :
         (() => {
+          // Scope by degree vs certificate (certificate student = enrolled in a cert class).
+          const scoped = students.filter((s) => (scope === "certificate" ? isCertStudent(s.id) : !isCertStudent(s.id)));
           // Split by status; treat missing status as active.
           const isActive = (s) => (s.status || "active") !== "inactive";
-          const activeStudents = students.filter(isActive);
-          const inactiveStudents = students.filter((s) => !isActive(s));
+          const activeStudents = scoped.filter(isActive);
+          const inactiveStudents = scoped.filter((s) => !isActive(s));
 
-          // Funds summary across ALL students.
+          // Funds summary across the scoped group.
           const sumFor = (list) => list.reduce((acc, s) => {
             const t = totals(s.id);
             acc.charged += t.charged; acc.paid += t.paid; acc.scholarship += t.scholarship; acc.balance += Math.max(0, t.balance);
             return acc;
           }, { charged: 0, paid: 0, scholarship: 0, balance: 0 });
-          const all = sumFor(students);
+          const all = sumFor(scoped);
           const act = sumFor(activeStudents);
-          const owing = students.filter((s) => totals(s.id).balance > 0.005).length;
+          const owing = scoped.filter((s) => totals(s.id).balance > 0.005).length;
 
           function fundsReport() {
             const now = new Date();
             const when = now.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
+            const scopeLabel = scope === "certificate" ? "Certificate Students" : "Degree Students";
+            const orgName = scope === "certificate" ? "THE HEALED PLACE" : "NCTS PURE LIGHT SCHOOL OF MINISTRY";
             const rowsHtml = (list, heading) => {
               if (!list.length) return "";
               const body = list.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => {
@@ -4436,8 +4447,8 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
                 .foot{margin-top:22px;text-align:center;color:#888;font-size:11px;font-family:Arial,sans-serif;}
                 @media print{.noprint{display:none}}
               </style></head><body>
-              <div class="head"><div class="n">NCTS PURE LIGHT SCHOOL OF MINISTRY</div><h1>Funds Collected &amp; Owed</h1></div>
-              <div class="sub2">Management Report &bull; ${when}</div>
+              <div class="head"><div class="n">${orgName}</div><h1>Funds Collected &amp; Owed</h1></div>
+              <div class="sub2">Management Report — ${scopeLabel} &bull; ${when}</div>
               <button class="noprint" onclick="window.print()" style="display:block;margin:0 auto 20px;padding:8px 18px;background:#1B3A6B;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Print / Save as PDF</button>
               <div class="cards">
                 <div class="card paid"><div class="lbl">Total Collected</div><div class="val">${money(all.paid)}</div></div>
@@ -4446,7 +4457,7 @@ function BillingManager({ students, ledger, courses, tuition, refresh }) {
                 <div class="card"><div class="lbl">Total Billed</div><div class="val">${money(all.charged)}</div></div>
               </div>
               <div class="sub2" style="text-align:left;margin-bottom:8px;">
-                ${students.length} students &bull; ${activeStudents.length} active, ${inactiveStudents.length} inactive &bull; ${owing} with a balance owing
+                ${scoped.length} students &bull; ${activeStudents.length} active, ${inactiveStudents.length} inactive &bull; ${owing} with a balance owing
               </div>
               <table>
                 <thead><tr><th>Student</th><th class="r">Billed</th><th class="r">Scholarship</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
