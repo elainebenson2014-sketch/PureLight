@@ -468,6 +468,7 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
   const [savedNote, setSavedNote] = useState("");
   const [batchSel, setBatchSel] = useState(() => new Set());
   const [batchBusy, setBatchBusy] = useState(false);
+  const [acadYear, setAcadYear] = useState("2026\u20132027");
 
   const student = students.find((s) => s.id === studentId);
   const norm = (c) => String(c || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
@@ -616,6 +617,7 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
       <div class="title">OFFICIAL ACADEMIC RECORD</div>
       <div class="meta"><b>Name of Student:</b> ${stu.full_name}</div>
       <div class="meta"><b>Course of Study:</b> ${progLabel}</div>
+      <div class="meta"><b>Academic Year:</b> ${acadYear}</div>
       <div class="meta"><b>Date Issued:</b> ${new Date().toLocaleDateString()}</div>
       ${semBlock}
       <table style="margin-top:8px"><tbody><tr class="tot"><td></td><td>Total Credit Hours Completed</td><td class="c">${cum}</td><td class="c"></td><td class="c"></td></tr></tbody></table>
@@ -688,6 +690,7 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
           <Field label="Program"><select style={{ ...inputStyle, minWidth: 240 }} value={program} onChange={(e) => setProgram(e.target.value)}>
             {TRANSCRIPT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
           </select></Field>
+          <Field label="Academic Year"><input style={{ ...inputStyle, width: 130 }} value={acadYear} onChange={(e) => setAcadYear(e.target.value)} placeholder="2026–2027" /></Field>
           <div style={{ marginLeft: "auto" }} className="flex gap-2">
             <Btn kind="ghost" icon={Check} onClick={save} disabled={!studentId || saving}>{saving ? "Saving…" : "Save overrides"}</Btn>
             <Btn icon={ScrollText} onClick={generate} disabled={!studentId}>Generate record</Btn>
