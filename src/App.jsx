@@ -2810,33 +2810,42 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
       </div>
       {homework.length === 0 && <Card style={{ marginBottom: 24 }}><span className="pl-body" style={{ color: C.muted }}>No assignments yet.</span></Card>}
       {(() => {
-        // Group assignments by program, in the PROGRAMS order, then render each group with a heading.
+        const codeOf = (h) => (courses.find((c) => c.id === h.course_id)?.code || "");
+        const strandOf = (h) => { const c = codeOf(h).toUpperCase(); if (c.includes("BS")) return "bs"; if (c.includes("TS")) return "ts"; return "other"; };
+        const STRANDS = [{ key: "bs", label: "Biblical Studies" }, { key: "ts", label: "Theology" }, { key: "other", label: "Other" }];
         const visible = progFilter === "all" ? homework : homework.filter((h) => (h.program || "all") === progFilter);
-        const order = ["all", ...PROGRAMS.filter((p) => p.key !== "all").map((p) => p.key)];
-        const groups = order
-          .map((key) => ({ key, label: key === "all" ? "All programs" : programLabel(key), items: visible.filter((h) => (h.program || "all") === key).sort((a, b) => a.title.localeCompare(b.title)) }))
-          .filter((g) => g.items.length);
         if (visible.length === 0) return <Card style={{ marginBottom: 24 }}><span className="pl-body" style={{ color: C.muted }}>No assignments for this program.</span></Card>;
-        return groups.map((g) => (
-          <div key={g.key} style={{ marginBottom: 22 }}>
-            <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>{g.label} · {g.items.length}</div>
-            <div className="flex flex-col gap-3">
-              {g.items.map((h) => (
-                <Card key={h.id}>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
-                      <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(h.program)} · {h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""} · {hwSubs.filter((s) => s.homework_id === h.id).length} submitted</div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {h.file_path && <FileLink path={h.file_path} label="Attachment" />}
-                      <Btn small kind="ghost" icon={PencilLine} onClick={() => editHw(h)}>Edit</Btn>
-                      <button onClick={() => removeHw(h.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
-                    </div>
-                  </div>
-                </Card>
-              ))}
+        const card = (h) => (
+          <Card key={h.id}>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
+                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(h.program)} · {h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""} · {hwSubs.filter((s) => s.homework_id === h.id).length} submitted</div>
+              </div>
+              <div className="flex items-center gap-2">
+                {h.file_path && <FileLink path={h.file_path} label="Attachment" />}
+                <Btn small kind="ghost" icon={PencilLine} onClick={() => editHw(h)}>Edit</Btn>
+                <button onClick={() => removeHw(h.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+              </div>
             </div>
+          </Card>
+        );
+        const strandGroups = STRANDS.map((st) => {
+          const items = visible.filter((h) => strandOf(h) === st.key);
+          const byCourse = new Map();
+          items.forEach((h) => { const code = codeOf(h) || "No course"; if (!byCourse.has(code)) byCourse.set(code, []); byCourse.get(code).push(h); });
+          const courseGroups = [...byCourse.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })).map(([code, hs]) => ({ code, name: courses.find((c) => c.code === code)?.title || "", items: hs.slice().sort((a, b) => a.title.localeCompare(b.title)) }));
+          return { ...st, count: items.length, courseGroups };
+        }).filter((g) => g.count);
+        return strandGroups.map((g) => (
+          <div key={g.key} style={{ marginBottom: 26 }}>
+            <div className="pl-body" style={{ fontSize: 14, fontWeight: 800, color: C.ink, textTransform: "uppercase", letterSpacing: ".08em", borderBottom: `2px solid ${C.gold}`, paddingBottom: 6, marginBottom: 12 }}>{g.label} · {g.count}</div>
+            {g.courseGroups.map((cg) => (
+              <div key={cg.code} style={{ marginBottom: 16 }}>
+                <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 8 }}>{cg.code}{cg.name ? ` — ${cg.name}` : ""} · {cg.items.length}</div>
+                <div className="flex flex-col gap-3">{cg.items.map(card)}</div>
+              </div>
+            ))}
           </div>
         ));
       })()}
