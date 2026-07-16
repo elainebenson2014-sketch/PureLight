@@ -352,6 +352,17 @@ export async function listSessions() {
   if (error) throw error;
   return data || [];
 }
+export async function listProgramSchedules() {
+  const { data, error } = await supabase.from("pl_program_schedules").select("*");
+  if (error) throw error;
+  return data || [];
+}
+export async function saveProgramSchedule(program, file) {
+  const file_path = await uploadFile("schedules", file);
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_program_schedules").upsert({ program, file_path, file_name: file.name, updated_by: user.id, updated_at: new Date().toISOString() }, { onConflict: "program" });
+  if (error) throw error;
+}
 export async function saveSession(s) {
   const { data: { user } } = await supabase.auth.getUser();
   const rec = {
