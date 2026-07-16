@@ -459,7 +459,9 @@ function ResetPassword({ onDone }) {
   );
 }
 
-function TranscriptManager({ students, courses, subs, tests, hwSubs, homework }) {
+function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, certEnrollments }) {
+  const isCertStudent = (id) => (certEnrollments || []).some((e) => e.student_id === id);
+  const degreeStudents = (students || []).filter((s) => !isCertStudent(s.id));
   const [studentId, setStudentId] = useState("");
   const [program, setProgram] = useState("associate");
   const [manual, setManual] = useState({});
@@ -685,7 +687,7 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
         <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
           <Field label="Student"><select style={{ ...inputStyle, minWidth: 220 }} value={studentId} onChange={(e) => setStudentId(e.target.value)}>
             <option value="">— choose student —</option>
-            {students.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+            {degreeStudents.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
           </select></Field>
           <Field label="Program"><select style={{ ...inputStyle, minWidth: 240 }} value={program} onChange={(e) => setProgram(e.target.value)}>
             {TRANSCRIPT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
@@ -706,13 +708,13 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework })
             <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>Select students to export their {TRANSCRIPT_PROGRAMS.find((p) => p.key === program)?.label} records as one document — each on its own page — to save as PDF and email.</div>
           </div>
           <div className="flex gap-2" style={{ flexWrap: "wrap" }}>
-            <Btn small kind="ghost" onClick={() => setBatchSel(new Set(students.map((s) => s.id)))}>Select all</Btn>
+            <Btn small kind="ghost" onClick={() => setBatchSel(new Set(degreeStudents.map((s) => s.id)))}>Select all</Btn>
             <Btn small kind="ghost" onClick={() => setBatchSel(new Set())}>Clear</Btn>
             <Btn small icon={ScrollText} onClick={generateBatch} disabled={batchBusy || batchSel.size === 0}>{batchBusy ? "Preparing…" : `Download ${batchSel.size || ""} record${batchSel.size === 1 ? "" : "s"}`.replace("  ", " ")}</Btn>
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 4, maxHeight: 200, overflowY: "auto", border: `1px solid ${C.line}`, borderRadius: 8, padding: 10 }}>
-          {students.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => (
+          {degreeStudents.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => (
             <label key={s.id} className="flex items-center gap-2" style={{ cursor: "pointer", padding: "3px 2px" }}>
               <input type="checkbox" checked={batchSel.has(s.id)} onChange={() => setBatchSel((prev) => { const n = new Set(prev); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; })} />
               <span className="pl-body" style={{ fontSize: 13.5, color: C.ink }}>{s.full_name}</span>
@@ -886,7 +888,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} />}
           {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
-          {active === "transcripts" && profile.role === "admin" && <TranscriptManager students={students} courses={courses} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} />}
+          {active === "transcripts" && profile.role === "admin" && <TranscriptManager students={students} courses={courses} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} certEnrollments={certEnrollments} />}
           {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
           {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} courses={courses} tuition={tuition} certEnrollments={certEnrollments} refresh={refresh} />}
           {active === "tuition" && profile.role === "admin" && <TuitionManager tuition={tuition} refresh={refresh} />}
@@ -1916,6 +1918,17 @@ function ScheduleManager({ sessions, courses, students, profile, refresh }) {
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);
+  const [schedules, setSchedules] = useState([]);
+  const [upBusy, setUpBusy] = useState("");
+  useEffect(() => { db.listProgramSchedules().then(setSchedules).catch(() => {}); }, []);
+  async function uploadSchedule(program, file) {
+    if (!file) return;
+    setUpBusy(program);
+    try { await db.saveProgramSchedule(program, file); setSchedules(await db.listProgramSchedules()); }
+    catch (e) { window.alert(e.message); }
+    setUpBusy("");
+  }
+  const scheduleFor = (prog) => schedules.find((s) => s.program === prog);
 
   function edit(s) {
     setForm({ id: s.id, title: s.title, course_id: s.course_id || "", starts_at: s.starts_at ? toLocalInput(s.starts_at) : "", duration_min: s.duration_min || 60, zoom_url: s.zoom_url || "", notes: s.notes || "" });
@@ -1965,12 +1978,44 @@ function ScheduleManager({ sessions, courses, students, profile, refresh }) {
           <div className="flex gap-2"><Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save class"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
         </Card>
       )}
-      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Upcoming</h3>
+      <Card style={{ marginBottom: 18 }}>
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 4px" }}>Program Schedules</h3>
+        <p className="pl-body" style={{ fontSize: 13, color: C.muted, margin: "0 0 12px" }}>Upload one schedule document per program (PDF or Word). Students see it on their Schedule.</p>
+        <div className="flex flex-col gap-1">
+          {PROGRAMS.filter((p) => p.key !== "all").map((p) => {
+            const sc = scheduleFor(p.key);
+            return (
+              <div key={p.key} className="flex items-center justify-between" style={{ gap: 10, flexWrap: "wrap", borderTop: `1px solid ${C.line}`, padding: "8px 0" }}>
+                <span className="pl-body" style={{ fontWeight: 600, color: C.ink, minWidth: 110 }}>{p.label}</span>
+                <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+                  {sc?.file_path ? <FileLink path={sc.file_path} label={sc.file_name || "View schedule"} /> : <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>No schedule uploaded</span>}
+                  <label className="pl-body pl-press" style={{ fontSize: 12.5, color: C.ink, cursor: "pointer", textDecoration: "underline" }}>
+                    {upBusy === p.key ? "Uploading…" : (sc ? "Replace" : "Upload")}
+                    <input type="file" accept=".pdf,.doc,.docx,image/*" style={{ display: "none" }} onChange={(e) => uploadSchedule(p.key, e.target.files?.[0])} />
+                  </label>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
       {note && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginBottom: 10 }}>{note}</div>}
-      <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
-        {upcoming.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No upcoming classes. Tap “New class” to schedule one.</span></Card>}
-        {upcoming.map((s) => <SessionRow key={s.id} s={s} courses={courses} onEdit={() => edit(s)} onDelete={() => remove(s.id)} onRemind={() => remind(s)} manage />)}
-      </div>
+      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Upcoming classes</h3>
+      {upcoming.length === 0 ? (
+        <Card style={{ marginBottom: 24 }}><span className="pl-body" style={{ color: C.muted }}>No upcoming classes. Tap "New class" to schedule one.</span></Card>
+      ) : (
+        <div style={{ marginBottom: 24 }}>
+          {PROGRAMS.map((p) => ({ ...p, items: upcoming.filter((s) => (s.program || "all") === p.key) })).filter((g) => g.items.length).map((g) => (
+            <div key={g.key} style={{ marginBottom: 16 }}>
+              <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink2, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 8 }}>{g.label}</div>
+              <div className="flex flex-col gap-3">
+                {g.items.map((s) => <SessionRow key={s.id} s={s} courses={courses} onEdit={() => edit(s)} onDelete={() => remove(s.id)} onRemind={() => remind(s)} manage />)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {past.length > 0 && (
         <>
           <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Past</h3>
@@ -1984,6 +2029,8 @@ function ScheduleManager({ sessions, courses, students, profile, refresh }) {
 /* ---------- SCHEDULE (student) ---------- */
 function StudentSchedule({ sessions, homework, tests, courses, profile }) {
   const prog = profile.program;
+  const [sched, setSched] = useState(null);
+  useEffect(() => { db.listProgramSchedules().then((all) => setSched((all || []).find((x) => x.program === prog) || null)).catch(() => {}); }, [prog]);
   const cut = Date.now() - 24 * 3600e3;
   const items = [];
   (sessions || []).filter((s) => s.program === prog || s.program === "all").forEach((s) => items.push({ kind: "class", when: s.starts_at, data: s }));
@@ -1994,6 +2041,14 @@ function StudentSchedule({ sessions, homework, tests, courses, profile }) {
   return (
     <>
       <PageHead title="Schedule" sub="Your upcoming live classes and due dates." />
+      {sched?.file_path && (
+        <Card style={{ marginBottom: 14 }}>
+          <div className="flex items-center justify-between" style={{ gap: 10, flexWrap: "wrap" }}>
+            <span className="pl-body" style={{ fontWeight: 600, color: C.ink }}>{programLabel(prog)} Schedule</span>
+            <FileLink path={sched.file_path} label={sched.file_name || "Download schedule"} />
+          </div>
+        </Card>
+      )}
       {upcoming.length === 0 ? (
         <Card><span className="pl-body" style={{ color: C.muted }}>Nothing scheduled right now. Check back soon.</span></Card>
       ) : (
