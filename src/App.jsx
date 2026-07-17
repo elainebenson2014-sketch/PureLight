@@ -151,7 +151,8 @@ const gradeLetter = (score) => {
 const TRANSCRIPT_PROGRAMS = [
   { key: "associate", label: "Associate Degree Program" },
   { key: "bachelor", label: "Bachelor in Theology" },
-  { key: "master", label: "Master Degree Program" },
+  { key: "master", label: "Master Degree Program — Year I" },
+  { key: "master2", label: "Master Degree Program — Year II" },
   { key: "doctorate", label: "Doctoral Program" },
   { key: "phd", label: "PhD Program" },
 ];
@@ -166,10 +167,12 @@ const TRANSCRIPT_LAYOUT = {
     { sem: "Spring Semester", term: ["spring"], codes: ["BBS-212", "BBS-213", "BBS-214", "BBS-215", "BBS-216", "BBS-217", "BBS-218", "BTS-218"] },
   ],
   master: [
-    { sem: "Year I \u2014 Fall Semester", term: ["year i", "fall"], not: ["year ii"], codes: ["MBS-401", "MBS-402", "MBS-403", "MBS-404", "MBS-405", "MBS-406", "MBS-407", "MTS-415", "MTS-416", "MTS-417", "MTS-418", "MTS-419", "MTS-420"] },
-    { sem: "Year I \u2014 Spring Semester", term: ["year i", "spring"], not: ["year ii"], codes: ["MBS-408", "MBS-409", "MBS-410", "MTS-421", "MTS-422", "MTS-423"] },
-    { sem: "Year II \u2014 Fall Semester", term: ["year ii", "fall"], codes: ["MBS-416", "MBS-417", "MBS-418", "MBS-419", "MBS-420", "MBS-421", "MTS-432", "MTS-434"] },
-    { sem: "Year II \u2014 Spring Semester", term: ["year ii", "spring"], codes: ["MBS-422", "MBS-423", "MBS-424", "MBS-425", "MTS-433", "MTS-435", "MTS-436"] },
+    { sem: "Fall Semester", term: ["fall"], codes: ["MBS-401", "MBS-402", "MBS-403", "MBS-404", "MBS-405", "MBS-406", "MBS-407", "MTS-415", "MTS-416", "MTS-417", "MTS-418", "MTS-419", "MTS-420"] },
+    { sem: "Spring Semester", term: ["spring"], codes: ["MBS-408", "MBS-409", "MBS-410", "MTS-421", "MTS-422", "MTS-423"] },
+  ],
+  master2: [
+    { sem: "Fall Semester", term: ["fall"], codes: ["MBS-416", "MBS-417", "MBS-418", "MBS-419", "MBS-420", "MBS-421", "MTS-432", "MTS-434"] },
+    { sem: "Spring Semester", term: ["spring"], codes: ["MBS-422", "MBS-423", "MBS-424", "MBS-425", "MTS-433", "MTS-435", "MTS-436"] },
   ],
 };
 
