@@ -3211,24 +3211,40 @@ function CoursesManager({ courses, refresh }) {
           <div className="flex gap-2"><Btn icon={Check} onClick={create} disabled={busy}>{busy ? "Saving…" : "Create course"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
         </Card>
       )}
-      <div className="flex flex-col gap-3">
-        {courses.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No courses yet. Create one or import a CSV, then choose it when you add a lesson, test, or homework.</span></Card>}
-        {courses.map((c) => (
-          <Card key={c.id}>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
-                  <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} — ` : ""}{c.title}</h3>
-                  {isCEType(c.ce_type) && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: C.goldSoft, padding: "2px 9px", borderRadius: 999 }}>{c.ce_type === "faith_ce" ? "Faith CE" : "CE"} · {c.ce_hours || "?"} hrs</span>}
-                  {c.ce_type === "open" && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.paper, padding: "2px 9px", borderRadius: 999, border: `1px solid ${C.line}` }}>Open / Elective</span>}
-                </div>
-                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(c.program)}{c.credit_hours ? ` · ${c.credit_hours} cr` : ""}{isCEType(c.ce_type) && c.approval_number ? ` · ${c.approval_number}` : ""}{c.description ? ` · ${c.description}` : ""}</div>
-              </div>
-              <button onClick={() => remove(c.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+      {courses.length === 0 ? (
+        <div className="flex flex-col gap-3"><Card><span className="pl-body" style={{ color: C.muted }}>No courses yet. Create one or import a CSV, then choose it when you add a lesson, test, or homework.</span></Card></div>
+      ) : (() => {
+        const order = PROGRAMS.map((p) => p.key);
+        const known = new Set(order);
+        const byCode = (a, b) => (a.code || a.title || "").localeCompare(b.code || b.title || "", undefined, { numeric: true });
+        const groups = order
+          .map((key) => ({ key, label: programLabel(key), items: courses.filter((c) => (c.program || "all") === key).slice().sort(byCode) }))
+          .filter((g) => g.items.length);
+        const other = courses.filter((c) => !known.has(c.program || "all")).slice().sort(byCode);
+        if (other.length) groups.push({ key: "other", label: "Other", items: other });
+        return groups.map((g) => (
+          <div key={g.key} style={{ marginBottom: 24 }}>
+            <div className="pl-body" style={{ fontSize: 14, fontWeight: 800, color: C.ink, textTransform: "uppercase", letterSpacing: ".08em", borderBottom: `2px solid ${C.gold}`, paddingBottom: 6, marginBottom: 12 }}>{g.label} · {g.items.length}</div>
+            <div className="flex flex-col gap-3">
+              {g.items.map((c) => (
+                <Card key={c.id}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                        <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} — ` : ""}{c.title}</h3>
+                        {isCEType(c.ce_type) && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: C.goldSoft, padding: "2px 9px", borderRadius: 999 }}>{c.ce_type === "faith_ce" ? "Faith CE" : "CE"} · {c.ce_hours || "?"} hrs</span>}
+                        {c.ce_type === "open" && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.paper, padding: "2px 9px", borderRadius: 999, border: `1px solid ${C.line}` }}>Open / Elective</span>}
+                      </div>
+                      <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(c.program)}{c.credit_hours ? ` · ${c.credit_hours} cr` : ""}{isCEType(c.ce_type) && c.approval_number ? ` · ${c.approval_number}` : ""}{c.description ? ` · ${c.description}` : ""}</div>
+                    </div>
+                    <button onClick={() => remove(c.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+                  </div>
+                </Card>
+              ))}
             </div>
-          </Card>
-        ))}
-      </div>
+          </div>
+        ));
+      })()}
     </>
   );
 }
