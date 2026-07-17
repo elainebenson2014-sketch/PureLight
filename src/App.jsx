@@ -2791,8 +2791,9 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
     );
   }
 
-  const pending = hwSubs.filter((s) => s.status !== "graded");
-  const graded = hwSubs.filter((s) => s.status === "graded");
+  const subInProg = (s) => { if (progFilter === "all") return true; const h = homework.find((x) => x.id === s.homework_id); return (h?.program || "all") === progFilter; };
+  const pending = hwSubs.filter((s) => s.status !== "graded" && subInProg(s));
+  const graded = hwSubs.filter((s) => s.status === "graded" && subInProg(s));
   return (
     <>
       <PageHead title="Homework" sub="Assignments and submissions." action={<Btn icon={Plus} onClick={newHw}>New assignment</Btn>} />
@@ -2833,22 +2834,34 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
             </div>
           </Card>
         );
-        const strandGroups = STRANDS.map((st) => {
-          const items = visible.filter((h) => strandOf(h) === st.key);
+        const byCourseGroups = (items) => {
           const byCourse = new Map();
           items.forEach((h) => { const code = codeOf(h) || "No course"; if (!byCourse.has(code)) byCourse.set(code, []); byCourse.get(code).push(h); });
-          const courseGroups = [...byCourse.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })).map(([code, hs]) => ({ code, name: courses.find((c) => c.code === code)?.title || "", items: hs.slice().sort((a, b) => a.title.localeCompare(b.title)) }));
-          return { ...st, count: items.length, courseGroups };
-        }).filter((g) => g.count);
-        return strandGroups.map((g) => (
-          <div key={g.key} style={{ marginBottom: 26 }}>
-            <div className="pl-body" style={{ fontSize: 14, fontWeight: 800, color: C.ink, textTransform: "uppercase", letterSpacing: ".08em", borderBottom: `2px solid ${C.gold}`, paddingBottom: 6, marginBottom: 12 }}>{g.label} · {g.count}</div>
-            {g.courseGroups.map((cg) => (
-              <div key={cg.code} style={{ marginBottom: 16 }}>
-                <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 8 }}>{cg.code}{cg.name ? ` — ${cg.name}` : ""} · {cg.items.length}</div>
-                <div className="flex flex-col gap-3">{cg.items.map(card)}</div>
-              </div>
-            ))}
+          return [...byCourse.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })).map(([code, hs]) => ({ code, name: courses.find((c) => c.code === code)?.title || "", items: hs.slice().sort((a, b) => a.title.localeCompare(b.title)) }));
+        };
+        const order = PROGRAMS.map((p) => p.key);
+        const known = new Set(order);
+        const progGroups = order.map((pk) => ({ key: pk, label: programLabel(pk), items: visible.filter((h) => (h.program || "all") === pk) })).filter((g) => g.items.length);
+        const otherProg = visible.filter((h) => !known.has(h.program || "all"));
+        if (otherProg.length) progGroups.push({ key: "__other", label: "Other", items: otherProg });
+        return progGroups.map((pg) => (
+          <div key={pg.key} style={{ marginBottom: 28 }}>
+            <div className="pl-body" style={{ fontSize: 14, fontWeight: 800, color: C.ink, textTransform: "uppercase", letterSpacing: ".08em", borderBottom: `2px solid ${C.gold}`, paddingBottom: 6, marginBottom: 12 }}>{pg.label} · {pg.items.length}</div>
+            {STRANDS.map((st) => {
+              const sitems = pg.items.filter((h) => strandOf(h) === st.key);
+              if (!sitems.length) return null;
+              return (
+                <div key={st.key} style={{ marginBottom: 14 }}>
+                  <div className="pl-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink2, marginBottom: 8 }}>{st.label}</div>
+                  {byCourseGroups(sitems).map((cg) => (
+                    <div key={cg.code} style={{ marginBottom: 14, paddingLeft: 4 }}>
+                      <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 8 }}>{cg.code}{cg.name ? ` — ${cg.name}` : ""} · {cg.items.length}</div>
+                      <div className="flex flex-col gap-3">{cg.items.map(card)}</div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
           </div>
         ));
       })()}
