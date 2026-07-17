@@ -1231,6 +1231,7 @@ function Grading({ subs, tests, profiles, refresh }) {
   const [manual, setManual] = useState({});
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
+  const [progFilter, setProgFilter] = useState("all");
   const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
 
   function open(s) { setOpenId(s.id); setManual(s.manual || {}); setFeedback(s.feedback || ""); }
@@ -1293,11 +1294,16 @@ function Grading({ subs, tests, profiles, refresh }) {
     );
   }
 
-  const pending = subs.filter((s) => s.status !== "graded");
-  const graded = subs.filter((s) => s.status === "graded");
+  const subInProg = (s) => { if (progFilter === "all") return true; const t = tests.find((x) => x.id === s.test_id); return (t?.program || "all") === progFilter; };
+  const pending = subs.filter((s) => s.status !== "graded" && subInProg(s));
+  const graded = subs.filter((s) => s.status === "graded" && subInProg(s));
   return (
     <>
-      <PageHead title="Grading" sub="Submissions awaiting review and graded history." />
+      <PageHead title="Grading" sub="Submissions awaiting review and graded history." action={
+        <select style={{ ...inputStyle, maxWidth: 200 }} value={progFilter} onChange={(e) => setProgFilter(e.target.value)}>
+          {PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        </select>
+      } />
       <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Awaiting grading</h3>
       <div className="flex flex-col gap-3" style={{ marginBottom: 26 }}>
         {pending.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>Nothing pending.</span></Card>}
