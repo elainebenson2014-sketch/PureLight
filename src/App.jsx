@@ -837,18 +837,20 @@ function InstructorPortal({ profile, onLogout }) {
   const students = profiles.filter((p) => p.role === "student");
   const pending = subs.filter((s) => s.status !== "graded").length;
   const pendingHw = hwSubs.filter((s) => s.status !== "graded").length;
+  // Access to the Certificate Library: admins, plus instructors assigned to at least one certificate class.
+  const teachesCert = profile.role === "admin" || (assignments || []).some((a) => a.instructor_id === profile.id && (courses.find((c) => c.id === a.course_id)?.is_certificate));
 
   const fullNav = [
     { key: "dash",        label: "Dashboard",   icon: LayoutDashboard, show: true },
     { key: "courses",     label: "Courses",      icon: GraduationCap,   show: true },
-    { key: "library",     label: "Library",      icon: Library,         show: FEATURES.library },
+    { key: "library",     label: "Certificate Library", icon: Library,   show: FEATURES.library && teachesCert },
     { key: "syllabus",    label: "Syllabus",     icon: ScrollText,      show: FEATURES.syllabus },
     { key: "tests",       label: "Tests",        icon: FileText,        show: FEATURES.tests },
     { key: "homework",    label: "Homework",     icon: NotebookPen,     show: FEATURES.homework },
     { key: "classes",     label: "Live Classes", icon: PlayCircle,      show: FEATURES.live_classes },
-    { key: "attendance",  label: "Attendance",   icon: CalendarDays,    show: FEATURES.attendance },
+    { key: "attendance",  label: "Attendance",   icon: CalendarDays,    show: FEATURES.attendance && profile.role === "admin" },
     { key: "grading",     label: "Grading",      icon: ClipboardCheck,  show: FEATURES.grading },
-    { key: "reports",     label: "Reports",      icon: BarChart3,       show: FEATURES.reports },
+    { key: "reports",     label: "Reports",      icon: BarChart3,       show: FEATURES.reports && profile.role === "admin" },
     { key: "gradebook",   label: "Gradebook",    icon: LayoutGrid,      show: FEATURES.gradebook },
     { key: "transcripts", label: "Transcripts",   icon: ScrollText,      show: profile.role === "admin" },
     { key: "students",    label: "People",       icon: Users,           show: FEATURES.people },
@@ -882,14 +884,14 @@ function InstructorPortal({ profile, onLogout }) {
         <>
           {active === "dash" && <InstructorDash {...{ students, books, tests, subs, profiles, setActive }} />}
           {active === "courses" && <CoursesManager courses={courses.filter((c) => !c.is_certificate)} refresh={refresh} />}
-          {active === "library" && <LibraryManager books={books} courses={courses} refresh={refresh} profile={profile} />}
+          {active === "library" && teachesCert && <LibraryManager books={books} courses={courses} refresh={refresh} profile={profile} />}
           {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
           {active === "tests" && <TestsManager tests={tests} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <HomeworkManager homework={scopedHomework} hwSubs={scopedHwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
           {active === "classes" && <ScheduleManager sessions={sessions} courses={courses} students={students} profile={profile} refresh={refresh} />}
-          {active === "attendance" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} certEnrollments={certEnrollments} refresh={refresh} />}
+          {active === "attendance" && profile.role === "admin" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} certEnrollments={certEnrollments} refresh={refresh} />}
           {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} />}
-          {active === "reports" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
+          {active === "reports" && profile.role === "admin" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "transcripts" && profile.role === "admin" && <TranscriptManager students={students} courses={courses} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} certEnrollments={certEnrollments} />}
           {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
@@ -1767,7 +1769,7 @@ function StudentPortal({ profile, onLogout }) {
     { key: "dash",        label: "Dashboard",   icon: LayoutDashboard, show: true },
     { key: "courses",     label: "My Courses",  icon: GraduationCap,   show: true },
     { key: "schedule",    label: "Schedule",    icon: CalendarDays,    show: FEATURES.live_classes },
-    { key: "library",     label: "Library",     icon: Library,         show: FEATURES.library },
+    { key: "library",     label: "Certificate Library", icon: Library,  show: FEATURES.library && myCertCourseIds.size > 0 },
     { key: "syllabus",    label: "Syllabus",    icon: ScrollText,      show: FEATURES.syllabus },
     { key: "tests",       label: "My Tests",    icon: FileText,        show: FEATURES.tests },
     { key: "homework",    label: "Homework",    icon: NotebookPen,     show: FEATURES.homework },
@@ -1790,7 +1792,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, myHwSubs, homework, tests, attendance, announcements, setActive }} />}
           {active === "courses" && <StudentCourses courses={courses} profile={profile} />}
           {active === "schedule" && <StudentSchedule sessions={sessions} homework={visHw} tests={visTests} courses={courses} profile={profile} />}
-          {active === "library" && <StudentLibrary books={visBooks} courses={courses} />}
+          {active === "library" && myCertCourseIds.size > 0 && <StudentLibrary books={visBooks} courses={courses} />}
           {active === "syllabus" && <StudentSyllabus syllabi={syllabi} profile={profile} />}
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} profile={profile} refresh={refresh} />}
