@@ -888,7 +888,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
           {active === "tests" && <TestsManager tests={tests} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <HomeworkManager homework={scopedHomework} hwSubs={scopedHwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
-          {active === "classes" && <ScheduleManager sessions={sessions} courses={courses} students={students} profile={profile} refresh={refresh} />}
+          {active === "classes" && <ScheduleManager sessions={sessions} courses={courses} students={students} certEnrollments={certEnrollments} profile={profile} refresh={refresh} />}
           {active === "attendance" && profile.role === "admin" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} certEnrollments={certEnrollments} refresh={refresh} />}
           {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} />}
           {active === "reports" && profile.role === "admin" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
@@ -1923,7 +1923,7 @@ function SessionRow({ s, courses, onEdit, onDelete, onRemind, manage }) {
 }
 
 /* ---------- LIVE CLASSES (instructor) ---------- */
-function ScheduleManager({ sessions, courses, students, profile, refresh }) {
+function ScheduleManager({ sessions, courses, students, certEnrollments, profile, refresh }) {
   const blank = { id: null, title: "", course_id: "", starts_at: "", duration_min: 60, zoom_url: "", notes: "" };
   const [form, setForm] = useState(blank);
   const [show, setShow] = useState(false);
@@ -1946,8 +1946,19 @@ function ScheduleManager({ sessions, courses, students, profile, refresh }) {
     setShow(true);
   }
   async function remind(s) {
-    const recips = (students || []).filter((st) => (s.program === "all" || st.program === s.program) && st.email).map((st) => st.email);
-    if (recips.length === 0) { window.alert("No students with an email in this class's program yet."); return; }
+    const certCourseIds = new Set((courses || []).filter((c) => c.is_certificate).map((c) => c.id));
+    const isCertClass = s.program === "certificate" || (s.course_id && certCourseIds.has(s.course_id));
+    let list;
+    if (isCertClass) {
+      // Certificate class → only students enrolled in a certificate class.
+      const certStudentIds = new Set((certEnrollments || []).map((e) => e.student_id));
+      list = (students || []).filter((st) => certStudentIds.has(st.id));
+    } else {
+      // Degree class → students in that program (or all degree students for "all"); never certificate students.
+      list = (students || []).filter((st) => st.program !== "certificate" && (s.program === "all" || st.program === s.program));
+    }
+    const recips = list.filter((st) => st.email).map((st) => st.email);
+    if (recips.length === 0) { window.alert("No enrolled students with an email for this class yet."); return; }
     if (!window.confirm(`Email a reminder to ${recips.length} student${recips.length === 1 ? "" : "s"}?`)) return;
     setNote("Sending reminder…");
     const join = s.zoom_url ? `<p><a href="${s.zoom_url}">Join the class on Zoom</a></p>` : "";
