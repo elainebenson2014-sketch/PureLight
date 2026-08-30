@@ -1948,17 +1948,18 @@ function ScheduleManager({ sessions, courses, students, certEnrollments, profile
   async function remind(s) {
     const certCourseIds = new Set((courses || []).filter((c) => c.is_certificate).map((c) => c.id));
     const isCertClass = s.program === "certificate" || (s.course_id && certCourseIds.has(s.course_id));
+    const isActive = (st) => (st.status || "active") !== "inactive";
     let list;
     if (isCertClass) {
-      // Certificate class → only students enrolled in a certificate class.
+      // Certificate class → only active students enrolled in a certificate class.
       const certStudentIds = new Set((certEnrollments || []).map((e) => e.student_id));
-      list = (students || []).filter((st) => certStudentIds.has(st.id));
+      list = (students || []).filter((st) => certStudentIds.has(st.id) && isActive(st));
     } else {
-      // Degree class → students in that program (or all degree students for "all"); never certificate students.
-      list = (students || []).filter((st) => st.program !== "certificate" && (s.program === "all" || st.program === s.program));
+      // Degree class → active students in that program (or all degree students for "all"); never certificate students.
+      list = (students || []).filter((st) => isActive(st) && st.program !== "certificate" && (s.program === "all" || st.program === s.program));
     }
     const recips = list.filter((st) => st.email).map((st) => st.email);
-    if (recips.length === 0) { window.alert("No enrolled students with an email for this class yet."); return; }
+    if (recips.length === 0) { window.alert("No active enrolled students with an email for this class yet."); return; }
     if (!window.confirm(`Email a reminder to ${recips.length} student${recips.length === 1 ? "" : "s"}?`)) return;
     setNote("Sending reminder…");
     const join = s.zoom_url ? `<p><a href="${s.zoom_url}">Join the class on Zoom</a></p>` : "";
