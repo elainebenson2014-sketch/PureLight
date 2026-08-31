@@ -1797,7 +1797,12 @@ function StudentPortal({ profile, onLogout }) {
     && (!t.available_until || new Date(t.available_until).getTime() >= nowMs);
   const available = visTests.filter((t) => testLive(t) && !mySubs.some((s) => s.test_id === t.id));
   // Homework is available if never submitted, OR it was sent back ("returned") to redo.
+  const hwNowMs = Date.now();
+  const hwLive = (h) => (h.status || "published") === "published"
+    && (!h.available_from || new Date(h.available_from).getTime() <= hwNowMs)
+    && (!h.available_until || new Date(h.available_until).getTime() >= hwNowMs);
   const availableHw = visHw.filter((h) => {
+    if (!hwLive(h)) return false;
     const sub = myHwSubs.find((s) => s.homework_id === h.id);
     return !sub || sub.status === "returned";
   });
@@ -2603,8 +2608,18 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
   const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
   const titleOf = (id) => homework.find((h) => h.id === id)?.title || "Homework";
 
-  function newHw() { setDraft({ id: null, title: "", instructions: "", program: "all", due_date: "", points: 100, file_path: null, course_id: "", module: "" }); setQs([]); setFile(null); setMode("build"); }
-  function editHw(h) { setDraft({ id: h.id, title: h.title, instructions: h.instructions, program: h.program || "all", due_date: h.due_date || "", points: h.points, file_path: h.file_path, course_id: h.course_id || "", module: h.module || "" }); setQs(h.questions.map((q) => ({ ...q }))); setFile(null); setMode("build"); }
+  const toLocalInput = (iso) => { if (!iso) return ""; const d = new Date(iso); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
+  const statusBadge = (h) => {
+    const now = Date.now();
+    let label, color, bg;
+    if ((h.status || "published") !== "published") { label = "Draft"; color = C.muted; bg = C.paper2; }
+    else if (h.available_from && new Date(h.available_from).getTime() > now) { label = "Scheduled"; color = C.gold; bg = C.goldSoft; }
+    else if (h.available_until && new Date(h.available_until).getTime() < now) { label = "Closed"; color = C.rose; bg = C.roseSoft; }
+    else { label = "Live"; color = C.green; bg = C.greenSoft; }
+    return <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color, background: bg, padding: "2px 9px", borderRadius: 999, marginLeft: 8, verticalAlign: "middle" }}>{label}</span>;
+  };
+  function newHw() { setDraft({ id: null, title: "", instructions: "", program: "all", due_date: "", points: 100, file_path: null, course_id: "", module: "", status: "draft", available_from: "", available_until: "" }); setQs([]); setFile(null); setMode("build"); }
+  function editHw(h) { setDraft({ id: h.id, title: h.title, instructions: h.instructions, program: h.program || "all", due_date: h.due_date || "", points: h.points, file_path: h.file_path, course_id: h.course_id || "", module: h.module || "", status: h.status || "published", available_from: toLocalInput(h.available_from), available_until: toLocalInput(h.available_until) }); setQs(h.questions.map((q) => ({ ...q }))); setFile(null); setMode("build"); }
 
   function addQ(type) {
     const base = { id: "tmp" + Date.now() + Math.random(), type, prompt: "", points: type === "essay" ? 20 : type === "short" ? 10 : 5 };
@@ -2618,7 +2633,13 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
   async function save() {
     if (!draft.title.trim()) { window.alert("Give the assignment a title."); return; }
     setBusy(true);
-    try { await db.saveHomework(draft, qs, file); await refresh(); setMode("list"); }
+    try {
+      const payload = { ...draft,
+        available_from: draft.available_from ? new Date(draft.available_from).toISOString() : null,
+        available_until: draft.available_until ? new Date(draft.available_until).toISOString() : null,
+      };
+      await db.saveHomework(payload, qs, file); await refresh(); setMode("list");
+    }
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
@@ -2724,6 +2745,20 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
             <Field label="Points (if no questions)"><input type="number" style={inputStyle} value={draft.points} onChange={(e) => setDraft({ ...draft, points: e.target.value })} /></Field>
           </div>
           <CourseFields courses={courses} courseId={draft.course_id} module={draft.module} onCourse={(v) => { const c = courses.find((x) => x.id === v); setDraft({ ...draft, course_id: v, program: c && c.program ? c.program : draft.program }); }} onModule={(v) => setDraft({ ...draft, module: v })} />
+          <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 14, paddingTop: 14 }}>
+            <div className="pl-body" style={{ fontWeight: 700, color: C.ink, marginBottom: 10 }}>Visibility</div>
+            <div className="grid grid-cols-3 gap-4">
+              <Field label="Status">
+                <select style={inputStyle} value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
+                  <option value="draft">Draft — hidden from students</option>
+                  <option value="published">Published — visible to students</option>
+                </select>
+              </Field>
+              <Field label="Available from (optional)"><input type="datetime-local" style={inputStyle} value={draft.available_from} onChange={(e) => setDraft({ ...draft, available_from: e.target.value })} /></Field>
+              <Field label="Closes (optional)"><input type="datetime-local" style={inputStyle} value={draft.available_until} onChange={(e) => setDraft({ ...draft, available_until: e.target.value })} /></Field>
+            </div>
+            <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 6 }}>Draft assignments stay hidden. A Published assignment with an "Available from" time appears only once that time arrives; add a "Closes" time to hide it afterward.</div>
+          </div>
           <Field label="Attachment (optional PDF for students)">
             <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
               <Upload size={16} color={C.muted} />
@@ -2880,7 +2915,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
           <Card key={h.id}>
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
+                <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}{statusBadge(h)}</h3>
                 <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(h.program)} · {h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""} · {hwSubs.filter((s) => s.homework_id === h.id).length} submitted</div>
               </div>
               <div className="flex items-center gap-2">
