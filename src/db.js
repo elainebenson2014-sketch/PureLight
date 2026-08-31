@@ -121,6 +121,7 @@ export async function saveTest(test, questions) {
     const { error } = await supabase.from("pl_tests").update({
       title: test.title, description: test.description, book_id: test.book_id || null, program: test.program || "all",
       course_id: test.course_id || null, module: test.module || null,
+      status: test.status || "draft", available_from: test.available_from || null, available_until: test.available_until || null,
     }).eq("id", testId);
     if (error) throw error;
     // simplest reliable sync: clear old questions, insert current set
@@ -129,6 +130,7 @@ export async function saveTest(test, questions) {
     const { data, error } = await supabase.from("pl_tests").insert({
       title: test.title, description: test.description, book_id: test.book_id || null, program: test.program || "all",
       course_id: test.course_id || null, module: test.module || null, created_by: user.id,
+      status: test.status || "draft", available_from: test.available_from || null, available_until: test.available_until || null,
     }).select("id").single();
     if (error) throw error;
     testId = data.id;
