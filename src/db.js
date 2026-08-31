@@ -307,6 +307,7 @@ export async function saveHomework(hw, questions, file) {
       title: hw.title, instructions: hw.instructions, due_date: hw.due_date || null,
       points: Number(hw.points) || 0, program: hw.program || "all",
       course_id: hw.course_id || null, module: hw.module || null, file_path,
+      status: hw.status || "published", available_from: hw.available_from || null, available_until: hw.available_until || null,
     }).eq("id", hwId);
     if (error) throw error;
     await supabase.from("pl_homework_questions").delete().eq("homework_id", hwId);
@@ -315,6 +316,7 @@ export async function saveHomework(hw, questions, file) {
       title: hw.title, instructions: hw.instructions, due_date: hw.due_date || null,
       points: Number(hw.points) || 0, program: hw.program || "all",
       course_id: hw.course_id || null, module: hw.module || null, file_path, created_by: user.id,
+      status: hw.status || "published", available_from: hw.available_from || null, available_until: hw.available_until || null,
     }).select("id").single();
     if (error) throw error;
     hwId = data.id;
