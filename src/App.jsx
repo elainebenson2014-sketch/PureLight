@@ -1111,8 +1111,19 @@ function TestsManager({ tests, books, courses, refresh }) {
   const [qs, setQs] = useState([]);
   const [busy, setBusy] = useState(false);
 
-  function newTest() { setDraft({ id: null, title: "", description: "", book_id: books[0]?.id || "", program: "all", course_id: "", module: "" }); setQs([]); setMode("build"); }
-  function editTest(t) { setDraft({ id: t.id, title: t.title, description: t.description, book_id: t.book_id || "", program: t.program || "all", course_id: t.course_id || "", module: t.module || "" }); setQs(t.questions.map((q) => ({ ...q }))); setMode("build"); }
+  const toLocalInput = (iso) => { if (!iso) return ""; const d = new Date(iso); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
+  function newTest() { setDraft({ id: null, title: "", description: "", book_id: books[0]?.id || "", program: "all", course_id: "", module: "", status: "draft", available_from: "", available_until: "" }); setQs([]); setMode("build"); }
+  function editTest(t) { setDraft({ id: t.id, title: t.title, description: t.description, book_id: t.book_id || "", program: t.program || "all", course_id: t.course_id || "", module: t.module || "", status: t.status || "draft", available_from: toLocalInput(t.available_from), available_until: toLocalInput(t.available_until) }); setQs(t.questions.map((q) => ({ ...q }))); setMode("build"); }
+
+  const statusBadge = (t) => {
+    const now = Date.now();
+    let label, color, bg;
+    if ((t.status || "draft") !== "published") { label = "Draft"; color = C.muted; bg = C.paper2; }
+    else if (t.available_from && new Date(t.available_from).getTime() > now) { label = "Scheduled"; color = C.gold; bg = C.goldSoft; }
+    else if (t.available_until && new Date(t.available_until).getTime() < now) { label = "Closed"; color = C.rose; bg = C.roseSoft; }
+    else { label = "Live"; color = C.green; bg = C.greenSoft; }
+    return <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color, background: bg, padding: "2px 9px", borderRadius: 999, marginLeft: 8, verticalAlign: "middle" }}>{label}</span>;
+  };
 
   function addQ(type) {
     const base = { id: "tmp" + Date.now() + Math.random(), type, prompt: "", points: type === "essay" ? 20 : type === "short" ? 10 : 5 };
@@ -1126,7 +1137,13 @@ function TestsManager({ tests, books, courses, refresh }) {
   async function save() {
     if (!draft.title.trim() || qs.length === 0) { window.alert("Add a title and at least one question."); return; }
     setBusy(true);
-    try { await db.saveTest(draft, qs); await refresh(); setMode("list"); }
+    try {
+      const payload = { ...draft,
+        available_from: draft.available_from ? new Date(draft.available_from).toISOString() : null,
+        available_until: draft.available_until ? new Date(draft.available_until).toISOString() : null,
+      };
+      await db.saveTest(payload, qs); await refresh(); setMode("list");
+    }
     catch (e) { window.alert(e.message); }
     setBusy(false);
   }
@@ -1152,6 +1169,22 @@ function TestsManager({ tests, books, courses, refresh }) {
           <Field label="Instructions"><input style={inputStyle} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What this test covers" /></Field>
           <Field label="Program / level"><ProgramSelect value={draft.program} onChange={(v) => setDraft({ ...draft, program: v })} /></Field>
           <CourseFields courses={courses} courseId={draft.course_id} module={draft.module} onCourse={(v) => { const c = courses.find((x) => x.id === v); setDraft({ ...draft, course_id: v, program: c && c.program ? c.program : draft.program }); }} onModule={(v) => setDraft({ ...draft, module: v })} />
+        </Card>
+
+        <Card style={{ marginBottom: 18 }}>
+          <div className="pl-body" style={{ fontWeight: 700, color: C.ink, marginBottom: 10 }}>Visibility</div>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Status">
+              <select style={inputStyle} value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
+                <option value="draft">Draft — hidden from students</option>
+                <option value="published">Published — visible to students</option>
+              </select>
+            </Field>
+            <div />
+            <Field label="Available from (optional)"><input type="datetime-local" style={inputStyle} value={draft.available_from} onChange={(e) => setDraft({ ...draft, available_from: e.target.value })} /></Field>
+            <Field label="Closes (optional)"><input type="datetime-local" style={inputStyle} value={draft.available_until} onChange={(e) => setDraft({ ...draft, available_until: e.target.value })} /></Field>
+          </div>
+          <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 6 }}>Draft tests stay hidden from students. A Published test with an "Available from" time stays hidden until that time arrives; add a "Closes" time to hide it again afterward.</div>
         </Card>
 
         {qs.map((q, i) => (
@@ -1212,7 +1245,7 @@ function TestsManager({ tests, books, courses, refresh }) {
             <Card key={t.id}>
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{t.title}</h3>
+                  <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{t.title}{statusBadge(t)}</h3>
                   <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{books.find((b) => b.id === t.book_id)?.title || "Unlinked"} · {t.questions.length} questions · {sumPoints(t.questions)} pts · {programLabel(t.program)}</div>
                 </div>
                 <div className="flex gap-2">
@@ -1758,7 +1791,11 @@ function StudentPortal({ profile, onLogout }) {
   const degHw = (homework || []).filter(notCert);
   const mySubs = subs.filter((s) => s.student_id === profile.id);
   const myHwSubs = hwSubs.filter((s) => s.student_id === profile.id);
-  const available = visTests.filter((t) => !mySubs.some((s) => s.test_id === t.id));
+  const nowMs = Date.now();
+  const testLive = (t) => (t.status || "draft") === "published"
+    && (!t.available_from || new Date(t.available_from).getTime() <= nowMs)
+    && (!t.available_until || new Date(t.available_until).getTime() >= nowMs);
+  const available = visTests.filter((t) => testLive(t) && !mySubs.some((s) => s.test_id === t.id));
   // Homework is available if never submitted, OR it was sent back ("returned") to redo.
   const availableHw = visHw.filter((h) => {
     const sub = myHwSubs.find((s) => s.homework_id === h.id);
