@@ -11,6 +11,7 @@ export const BRAND = {
   short:   ENV.VITE_SCHOOL_SHORT   || "NCTS",
   tagline: ENV.VITE_SCHOOL_TAGLINE || "School of Excellence",
   logoUrl: ENV.VITE_LOGO_URL       || "",
+  owner:   ENV.VITE_COMPANY_NAME   || "Yona Enterprises, LLC",
 };
 
 // ── Feature flags ────────────────────────────────────────────────────
@@ -219,7 +220,7 @@ export function Shell({ user, onLogout, nav, active, setActive, children, badge 
             style={{ width: "100%", padding: "9px 12px", borderRadius: 9, background: "#ffffff10", color: "#fff", border: "none", cursor: "pointer", fontSize: 13.5, fontWeight: 600 }}>
             <LogOut size={16} /> Sign out
           </button>
-          <div className="pl-body text-center" style={{ marginTop: 12, fontSize: 10, color: "#ffffff40", lineHeight: 1.5 }}>{"© " + new Date().getFullYear() + " ETB Enterprises, LLC · " + BRAND.name + "™"}</div>
+          <div className="pl-body text-center" style={{ marginTop: 12, fontSize: 10, color: "#ffffff40", lineHeight: 1.5 }}>{"© " + new Date().getFullYear() + " " + BRAND.owner + " · " + BRAND.name + "™"}</div>
         </div>
       </aside>
       <main style={{ flex: 1, padding: "30px 38px", maxWidth: 1100 }}>{children}</main>
