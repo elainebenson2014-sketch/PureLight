@@ -36,6 +36,7 @@ export const FEATURES = {
   certificates:    (ENV.VITE_FEATURE_CERTIFICATES     ?? "true") !== "false",
   messages:        (ENV.VITE_FEATURE_MESSAGES         ?? "true") !== "false",
   people:          (ENV.VITE_FEATURE_PEOPLE           ?? "true") !== "false",
+  transcripts:     (ENV.VITE_FEATURE_TRANSCRIPTS      ?? "true") !== "false",
 };
 
 export const C = {
