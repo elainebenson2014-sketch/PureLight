@@ -887,8 +887,8 @@ function InstructorPortal({ profile, onLogout }) {
         <>
           {active === "dash" && <InstructorDash {...{ students, books, tests, subs, profiles, setActive }} />}
           {active === "courses" && <CoursesManager courses={courses.filter((c) => !c.is_certificate)} refresh={refresh} />}
-          {active === "library" && teachesCert && <LibraryManager books={books.filter((b) => b.program === "certificate" || b.program === "all")} courses={courses} refresh={refresh} profile={profile} />}
-          {active === "dlibrary" && teachesDegree && <LibraryManager books={books.filter((b) => b.program !== "certificate")} courses={courses} refresh={refresh} profile={profile} />}
+          {active === "library" && teachesCert && <LibraryManager books={books.filter((b) => b.program === "certificate" || b.program === "all")} courses={courses} refresh={refresh} profile={profile} title="Certificate Library" />}
+          {active === "dlibrary" && teachesDegree && <LibraryManager books={books.filter((b) => b.program !== "certificate")} courses={courses} refresh={refresh} profile={profile} title="Degree Library" />}
           {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
           {active === "tests" && <TestsManager tests={tests} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <HomeworkManager homework={scopedHomework} hwSubs={scopedHwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
@@ -965,7 +965,7 @@ function InstructorDash({ students, books, tests, subs, profiles, setActive }) {
 }
 
 /* ---------- LIBRARY ---------- */
-function LibraryManager({ books, courses, refresh, profile }) {
+function LibraryManager({ books, courses, refresh, profile, title = "Library" }) {
   const emptyForm = { title: "", author: profile.full_name, description: "", pages: "", program: "all", category: "book", video_url: "", course_id: "", module: "", file: null };
   const [mode, setMode] = useState("list");
   const [editingId, setEditingId] = useState(null);
@@ -1040,7 +1040,7 @@ function LibraryManager({ books, courses, refresh, profile }) {
 
   return (
     <>
-      <PageHead title="Library" sub="Books available to your students, organized by category." action={<Btn icon={Plus} onClick={startCreate}>Add book</Btn>} />
+      <PageHead title={title} sub="Books available to your students, organized by category." action={<Btn icon={Plus} onClick={startCreate}>Add book</Btn>} />
       {books.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No books yet — add your first.</span></Card> : (
         <>
           <Card style={{ marginBottom: 14 }}>
@@ -1840,8 +1840,8 @@ function StudentPortal({ profile, onLogout }) {
           {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, myHwSubs, homework, tests, attendance, announcements, setActive }} />}
           {active === "courses" && <StudentCourses courses={courses} profile={profile} />}
           {active === "schedule" && <StudentSchedule sessions={sessions} homework={visHw} tests={visTests} courses={courses} profile={profile} />}
-          {active === "library" && myCertCourseIds.size > 0 && <StudentLibrary books={visBooks.filter((b) => b.program === "certificate" || b.program === "all")} courses={courses} />}
-          {active === "dlibrary" && isDegreeStudent && <StudentLibrary books={visBooks.filter((b) => b.program !== "certificate")} courses={courses} />}
+          {active === "library" && myCertCourseIds.size > 0 && <StudentLibrary books={visBooks.filter((b) => b.program === "certificate" || b.program === "all")} courses={courses} title="Certificate Library" />}
+          {active === "dlibrary" && isDegreeStudent && <StudentLibrary books={visBooks.filter((b) => b.program !== "certificate")} courses={courses} title="Degree Library" />}
           {active === "syllabus" && <StudentSyllabus syllabi={syllabi} profile={profile} />}
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} profile={profile} refresh={refresh} />}
@@ -2172,7 +2172,7 @@ function StudentCourses({ courses, profile }) {
   );
 }
 
-function StudentLibrary({ books, courses }) {
+function StudentLibrary({ books, courses, title = "Library" }) {
   const [busyId, setBusyId] = useState(null);
   async function read(b) {
     if (!b.file_path) { window.alert("No file attached to this book yet."); return; }
@@ -2197,7 +2197,7 @@ function StudentLibrary({ books, courses }) {
   const groups = CATEGORIES.map((c) => ({ ...c, items: books.filter((b) => (b.category || "book") === c.key) })).filter((g) => g.items.length > 0);
   return (
     <>
-      <PageHead title="Library" sub="Lessons and materials, organized by type." />
+      <PageHead title={title} sub="Lessons and materials, organized by type." />
       {books.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No lessons available yet.</span></Card> : (
         <>
           {groups.map((g) => (
