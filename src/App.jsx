@@ -840,11 +840,13 @@ function InstructorPortal({ profile, onLogout }) {
   const pendingHw = hwSubs.filter((s) => s.status !== "graded").length;
   // Access to the Certificate Library: admins, plus instructors assigned to at least one certificate class.
   const teachesCert = profile.role === "admin" || (assignments || []).some((a) => a.instructor_id === profile.id && (courses.find((c) => c.id === a.course_id)?.is_certificate));
+  const teachesDegree = profile.role === "admin" || (assignments || []).some((a) => a.instructor_id === profile.id && !(courses.find((c) => c.id === a.course_id)?.is_certificate));
 
   const fullNav = [
     { key: "dash",        label: "Dashboard",   icon: LayoutDashboard, show: true },
     { key: "courses",     label: "Courses",      icon: GraduationCap,   show: true },
     { key: "library",     label: "Certificate Library", icon: Library,   show: FEATURES.library && teachesCert },
+    { key: "dlibrary",    label: "Degree Library", icon: Library,        show: FEATURES.library && teachesDegree },
     { key: "syllabus",    label: "Syllabus",     icon: ScrollText,      show: FEATURES.syllabus },
     { key: "tests",       label: "Tests",        icon: FileText,        show: FEATURES.tests },
     { key: "homework",    label: "Homework",     icon: NotebookPen,     show: FEATURES.homework },
@@ -885,7 +887,8 @@ function InstructorPortal({ profile, onLogout }) {
         <>
           {active === "dash" && <InstructorDash {...{ students, books, tests, subs, profiles, setActive }} />}
           {active === "courses" && <CoursesManager courses={courses.filter((c) => !c.is_certificate)} refresh={refresh} />}
-          {active === "library" && teachesCert && <LibraryManager books={books} courses={courses} refresh={refresh} profile={profile} />}
+          {active === "library" && teachesCert && <LibraryManager books={books.filter((b) => b.program === "certificate" || b.program === "all")} courses={courses} refresh={refresh} profile={profile} />}
+          {active === "dlibrary" && teachesDegree && <LibraryManager books={books.filter((b) => b.program !== "certificate")} courses={courses} refresh={refresh} profile={profile} />}
           {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
           {active === "tests" && <TestsManager tests={tests} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <HomeworkManager homework={scopedHomework} hwSubs={scopedHwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
@@ -1778,6 +1781,7 @@ function StudentPortal({ profile, onLogout }) {
   const prog = profile.program;
   const certCourseIds = new Set((courses || []).filter((c) => c.is_certificate).map((c) => c.id));
   const myCertCourseIds = new Set((certEnrollments || []).filter((e) => e.student_id === profile.id).map((e) => e.course_id));
+  const isDegreeStudent = ["associate", "bachelor", "master", "master2", "doctorate", "phd"].includes(profile.program);
   const notCert = (it) => !certCourseIds.has(it.course_id);
   const visBooks = visibleFor(books, prog).filter(notCert);
   // Certificate-class tests/homework now live in the main Tests/Homework tabs
@@ -1813,6 +1817,7 @@ function StudentPortal({ profile, onLogout }) {
     { key: "courses",     label: "My Courses",  icon: GraduationCap,   show: true },
     { key: "schedule",    label: "Schedule",    icon: CalendarDays,    show: FEATURES.live_classes },
     { key: "library",     label: "Certificate Library", icon: Library,  show: FEATURES.library && myCertCourseIds.size > 0 },
+    { key: "dlibrary",    label: "Degree Library", icon: Library,       show: FEATURES.library && isDegreeStudent },
     { key: "syllabus",    label: "Syllabus",    icon: ScrollText,      show: FEATURES.syllabus },
     { key: "tests",       label: "My Tests",    icon: FileText,        show: FEATURES.tests },
     { key: "homework",    label: "Homework",    icon: NotebookPen,     show: FEATURES.homework },
@@ -1835,7 +1840,8 @@ function StudentPortal({ profile, onLogout }) {
           {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, myHwSubs, homework, tests, attendance, announcements, setActive }} />}
           {active === "courses" && <StudentCourses courses={courses} profile={profile} />}
           {active === "schedule" && <StudentSchedule sessions={sessions} homework={visHw} tests={visTests} courses={courses} profile={profile} />}
-          {active === "library" && myCertCourseIds.size > 0 && <StudentLibrary books={visBooks} courses={courses} />}
+          {active === "library" && myCertCourseIds.size > 0 && <StudentLibrary books={visBooks.filter((b) => b.program === "certificate" || b.program === "all")} courses={courses} />}
+          {active === "dlibrary" && isDegreeStudent && <StudentLibrary books={visBooks.filter((b) => b.program !== "certificate")} courses={courses} />}
           {active === "syllabus" && <StudentSyllabus syllabi={syllabi} profile={profile} />}
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
           {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} profile={profile} refresh={refresh} />}
