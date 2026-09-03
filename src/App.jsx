@@ -2930,7 +2930,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
         const byCourseGroups = (items) => {
           const byCourse = new Map();
           items.forEach((h) => { const code = codeOf(h) || "No course"; if (!byCourse.has(code)) byCourse.set(code, []); byCourse.get(code).push(h); });
-          return [...byCourse.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })).map(([code, hs]) => ({ code, name: courses.find((c) => c.code === code)?.title || "", items: hs.slice().sort((a, b) => a.title.localeCompare(b.title)) }));
+          return [...byCourse.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })).map(([code, hs]) => ({ code, name: courses.find((c) => c.code === code)?.title || "", items: hs.slice().sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true })) }));
         };
         const order = PROGRAMS.map((p) => p.key);
         const known = new Set(order);
@@ -2994,7 +2994,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
         const shown = graded.filter(match);
         const byId = new Map(); const groups = [];
         shown.forEach((s) => { if (!byId.has(s.homework_id)) { const g = { id: s.homework_id, title: titleOf(s.homework_id), subs: [] }; byId.set(s.homework_id, g); groups.push(g); } byId.get(s.homework_id).subs.push(s); });
-        groups.sort((a, b) => a.title.localeCompare(b.title));
+        groups.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
         return (
           <>
             <Card style={{ marginBottom: 12 }}>
