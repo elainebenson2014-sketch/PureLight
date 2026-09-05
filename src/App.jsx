@@ -1114,6 +1114,63 @@ function TestsManager({ tests, books, courses, refresh }) {
   const [draft, setDraft] = useState(null);
   const [qs, setQs] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [csvNote, setCsvNote] = useState("");
+
+  async function importTestsCsv(file) {
+    if (!file) return;
+    setCsvNote("Reading file…");
+    try {
+      const rows = parseCSV(await file.text());
+      if (rows.length < 2) { setCsvNote("That file has no rows under the header."); return; }
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const col = (n) => header.indexOf(n);
+      const iCourse = col("course_code"), iTitle = col("test_title"), iType = col("type"), iPts = col("points"), iQ = col("question"), iAns = col("correct_answer"), iOpts = col("options");
+      if (iCourse < 0 || iTitle < 0 || iQ < 0) { setCsvNote("CSV needs course_code, test_title, and question columns."); return; }
+      const groups = new Map(); const order = [];
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r]; if (!row || row.every((c) => !(c || "").trim())) continue;
+        const code = (row[iCourse] || "").trim(), title = (row[iTitle] || "").trim(), q = (row[iQ] || "").trim();
+        if (!code || !title || !q) continue;
+        const key = code + "||" + title;
+        if (!groups.has(key)) { groups.set(key, { code, title, questions: [] }); order.push(key); }
+        let type = iType >= 0 ? (row[iType] || "").trim().toLowerCase() : "short";
+        if (!QTYPE[type]) type = "short";
+        const pts = iPts >= 0 && (row[iPts] || "").trim() !== "" ? Number(row[iPts]) : 1;
+        const rawAns = iAns >= 0 ? (row[iAns] || "").trim() : "";
+        let opts = [], correct = "";
+        if (type === "tf") {
+          const a = rawAns.toLowerCase();
+          if (["true", "t", "yes", "1"].includes(a)) correct = "true";
+          else if (["false", "f", "no", "0"].includes(a)) correct = "false";
+        } else if (type === "mc") {
+          if (iOpts >= 0) opts = (row[iOpts] || "").split("|").map((s) => s.trim()).filter(Boolean);
+          if (rawAns) {
+            const byText = opts.findIndex((o) => o.toLowerCase() === rawAns.toLowerCase());
+            if (byText >= 0) correct = String(byText);
+            else if (/^[A-Za-z]$/.test(rawAns)) correct = String(rawAns.toUpperCase().charCodeAt(0) - 65);
+            else if (/^\d+$/.test(rawAns)) correct = String(Number(rawAns) - 1);
+          }
+        }
+        const qobj = { type, prompt: q, points: pts };
+        if (type === "mc" && opts.length) qobj.options = opts;
+        if (correct !== "") qobj.correct_answer = correct;
+        groups.get(key).questions.push(qobj);
+      }
+      const codeMap = new Map();
+      (courses || []).forEach((c) => { if (c.code) codeMap.set(c.code.trim().toLowerCase(), c); });
+      let made = 0; const skipped = [];
+      setCsvNote(`Importing ${order.length} test${order.length === 1 ? "" : "s"}…`);
+      for (const key of order) {
+        const g = groups.get(key); const c = codeMap.get(g.code.toLowerCase());
+        if (!c) { skipped.push(g.code); continue; }
+        await db.saveTest({ id: null, title: g.title, description: "", book_id: null, program: c.program || "all", course_id: c.id, module: "", status: "draft" }, g.questions);
+        made++;
+      }
+      await refresh();
+      const uniq = [...new Set(skipped)];
+      setCsvNote(`Created ${made} test${made === 1 ? "" : "s"} (as Draft).${uniq.length ? ` Skipped (course code not found — import courses first): ${uniq.join(", ")}.` : ""}`);
+    } catch (e) { setCsvNote("Couldn't import: " + e.message); }
+  }
 
   const toLocalInput = (iso) => { if (!iso) return ""; const d = new Date(iso); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
   function newTest() { setDraft({ id: null, title: "", description: "", book_id: books[0]?.id || "", program: "all", course_id: "", module: "", status: "draft", available_from: "", available_until: "" }); setQs([]); setMode("build"); }
@@ -1243,6 +1300,14 @@ function TestsManager({ tests, books, courses, refresh }) {
   return (
     <>
       <PageHead title="Tests" sub="Build and manage assessments." action={<Btn icon={Plus} onClick={newTest}>Create test</Btn>} />
+      <Card style={{ marginBottom: 14 }}>
+        <div className="pl-body" style={{ fontWeight: 700, color: C.ink, marginBottom: 6 }}>Import tests from CSV</div>
+        <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>
+          One row per question. Columns: <b>course_code</b>, <b>test_title</b>, <b>type</b> (short / tf / essay / mc), <b>points</b>, <b>question</b>, and (optional) <b>correct_answer</b> + <b>options</b>. For auto-grading: on a <b>tf</b> row put true or false in correct_answer; on an <b>mc</b> row put the choices in options separated by | and the right one in correct_answer (number, letter, or exact text). Rows sharing a course code and test title become one test. Imported tests start as Draft.
+        </div>
+        <input type="file" accept=".csv" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; importTestsCsv(f); }} />
+        {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
+      </Card>
       {tests.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No tests yet.</span></Card> :
         <div className="flex flex-col gap-3">
           {tests.map((t) => (
@@ -2659,7 +2724,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
       if (rows.length < 2) { setCsvNote("That file has no rows under the header."); return; }
       const header = rows[0].map((h) => h.trim().toLowerCase());
       const col = (n) => header.indexOf(n);
-      const iCourse = col("course_code"), iTitle = col("assignment_title"), iDue = col("due_date"), iType = col("type"), iPts = col("points"), iQ = col("question");
+      const iCourse = col("course_code"), iTitle = col("assignment_title"), iDue = col("due_date"), iType = col("type"), iPts = col("points"), iQ = col("question"), iAns = col("correct_answer"), iOpts = col("options");
       if (iCourse < 0 || iTitle < 0 || iQ < 0) { setCsvNote("CSV needs course_code, assignment_title, and question columns."); return; }
       const groups = new Map(); const order = [];
       for (let r = 1; r < rows.length; r++) {
@@ -2671,7 +2736,25 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
         let type = iType >= 0 ? (row[iType] || "").trim().toLowerCase() : "short";
         if (!QTYPE[type]) type = "short";
         const pts = iPts >= 0 && (row[iPts] || "").trim() !== "" ? Number(row[iPts]) : 1;
-        groups.get(key).questions.push({ type, prompt: q, points: pts });
+        const rawAns = iAns >= 0 ? (row[iAns] || "").trim() : "";
+        let opts = [], correct = "";
+        if (type === "tf") {
+          const a = rawAns.toLowerCase();
+          if (["true", "t", "yes", "1"].includes(a)) correct = "true";
+          else if (["false", "f", "no", "0"].includes(a)) correct = "false";
+        } else if (type === "mc") {
+          if (iOpts >= 0) opts = (row[iOpts] || "").split("|").map((s) => s.trim()).filter(Boolean);
+          if (rawAns) {
+            const byText = opts.findIndex((o) => o.toLowerCase() === rawAns.toLowerCase());
+            if (byText >= 0) correct = String(byText);
+            else if (/^[A-Za-z]$/.test(rawAns)) correct = String(rawAns.toUpperCase().charCodeAt(0) - 65);
+            else if (/^\d+$/.test(rawAns)) correct = String(Number(rawAns) - 1);
+          }
+        }
+        const qobj = { type, prompt: q, points: pts };
+        if (type === "mc" && opts.length) qobj.options = opts;
+        if (correct !== "") qobj.correct_answer = correct;
+        groups.get(key).questions.push(qobj);
       }
       const codeMap = new Map();
       (courses || []).forEach((c) => { if (c.code) codeMap.set(c.code.trim().toLowerCase(), c); });
@@ -2899,7 +2982,7 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
       <Card style={{ marginBottom: 18 }}>
         <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 6px" }}>Import homework from CSV</h3>
         <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, margin: "0 0 10px", lineHeight: 1.5 }}>
-          One row per question. Columns: <b>course_code</b>, <b>assignment_title</b>, <b>due_date</b>, <b>type</b> (short / tf / essay), <b>points</b>, <b>question</b>. Rows sharing a course code and title become one assignment. Import your courses first so the codes resolve.
+          One row per question. Columns: <b>course_code</b>, <b>assignment_title</b>, <b>due_date</b>, <b>type</b> (short / tf / essay / mc), <b>points</b>, <b>question</b>, and (optional) <b>correct_answer</b> + <b>options</b>. For auto-grading: on a <b>tf</b> row put true or false in correct_answer; on an <b>mc</b> row put the choices in options separated by | and the right one in correct_answer (its number, letter, or exact text). Short/essay are graded by hand. Rows sharing a course code and title become one assignment. Import your courses first so the codes resolve.
         </p>
         <input type="file" accept=".csv,text/csv" onChange={(e) => importCsv(e.target.files?.[0])} className="pl-body" style={{ fontSize: 13 }} />
         {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
