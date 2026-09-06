@@ -2507,7 +2507,7 @@ function StudentGrades({ mySubs, tests, myHwSubs, homework, courses, profile }) 
                   </div>
                 )}
                 <div style={{ marginTop: 12 }}>
-                  <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, test, profile.full_name)}>View / Print</Btn>
+                  <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, test, profile.full_name, true)}>View / Print</Btn>
                 </div>
               </Card>
             );
@@ -3613,12 +3613,12 @@ function openSubmission(sub, assessment, studentName, hideCorrect) {
       answer = safe(q.options?.[Number(ans)] ?? "—");
       correct = hideCorrect ? "" : safe(q.options?.[Number(q.correct_answer)] ?? "");
       const ok = String(ans) === String(q.correct_answer);
-      badge = `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
+      badge = hideCorrect ? `<span class="b">${q.points} pts</span>` : `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
     } else if (q.type === "tf") {
       answer = safe(ans ?? "—");
       correct = hideCorrect ? "" : safe(q.correct_answer);
       const ok = ans === q.correct_answer;
-      badge = `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
+      badge = hideCorrect ? `<span class="b">${q.points} pts</span>` : `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
     } else {
       answer = safe(ans || "(no response)");
       const aw = sub.manual?.[q.id];
