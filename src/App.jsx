@@ -3150,10 +3150,13 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, profile, re
 
   function start(h) {
     const draft = loadDraft(h.id);
+    // If this assignment was returned for correction, load the student's
+    // previous submission so they only fix the flagged issue — not redo it all.
+    const prior = (myHwSubs || []).find((s) => s.homework_id === h.id && s.status === "returned");
     setDoing(h);
-    setAnswers(draft?.answers || {});
-    setResponse(draft?.response || "");
-    setFile(null); // files can't be restored from a draft; student re-attaches if needed
+    setAnswers(draft?.answers || prior?.answers || {});
+    setResponse(draft?.response || prior?.response || "");
+    setFile(null); // files can't be restored; student re-attaches if needed
   }
 
   // Auto-save the draft whenever answers or response change (while an assignment is open)
