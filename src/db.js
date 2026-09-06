@@ -1,922 +1,6393 @@
+import React, { useState, useEffect, useCallback } from "react";
+import {
+  BookOpen, FileText, Users, Mail, LayoutDashboard, Plus, Upload, Trash2, Send,
+  ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
+  ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal, Receipt, BarChart3, LayoutGrid,
+  Reply, FileCheck, BarChart2, Star, MessageSquare, ClipboardList, ToggleLeft, ToggleRight, CornerDownRight, ThumbsUp, RotateCcw,
+} from "lucide-react";
 import { supabase } from "./supabaseClient";
+import * as db from "./db";
+import {
+  C, FONTS, QTYPE, inputStyle, Btn, Card, Field, PageHead, Stat, Shell, Spinner, Initials, BRAND, FEATURES,
+} from "./ui.jsx";
 
-const BUCKET = "purelight";
+const sumPoints = (questions) => (questions || []).reduce((a, q) => a + (Number(q.points) || 0), 0);
+const money = (n) => "$" + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-/* ---------------- AUTH / PROFILE ---------------- */
-export async function getProfile() {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
-  const { data, error } = await supabase.from("pl_profiles").select("*").eq("id", user.id).single();
-  if (error) throw error;
-  return data;
-}
-
-export async function listProfiles() {
-  const { data, error } = await supabase.from("pl_profiles").select("*").order("full_name");
-  if (error) throw error;
-  return data;
-}
-
-export async function listStudents() {
-  const { data, error } = await supabase.from("pl_profiles").select("*").eq("role", "student").order("full_name");
-  if (error) throw error;
-  return data;
-}
-
-/* ---------------- FILES ---------------- */
-export async function uploadFile(folder, file) {
-  const safe = file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-  const path = `${folder}/${Date.now()}-${safe}`;
-  const { error } = await supabase.storage.from(BUCKET).upload(path, file, { upsert: false });
-  if (error) throw error;
-  return path;
-}
-
-export async function signedUrl(path) {
-  if (!path) return null;
-  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(path, 60 * 60);
-  if (error) throw error;
-  return data.signedUrl;
-}
-
-/* ---------------- BOOKS ---------------- */
-export async function listBooks() {
-  const { data, error } = await supabase.from("pl_books").select("*").order("created_at", { ascending: false });
-  if (error) throw error;
-  return data;
-}
-
-export async function createBook({ title, author, description, pages, program, category, video_url, course_id, module, file }) {
-  let file_path = null;
-  if (file) file_path = await uploadFile("books", file);
-  const { data: { user } } = await supabase.auth.getUser();
-  const { error } = await supabase.from("pl_books").insert({
-    title, author, description, pages: Number(pages) || 0, program: program || "all", category: category || "book",
-    video_url: video_url || null, course_id: course_id || null, module: module || null, file_path, created_by: user.id,
-  });
-  if (error) throw error;
-}
-
-export async function updateBook(id, { title, author, description, pages, program, category, video_url, course_id, module, file }) {
-  const patch = {};
-  if (title !== undefined) patch.title = title;
-  if (author !== undefined) patch.author = author;
-  if (description !== undefined) patch.description = description;
-  if (pages !== undefined) patch.pages = Number(pages) || 0;
-  if (program !== undefined) patch.program = program || "all";
-  if (category !== undefined) patch.category = category || "book";
-  if (video_url !== undefined) patch.video_url = video_url || null;
-  if (course_id !== undefined) patch.course_id = course_id || null;
-  if (module !== undefined) patch.module = module || null;
-  if (file) patch.file_path = await uploadFile("books", file);
-  const { data, error } = await supabase.from("pl_books").update(patch).eq("id", id).select("id");
-  if (error) throw error;
-  if (!data || data.length === 0) throw new Error("Nothing changed — you may not have permission to edit books (check pl_books update policy).");
-}
-
-export async function deleteBook(id) {
-  const { error } = await supabase.from("pl_books").delete().eq("id", id);
-  if (error) throw error;
-}
-
-/* ---------------- TRANSCRIPTS ---------------- */
-export async function listTranscriptGrades(student_id) {
-  const { data, error } = await supabase.from("pl_transcript_grades").select("*").eq("student_id", student_id);
-  if (error) throw error;
-  return data || [];
-}
-export async function saveTranscriptGrades(student_id, program, rows) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const payload = (rows || []).map((r) => ({ student_id, program, line_key: r.line_key, score: (r.score === "" || r.score == null ? null : Number(r.score)), updated_by: user.id }));
-  if (payload.length === 0) return;
-  const { error } = await supabase.from("pl_transcript_grades").upsert(payload, { onConflict: "student_id,program,line_key" });
-  if (error) throw error;
-}
-
-/* ---------------- TESTS + QUESTIONS ---------------- */
-export async function listTests() {
-  const { data, error } = await supabase
-    .from("pl_tests")
-    .select("*, pl_questions(*)")
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  const allQs = (data || []).flatMap((t) => t.pl_questions || []);
-  const qIds = allQs.map((q) => q.id);
-  let ansMap = {};
-  if (qIds.length) {
-    const { data: ans } = await supabase.from("pl_question_answers").select("question_id, correct_answer").in("question_id", qIds);
-    (ans || []).forEach((a) => { ansMap[a.question_id] = a.correct_answer; });
-  }
-  return (data || []).map((t) => ({
-    ...t,
-    questions: (t.pl_questions || []).sort((a, b) => a.position - b.position).map((q) => ({ ...q, correct_answer: ansMap[q.id] ?? null })),
-  }));
-}
-
-export async function saveTest(test, questions) {
-  const { data: { user } } = await supabase.auth.getUser();
-  let testId = test.id;
-
-  if (testId) {
-    const { error } = await supabase.from("pl_tests").update({
-      title: test.title, description: test.description, book_id: test.book_id || null, program: test.program || "all",
-      course_id: test.course_id || null, module: test.module || null,
-      status: test.status || "draft", available_from: test.available_from || null, available_until: test.available_until || null,
-    }).eq("id", testId);
-    if (error) throw error;
-    // simplest reliable sync: clear old questions, insert current set
-    await supabase.from("pl_questions").delete().eq("test_id", testId);
+// Describe a ledger entry for display. A negative "payment" is a refund/credit:
+// it should read as "Refund", show its amount as a positive in the Charge column
+// (since it raises the balance), and never appear as a negative "payment".
+function ledgerRowView(e) {
+  const amt = Number(e.amount) || 0;
+  const isCharge = e.kind === "charge";
+  const isScholarship = e.kind === "scholarship";
+  const isRefund = e.kind === "payment" && amt < 0;
+  let label;
+  if (isScholarship) {
+    label = `Scholarship${e.description && e.description !== "Scholarship" ? ` · ${e.description}` : ""}`;
+  } else if (isRefund) {
+    const m = /Stripe (re_[A-Za-z0-9]+)/.exec(e.description || "");
+    const how = m ? `Stripe ${m[1]}` : (e.method || "").replace("card-refund", "to card").replace("refund", "credit");
+    label = `Refund${how ? ` · ${how}` : ""}`;
   } else {
-    const { data, error } = await supabase.from("pl_tests").insert({
-      title: test.title, description: test.description, book_id: test.book_id || null, program: test.program || "all",
-      course_id: test.course_id || null, module: test.module || null, created_by: user.id,
-      status: test.status || "draft", available_from: test.available_from || null, available_until: test.available_until || null,
-    }).select("id").single();
-    if (error) throw error;
-    testId = data.id;
+    label = (e.description || (isCharge ? "Charge" : "Payment")) + (e.method ? ` · ${e.method}` : "");
   }
-
-  const rows = questions.map((q, i) => ({
-    test_id: testId, position: i, type: q.type, prompt: q.prompt,
-    points: Number(q.points) || 0, options: q.options || [],
-  }));
-  if (rows.length) {
-    const { data: inserted, error } = await supabase.from("pl_questions").insert(rows).select("id, position");
-    if (error) throw error;
-    const answerRows = (inserted || [])
-      .filter((ins) => { const o = questions[ins.position]; return o?.correct_answer != null && o.correct_answer !== ""; })
-      .map((ins) => { const o = questions[ins.position]; return { question_id: ins.id, correct_answer: String(o.correct_answer), points: Number(o.points) || 0 }; });
-    if (answerRows.length) {
-      const { error: aErr } = await supabase.from("pl_question_answers").insert(answerRows);
-      if (aErr) throw aErr;
-    }
-  }
-  return testId;
-}
-
-export async function deleteTest(id) {
-  const { error } = await supabase.from("pl_tests").delete().eq("id", id);
-  if (error) throw error;
-}
-
-/* ---------------- SUBMISSIONS ---------------- */
-export async function listSubmissions() {
-  const { data, error } = await supabase
-    .from("pl_submissions")
-    .select("*")
-    .order("submitted_at", { ascending: false });
-  if (error) throw error;
-  return data;
-}
-
-export async function createSubmission({ test_id, answers }) {
-  const { data: { user } } = await supabase.auth.getUser();
-  // clear any prior attempt to avoid a duplicate, then submit through the
-  // server-side grader (reads the answer key securely, sets score + status).
-  await supabase.from("pl_submissions").delete().eq("test_id", test_id).eq("student_id", user.id);
-  const { data, error } = await supabase.rpc("pl_submit_test", { p_test_id: test_id, p_answers: answers || {} });
-  if (error) throw error;
-  return data;
-}
-
-export async function gradeSubmission(id, { manual, score, max_score, feedback }) {
-  const { error } = await supabase.from("pl_submissions").update({
-    manual, score, max_score, feedback, status: "graded",
-  }).eq("id", id);
-  if (error) throw error;
-}
-
-/* ---------------- MESSAGES ---------------- */
-export async function listMessages() {
-  const { data, error } = await supabase
-    .from("pl_messages")
-    .select("*")
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data;
-}
-
-export async function sendMessage({ recipient, subject, body, sender_name }) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const { error } = await supabase.from("pl_messages").insert({
-    sender_id: user.id, sender_name, recipient, subject, body,
-  });
-  if (error) throw error;
-}
-
-/* Fire the real email through the Vercel function. Never throws — UI continues
-   even if email delivery isn't configured yet.
-   The endpoint only accepts signed-in staff, so we pass the session token. */
-export async function refundPayment(ledger_id, amount) {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    const token = session?.access_token;
-    if (!token) return { error: "You must be signed in." };
-    const r = await fetch("/api/refund-payment", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ ledger_id, amount }),
-    });
-    return await r.json();
-  } catch (e) {
-    return { error: String(e) };
-  }
-}
-
-export async function sendEmail({ to, bcc, subject, html }) {
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    const token = session?.access_token;
-    if (!token) return { error: "You must be signed in to send email." };
-    const r = await fetch("/api/send-email", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ to, bcc, subject, html }),
-    });
-    return await r.json();
-  } catch (e) {
-    return { error: String(e) };
-  }
-}
-
-/* ---------------- SYLLABI ---------------- */
-export async function listSyllabi() {
-  const { data, error } = await supabase.from("pl_syllabi").select("*").order("program");
-  if (error) throw error;
-  return data;
-}
-
-export async function saveSyllabus({ id, program, term, title, content, file }) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const patch = { program: program || "all", term: term || null, title, content, created_by: user.id, updated_at: new Date().toISOString() };
-  if (file) patch.file_path = await uploadFile("syllabi", file);
-  if (id) {
-    const { error } = await supabase.from("pl_syllabi").update(patch).eq("id", id);
-    if (error) throw error;
-  } else {
-    // Upsert on (program, term) so re-saving the same program updates in place
-    const { error } = await supabase.from("pl_syllabi").upsert(patch, { onConflict: "program,term" });
-    if (error) throw error;
-  }
-}
-
-export async function deleteSyllabus(id) {
-  const { error } = await supabase.from("pl_syllabi").delete().eq("id", id);
-  if (error) throw error;
-}
-
-/* ---------------- HOMEWORK ---------------- */
-export async function listHomework() {
-  const { data, error } = await supabase
-    .from("pl_homework")
-    .select("*, pl_homework_questions(*)")
-    .order("due_date", { ascending: true, nullsFirst: false })
-    .order("title", { ascending: true });
-  if (error) throw error;
-  const allQs = (data || []).flatMap((h) => h.pl_homework_questions || []);
-  const qIds = allQs.map((q) => q.id);
-  let ansMap = {};
-  // Fetch the answer key in batches. Passing every question id at once builds a
-  // URL long enough for the server to reject it (400). Students are blocked from
-  // this table by RLS, so an empty/failed result here is expected and harmless.
-  const BATCH = 100;
-  for (let i = 0; i < qIds.length; i += BATCH) {
-    const slice = qIds.slice(i, i + BATCH);
-    try {
-      const { data: ans, error: ansErr } = await supabase
-        .from("pl_homework_answers").select("question_id, correct_answer").in("question_id", slice);
-      if (ansErr) continue; // instructor-only table; students simply get nothing
-      (ans || []).forEach((a) => { ansMap[a.question_id] = a.correct_answer; });
-    } catch (e) { /* non-fatal: homework still loads without the key */ }
-  }
-  return (data || []).map((h) => ({
-    ...h,
-    questions: (h.pl_homework_questions || []).sort((a, b) => a.position - b.position).map((q) => ({ ...q, correct_answer: ansMap[q.id] ?? null })),
-  }));
-}
-
-export async function saveHomework(hw, questions, file) {
-  const { data: { user } } = await supabase.auth.getUser();
-  let file_path = hw.file_path ?? null;
-  if (file) file_path = await uploadFile("homework", file);
-  let hwId = hw.id;
-
-  if (hwId) {
-    const { error } = await supabase.from("pl_homework").update({
-      title: hw.title, instructions: hw.instructions, due_date: hw.due_date || null,
-      points: Number(hw.points) || 0, program: hw.program || "all",
-      course_id: hw.course_id || null, module: hw.module || null, file_path,
-      status: hw.status || "published", available_from: hw.available_from || null, available_until: hw.available_until || null,
-    }).eq("id", hwId);
-    if (error) throw error;
-    await supabase.from("pl_homework_questions").delete().eq("homework_id", hwId);
-  } else {
-    const { data, error } = await supabase.from("pl_homework").insert({
-      title: hw.title, instructions: hw.instructions, due_date: hw.due_date || null,
-      points: Number(hw.points) || 0, program: hw.program || "all",
-      course_id: hw.course_id || null, module: hw.module || null, file_path, created_by: user.id,
-      status: hw.status || "published", available_from: hw.available_from || null, available_until: hw.available_until || null,
-    }).select("id").single();
-    if (error) throw error;
-    hwId = data.id;
-  }
-
-  const rows = (questions || []).map((q, i) => ({
-    homework_id: hwId, position: i, type: q.type, prompt: q.prompt,
-    points: Number(q.points) || 0, options: q.options || [],
-  }));
-  if (rows.length) {
-    const { data: inserted, error } = await supabase.from("pl_homework_questions").insert(rows).select("id, position");
-    if (error) throw error;
-    const answerRows = (inserted || [])
-      .filter((ins) => { const o = questions[ins.position]; return o?.correct_answer != null && o.correct_answer !== ""; })
-      .map((ins) => { const o = questions[ins.position]; return { question_id: ins.id, correct_answer: String(o.correct_answer), points: Number(o.points) || 0 }; });
-    if (answerRows.length) {
-      const { error: aErr } = await supabase.from("pl_homework_answers").insert(answerRows);
-      if (aErr) throw aErr;
-    }
-  }
-  return hwId;
-}
-
-export async function deleteHomework(id) {
-  const { error } = await supabase.from("pl_homework").delete().eq("id", id);
-  if (error) throw error;
-}
-
-export async function listHomeworkSubmissions() {
-  const { data, error } = await supabase.from("pl_homework_submissions").select("*").order("submitted_at", { ascending: false });
-  if (error) throw error;
-  return data;
-}
-
-export async function listSessions() {
-  const { data, error } = await supabase.from("pl_sessions").select("*").order("starts_at", { ascending: true });
-  if (error) throw error;
-  return data || [];
-}
-export async function listProgramSchedules() {
-  const { data, error } = await supabase.from("pl_program_schedules").select("*");
-  if (error) throw error;
-  return data || [];
-}
-export async function saveProgramSchedule(program, file) {
-  const file_path = await uploadFile("schedules", file);
-  const { data: { user } } = await supabase.auth.getUser();
-  const { error } = await supabase.from("pl_program_schedules").upsert({ program, file_path, file_name: file.name, updated_by: user.id, updated_at: new Date().toISOString() }, { onConflict: "program" });
-  if (error) throw error;
-}
-export async function saveSession(s) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const rec = {
-    title: s.title, course_id: s.course_id || null, program: s.program || "all",
-    starts_at: s.starts_at, duration_min: Number(s.duration_min) || 60,
-    zoom_url: s.zoom_url || null, notes: s.notes || null,
+  return {
+    isRefund,
+    isScholarship,
+    label,
+    charge: isCharge ? money(amt) : (isRefund ? money(Math.abs(amt)) : ""),
+    payment: (e.kind === "payment" && !isRefund) ? money(amt) : (isScholarship ? money(amt) : ""),
   };
-  if (s.id) {
-    const { error } = await supabase.from("pl_sessions").update(rec).eq("id", s.id);
-    if (error) throw error;
-  } else {
-    const { error } = await supabase.from("pl_sessions").insert({ ...rec, created_by: user.id });
-    if (error) throw error;
+}
+
+
+// Program-aware document masthead. For the CERTIFICATE program, both names
+// appear with The Healed Place leading and the Fully Known tagline. For DEGREE
+// programs, only NCTS Pure Light School of Ministry appears (no Healed Place, no tagline).
+function docMastheadHtml(program) {
+  const isCert = program === "certificate" || /cert/i.test(String(program || ""));
+  if (isCert) {
+    return `<div class="mast">
+      <div class="school">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
+      <div class="brand">THE HEALED PLACE</div>
+      <div class="tag">Fully Known — Identity, Healing, and Deliverance</div>
+    </div>`;
   }
-}
-export async function deleteSession(id) {
-  const { error } = await supabase.from("pl_sessions").delete().eq("id", id);
-  if (error) throw error;
-}
-
-export async function submitHomework({ homework_id, answers, response, file, max_points }) {
-  const { data: { user } } = await supabase.auth.getUser();
-  let file_path = null;
-  if (file) file_path = await uploadFile("homework-submissions", file);
-  // remove any prior submission (e.g. returned-for-redo) to avoid a duplicate,
-  // then submit through the server-side grader (reads the answer key securely,
-  // computes the score, and marks it graded when all questions are objective).
-  await supabase.from("pl_homework_submissions").delete().eq("homework_id", homework_id).eq("student_id", user.id);
-  const { data, error } = await supabase.rpc("pl_submit_homework", {
-    p_homework_id: homework_id, p_answers: answers || {}, p_response: response || null, p_file: file_path,
-  });
-  if (error) throw error;
-  return data;
+  return `<div class="mast">
+    <div class="brand">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
+  </div>`;
 }
 
-export async function gradeHomework(id, { manual, score, max_points, feedback }) {
-  const { error } = await supabase.from("pl_homework_submissions").update({
-    manual: manual || {}, score, max_points, feedback, status: "graded",
-  }).eq("id", id);
-  if (error) throw error;
+/* ---- Grade scale + GPA (standard 4.0) ---- */
+function gradeInfo(pct) {
+  const p = Number(pct);
+  if (isNaN(p)) return { letter: "—", points: null };
+  if (p >= 93) return { letter: "A", points: 4.0 };
+  if (p >= 90) return { letter: "A-", points: 3.7 };
+  if (p >= 87) return { letter: "B+", points: 3.3 };
+  if (p >= 83) return { letter: "B", points: 3.0 };
+  if (p >= 80) return { letter: "B-", points: 2.7 };
+  if (p >= 77) return { letter: "C+", points: 2.3 };
+  if (p >= 73) return { letter: "C", points: 2.0 };
+  if (p >= 70) return { letter: "C-", points: 1.7 };
+  if (p >= 67) return { letter: "D+", points: 1.3 };
+  if (p >= 63) return { letter: "D", points: 1.0 };
+  if (p >= 60) return { letter: "D-", points: 0.7 };
+  return { letter: "F", points: 0.0 };
 }
 
-// Save grading progress WITHOUT releasing to the student (status stays not-graded).
-export async function saveGradeDraft(id, { manual, score, max_points, feedback }) {
-  const { error } = await supabase.from("pl_homework_submissions").update({
-    manual: manual || {}, score, max_points, feedback, status: "grading",
-  }).eq("id", id);
-  if (error) throw error;
+function gradedItems(studentId, subs, tests, hwSubs, homework, courses) {
+  const cTitle = (cid) => courses.find((c) => c.id === cid)?.title || "General";
+  const items = [];
+  (subs || []).filter((s) => s.student_id === studentId && s.status === "graded" && s.max_score)
+    .forEach((s) => { const t = (tests || []).find((x) => x.id === s.test_id); items.push({ kind: "Test", title: t?.title || "Test", course: cTitle(t?.course_id), score: s.score, max: s.max_score, pct: (s.score / s.max_score) * 100 }); });
+  (hwSubs || []).filter((s) => s.student_id === studentId && s.status === "graded" && s.max_points)
+    .forEach((s) => { const h = (homework || []).find((x) => x.id === s.homework_id); items.push({ kind: "Homework", title: h?.title || "Homework", course: cTitle(h?.course_id), score: s.score, max: s.max_points, pct: (s.score / s.max_points) * 100 }); });
+  return items;
 }
 
-// Send a submission back to the student to complete and resubmit, with a note.
-export async function sendBackHomework(id, note) {
-  const { error } = await supabase.from("pl_homework_submissions").update({
-    status: "returned", feedback: note || "",
-  }).eq("id", id);
-  if (error) throw error;
+function summarize(items) {
+  if (!items.length) return { count: 0, avgPct: null, gpa: null, letter: "—" };
+  const avgPct = items.reduce((a, i) => a + i.pct, 0) / items.length;
+  const gpa = items.reduce((a, i) => a + gradeInfo(i.pct).points, 0) / items.length;
+  return { count: items.length, avgPct, gpa, letter: gradeInfo(avgPct).letter };
+}
+const fdate = (d) => (d ? String(d).slice(0, 10) : "");
+
+function autoScore(test, sub) {
+  let auto = 0;
+  for (const q of test.questions) {
+    const a = sub.answers?.[q.id];
+    if (q.type === "mc" && String(a) === String(q.correct_answer)) auto += q.points;
+    if (q.type === "tf" && a === q.correct_answer) auto += q.points;
+  }
+  return auto;
 }
 
-/* ---------------- PROGRAMS ---------------- */
-// Labels must match App.jsx PROGRAMS / the checkout function so charge and
-// payment descriptions line up exactly (e.g. "Bachelor tuition").
-const TUITION_LEVEL_LABELS = {
-  associate: "Associate", bachelor: "Bachelor",
-  master: "Master", master2: "Master 2", doctorate: "Doctoral", phd: "PhD",
+const PROGRAMS = [
+  { key: "all", label: "All programs" },
+  { key: "certificate", label: "Certificate" },
+  { key: "associate", label: "Associate" },
+  { key: "bachelor", label: "Bachelor" },
+  { key: "master", label: "Master" },
+  { key: "master2", label: "Master 2" },
+  { key: "doctorate", label: "Doctoral" },
+  { key: "phd", label: "PhD" },
+];
+const STUDENT_PROGRAMS = PROGRAMS.filter((p) => p.key !== "all");
+// Tuition (Registration/Books/installments) only applies to the formal degree
+// ladder. "Certificate" students pay per-course via Cert Classes instead, so
+// it's excluded here even though it stays selectable as a program/field above.
+const TUITION_LEVELS = STUDENT_PROGRAMS.filter((p) => p.key !== "certificate");
+const programLabel = (k) => PROGRAMS.find((p) => p.key === k)?.label || "All programs";
+const visibleFor = (items, program) => (items || []).filter((it) => it.program === "all" || it.program === program);
+
+const CATEGORIES = [
+  { key: "book", label: "Books" },
+  { key: "video", label: "Videos" },
+  { key: "music", label: "Music" },
+];
+const categoryLabel = (k) => CATEGORIES.find((c) => c.key === k)?.label || "Books";
+
+/* ---------------- TRANSCRIPTS: school, grading, curriculum ---------------- */
+const ENV = (typeof import.meta !== "undefined" && import.meta.env) || {};
+const SCHOOL = {
+  name: ENV.VITE_SCHOOL_LEGAL_NAME || "North Carolina Theological Seminary",
+  head: ENV.VITE_SCHOOL_HEAD || "Dr. Varnie N. Fullwood, Founder & President",
+  addr: ENV.VITE_SCHOOL_ADDR || "4442 Bonnetsville Rd | Clinton, NC 28328",
+  phone: ENV.VITE_SCHOOL_PHONE || "Administrative Office: (910) 564-6630",
+  fax: ENV.VITE_SCHOOL_FAX || "Fax: (910) 564-3074",
+};
+const SCHOOL_LOGO = ENV.VITE_SEAL_URL || "data:image/jpeg;base64,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";
+const gradeLetter = (score) => {
+  if (score === "" || score == null || isNaN(Number(score))) return "";
+  const n = Number(score);
+  if (n >= 90) return "A";
+  if (n >= 80) return "B";
+  if (n >= 70) return "C";
+  if (n >= 60) return "D";
+  return "F";
+};
+const TRANSCRIPT_PROGRAMS = [
+  { key: "associate", label: "Associate Degree Program" },
+  { key: "bachelor", label: "Bachelor in Theology" },
+  { key: "master", label: "Master Degree Program — Year I" },
+  { key: "master2", label: "Master Degree Program — Year II" },
+  { key: "doctorate", label: "Doctoral Program" },
+  { key: "phd", label: "PhD Program" },
+];
+// Which app-course codes fall in which semester (guided by the campus grade sheets). Codes are normalized (dashes ignored) when matched to your catalog.
+const TRANSCRIPT_LAYOUT = {
+  associate: [
+    { sem: "Fall Semester", term: ["fall"], codes: ["ABS-101", "ABS-102", "ABS-103", "ABS-104", "ABS-105", "ABS-106", "ATS-115"] },
+    { sem: "Spring Semester", term: ["spring"], codes: ["ABS-107", "ABS-108", "ABS-109", "ABS-110", "ABS-111", "ATS-116"] },
+  ],
+  bachelor: [
+    { sem: "Fall Semester", term: ["fall"], codes: ["BBS-201", "BBS-202", "BBS-203", "BBS-204", "BBS-205", "BBS-206", "BBS-207", "BBS-208", "BBS-209", "BBS-210", "BBS-211", "BTS-215", "BTS-216", "BTS-217"] },
+    { sem: "Spring Semester", term: ["spring"], codes: ["BBS-212", "BBS-213", "BBS-214", "BBS-215", "BBS-216", "BBS-217", "BBS-218", "BTS-218"] },
+  ],
+  master: [
+    { sem: "Fall Semester", term: ["fall"], codes: ["MBS-401", "MBS-402", "MBS-403", "MBS-404", "MBS-405", "MBS-406", "MBS-407", "MTS-415", "MTS-416", "MTS-417", "MTS-418", "MTS-419", "MTS-420"] },
+    { sem: "Spring Semester", term: ["spring"], codes: ["MBS-408", "MBS-409", "MBS-410", "MTS-421", "MTS-422", "MTS-423"] },
+  ],
+  master2: [
+    { sem: "Fall Semester", term: ["fall"], codes: ["MBS-416", "MBS-417", "MBS-418", "MBS-419", "MBS-420", "MBS-421", "MTS-432", "MTS-434"] },
+    { sem: "Spring Semester", term: ["spring"], codes: ["MBS-422", "MBS-423", "MBS-424", "MBS-425", "MTS-433", "MTS-435", "MTS-436"] },
+  ],
 };
 
-/* Post the registration / books / tuition charges for a student's level so the
-   ledger reconciles against their payments. Idempotent: a charge whose
-   description already exists is skipped, so it's safe to call repeatedly. */
-export async function postTuitionCharges(student_id, program) {
-  if (!student_id || !program) return;
-  const { data: trows, error: te } = await supabase
-    .from("pl_tuition").select("amount,registration,books").eq("program", program);
-  if (te) throw te;
-  const t = Array.isArray(trows) ? trows[0] : null;
-  if (!t) return;
+const CE_TYPES = [
+  { key: "none",     label: "Standard / Degree" },
+  { key: "ce",       label: "CE Course — counts toward LPC renewal" },
+  { key: "faith_ce", label: "Faith-Based CE — counts toward LPC renewal" },
+  { key: "open",     label: "Open / Elective — no CE credit" },
+];
+const isCEType = (t) => t === "ce" || t === "faith_ce";
+const ceTypeLabel = (k) => CE_TYPES.find((x) => x.key === k)?.label || "Standard";
 
-  const label = TUITION_LEVEL_LABELS[program] || program;
-  const total = Number(t.amount) || 0;
-  const reg = Number(t.registration) || 0;
-  const books = Number(t.books) || 0;
-  const tuitionPortion = Math.max(0, Math.round((total - reg - books) * 100) / 100);
+// Online tuition payment. The checkout + webhook functions handle tuition_level
+// payments (registration / books / installments), so this is live.
+const TUITION_PAY_ENABLED = true;
 
-  const planned = [
-    { description: `${label} registration`, amount: reg },
-    { description: `${label} books`, amount: books },
-    { description: `${label} tuition`, amount: tuitionPortion },
-  ].filter((c) => c.amount > 0);
-  if (!planned.length) return;
-
-  const { data: existing, error: ee } = await supabase
-    .from("pl_ledger").select("description").eq("student_id", student_id).eq("kind", "charge");
-  if (ee) throw ee;
-  const have = new Set((existing || []).map((e) => (e.description || "").trim().toLowerCase()));
-
-  const { data: { user } } = await supabase.auth.getUser();
-  const rows = planned
-    .filter((c) => !have.has(c.description.toLowerCase()))
-    .map((c) => ({ student_id, kind: "charge", description: c.description, amount: c.amount, recorded_by: user.id }));
-  if (rows.length) {
-    const { error } = await supabase.from("pl_ledger").insert(rows);
-    if (error) throw error;
-  }
-}
-
-export async function setStudentProgram(id, program) {
-  const { error } = await supabase.from("pl_profiles").update({ program: program || null }).eq("id", id);
-  if (error) throw error;
-  // Post the level's charges so the student's ledger reconciles. Wrapped so a
-  // charge hiccup never blocks the level assignment itself.
-  if (program) {
-    try { await postTuitionCharges(id, program); } catch (e) { console.error("postTuitionCharges", e); }
-  }
-}
-
-export async function setStudentStatus(id, status) {
-  const { error } = await supabase.from("pl_profiles").update({ status: status || "active" }).eq("id", id);
-  if (error) throw error;
-}
-
-/* ---------------- COURSES ---------------- */
-export async function listCourses() {
-  const { data, error } = await supabase.from("pl_courses").select("*").order("created_at", { ascending: true });
-  if (error) throw error;
-  return data;
-}
-
-export async function createCourse({ title, description, program, code, credit_hours, ce_type, ce_hours, passing_score, approval_number, provider_name }) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const ch = (credit_hours !== undefined && credit_hours !== null && credit_hours !== "") ? Number(credit_hours) : null;
-  const { error } = await supabase.from("pl_courses").insert({
-    title, description: description || "", program: program || "all",
-    code: code || null, credit_hours: ch, created_by: user.id,
-    ce_type: ce_type || "none",
-    ce_hours: ce_hours ? Number(ce_hours) : null,
-    passing_score: passing_score ? Number(passing_score) : 75,
-    approval_number: approval_number || null,
-    provider_name: provider_name || null,
-  });
-  if (error) throw error;
-}
-
-export async function bulkAddCourses(rows) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const recs = rows.map((r) => ({
-    code: r.code || null,
-    title: r.title,
-    description: r.description || "",
-    program: r.program || "all",
-    credit_hours: (r.credit_hours !== undefined && r.credit_hours !== null && r.credit_hours !== "") ? Number(r.credit_hours) : null,
-    created_by: user.id,
-  }));
-  const { error } = await supabase.from("pl_courses").insert(recs);
-  if (error) throw error;
-}
-
-export async function deleteCourse(id) {
-  const { error } = await supabase.from("pl_courses").delete().eq("id", id);
-  if (error) throw error;
-}
-
-/* ---------------- ATTENDANCE ---------------- */
-export async function listAttendance() {
-  const { data, error } = await supabase.from("pl_attendance").select("*").order("date", { ascending: false });
-  if (error) throw error;
-  return data;
-}
-
-export async function setAttendance(student_id, date, status) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const { error } = await supabase.from("pl_attendance").upsert(
-    { student_id, date, status, recorded_by: user.id },
-    { onConflict: "student_id,date" }
+function ProgramSelect({ value, onChange, includeAll = true }) {
+  const list = includeAll ? PROGRAMS : STUDENT_PROGRAMS;
+  return (
+    <select style={inputStyle} value={value} onChange={(e) => onChange(e.target.value)}>
+      {!includeAll && <option value="">— choose level —</option>}
+      {list.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+    </select>
   );
-  if (error) throw error;
 }
 
-/* ---------------- CERTIFICATES ---------------- */
-export async function listCertificates() {
-  const { data, error } = await supabase.from("pl_certificates").select("*").order("issued_on", { ascending: false });
-  if (error) throw error;
-  return data;
-}
-
-export async function issueCertificate({ student_id, title, course_id, program, note, ce_hours, approval_number, provider_name }) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const sid = student_id || user.id;
-  const serial = "NCTS-" + new Date().getFullYear() + "-" + Math.random().toString(36).slice(2, 8).toUpperCase();
-  const { error } = await supabase.from("pl_certificates").insert({
-    student_id: sid, title, course_id: course_id || null, program: program || null,
-    serial, note: note || "", issued_by: user.id,
-    ce_hours: ce_hours || null,
-    approval_number: approval_number || null,
-    provider_name: provider_name || null,
-  });
-  if (error) throw error;
-}
-
-export async function deleteCertificate(id) {
-  const { error } = await supabase.from("pl_certificates").delete().eq("id", id);
-  if (error) throw error;
-}
-
-/* ---------------- BILLING / LEDGER ---------------- */
-export async function listLedger() {
-  const { data, error } = await supabase.from("pl_ledger").select("*")
-    .order("date", { ascending: true }).order("created_at", { ascending: true });
-  if (error) throw error;
-  return data;
-}
-
-export async function addLedgerEntry({ student_id, kind, description, amount, date, method, course_id }) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const rec = { student_id, kind, description: description || "", amount: Number(amount) || 0, method: method || "", recorded_by: user.id };
-  if (date) rec.date = date;
-  if (course_id) rec.course_id = course_id;
-  const { error } = await supabase.from("pl_ledger").insert(rec);
-  if (error) throw error;
-}
-
-export async function bulkAddLedger(entries) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const rows = entries.map((e) => {
-    const r = { student_id: e.student_id, kind: e.kind, description: e.description || "", amount: Number(e.amount) || 0, method: e.method || "", recorded_by: user.id };
-    if (e.date) r.date = e.date;
-    return r;
-  });
-  const { error } = await supabase.from("pl_ledger").insert(rows);
-  if (error) throw error;
-}
-
-export async function deleteLedgerEntry(id) {
-  const { error } = await supabase.from("pl_ledger").delete().eq("id", id);
-  if (error) throw error;
-}
-
-/* ---------------- ROLES ---------------- */
-export async function setRole(id, role) {
-  const { error } = await supabase.from("pl_profiles").update({ role }).eq("id", id);
-  if (error) throw error;
-}
-
-/* ---------------- INSTRUCTOR <-> COURSE ASSIGNMENTS ---------------- */
-export async function listInstructorCourses() {
-  const { data, error } = await supabase.from("pl_instructor_courses").select("*");
-  if (error) throw error;
-  return data;
-}
-
-export async function assignCourse(instructor_id, course_id) {
-  const { error } = await supabase.from("pl_instructor_courses").upsert(
-    { instructor_id, course_id }, { onConflict: "instructor_id,course_id" }
+function CourseFields({ courses, courseId, module, onCourse, onModule }) {
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      <Field label="Course (optional)">
+        <select style={inputStyle} value={courseId || ""} onChange={(e) => onCourse(e.target.value)}>
+          <option value="">— None —</option>
+          {courses.map((c) => <option key={c.id} value={c.id}>{c.title}{c.is_certificate ? " (Certificate class)" : ""}</option>)}
+        </select>
+      </Field>
+      <Field label="Module / Week (optional)">
+        <input style={inputStyle} value={module || ""} onChange={(e) => onModule(e.target.value)} placeholder="e.g. Week 1" />
+      </Field>
+    </div>
   );
-  if (error) throw error;
 }
 
-export async function unassignCourse(instructor_id, course_id) {
-  const { error } = await supabase.from("pl_instructor_courses").delete()
-    .eq("instructor_id", instructor_id).eq("course_id", course_id);
-  if (error) throw error;
-}
+const courseLabel = (courses, id, mod) => {
+  const c = courses.find((x) => x.id === id);
+  if (!c && !mod) return "";
+  return `${c ? c.title : "General"}${mod ? " · " + mod : ""}`;
+};
 
-/* ---------------- CERTIFICATE CLASSES (cohort: pl_courses flagged is_certificate) ---------------- */
-export async function saveCertClass(c) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const rec = {
-    title: c.title, description: c.description || "", code: c.code || null,
-    program: "certificate", is_certificate: true,
-    pillar: c.pillar || null, fee: Number(c.fee) || 0,
-    duration_weeks: c.duration_weeks ? Number(c.duration_weeks) : null,
-    start_date: c.start_date || null,
-  };
-  if (c.id) {
-    const { error } = await supabase.from("pl_courses").update(rec).eq("id", c.id);
-    if (error) throw error;
-    return c.id;
+function groupByCourseModule(items, courses) {
+  const byCourse = new Map();
+  for (const it of items) {
+    const cid = it.course_id || "none";
+    if (!byCourse.has(cid)) byCourse.set(cid, []);
+    byCourse.get(cid).push(it);
   }
-  const { data, error } = await supabase.from("pl_courses").insert({ ...rec, created_by: user.id }).select("id").single();
-  if (error) throw error;
-  return data.id;
+  const order = [...courses, { id: "none", title: "General" }];
+  const out = [];
+  for (const c of order) {
+    const list = byCourse.get(c.id);
+    if (!list || !list.length) continue;
+    const byMod = new Map();
+    for (const it of list) {
+      const m = it.module && it.module.trim() ? it.module.trim() : "";
+      if (!byMod.has(m)) byMod.set(m, []);
+      byMod.get(m).push(it);
+    }
+    const mods = [...byMod.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+      .map(([module, its]) => ({ module, items: its }));
+    out.push({ course: c, modules: mods });
+  }
+  return out;
 }
 
-/* roster: which students are in which certificate class */
-export async function listCertEnrollments() {
-  const { data, error } = await supabase.from("pl_cert_enrollments").select("*");
-  if (error) throw error;
-  return data;
-}
-
-export async function enrollCertClass(course_id, student_id) {
-  let sid = student_id;
-  if (!sid) { const { data: { user } } = await supabase.auth.getUser(); sid = user.id; }
-  const { error } = await supabase.from("pl_cert_enrollments")
-    .upsert({ student_id: sid, course_id }, { onConflict: "student_id,course_id", ignoreDuplicates: true });
-  if (error) throw error;
-}
-
-export async function unenrollCertClass(id) {
-  const { error } = await supabase.from("pl_cert_enrollments").delete().eq("id", id);
-  if (error) throw error;
-}
-
-/* Start a Stripe Checkout for a certificate class fee; returns the URL to redirect to.
-   plan = "full" | "half" | "quarter"  — only half and quarter apply to 12-week classes. */
-export async function startCertCheckout(course_id, plan, custom_amount) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const r = await fetch("/api/create-checkout-session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ course_id, plan: plan || "full", custom_amount: custom_amount ?? null, student_id: user.id, student_email: user.email, origin: window.location.origin }),
-  });
-  const j = await r.json();
-  if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
-  return j.url;
-}
-
-/* ---------------- TUITION (per program level) ---------------- */
-export async function listTuition() {
-  const { data, error } = await supabase.from("pl_tuition").select("*");
-  if (error) throw error;
-  return data || [];
-}
-
-export async function setTuition(program, fields) {
-  const f = fields || {};
-  const { error } = await supabase.from("pl_tuition").upsert(
-    {
-      program,
-      amount: Number(f.amount) || 0,
-      registration: Number(f.registration) || 0,
-      books: Number(f.books) || 0,
-      installments: Math.max(1, parseInt(f.installments, 10) || 7),
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "program" }
+function Grouped({ items, courses, children }) {
+  const groups = groupByCourseModule(items, courses);
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g.course.id} style={{ marginBottom: 20 }}>
+          <div className="pl-display" style={{ fontSize: 21, fontWeight: 600, color: C.ink, marginBottom: 10, borderBottom: `2px solid ${C.goldSoft}`, paddingBottom: 5 }}>{g.course.title}</div>
+          {g.modules.map((m, mi) => (
+            <div key={mi} style={{ marginBottom: 14 }}>
+              {m.module && <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", margin: "8px 0" }}>{m.module}</div>}
+              {children(m.items)}
+            </div>
+          ))}
+        </div>
+      ))}
+    </>
   );
-  if (error) throw error;
 }
 
-/* Start a Stripe Checkout for a program level's tuition; returns the URL to redirect to.
-   The amount is looked up server-side from pl_tuition by the checkout function —
-   never trust a price sent from the browser. `plan` only applies to the
-   "tuition" bucket: "full" | "half" | "four". */
-export async function startTuitionCheckout(tuition_level, bucket, plan, custom_amount) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const r = await fetch("/api/create-checkout-session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tuition_level, bucket, plan, custom_amount: custom_amount ?? null, student_id: user.id, student_email: user.email, origin: window.location.origin }),
-  });
-  const j = await r.json();
-  if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
-  return j.url;
+/* ============================================================ ROOT */
+export default function App() {
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [recovery, setRecovery] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((e, s) => { setSession(s); if (e === "PASSWORD_RECOVERY") setRecovery(true); });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      if (!session) { setProfile(null); setLoading(false); return; }
+      setLoading(true);
+      try {
+        const p = await db.getProfile();
+        if (active) setProfile(p);
+      } catch (e) { console.error(e); }
+      if (active) setLoading(false);
+    }
+    load();
+    return () => { active = false; };
+  }, [session]);
+
+  async function logout() { await supabase.auth.signOut(); setProfile(null); }
+
+  return (
+    <div className="pl-body" style={{ minHeight: "100vh", background: C.paper, color: C.text }}>
+      <style>{FONTS}</style>
+      {recovery ? (
+        <ResetPassword onDone={() => setRecovery(false)} />
+      ) : !session ? (
+        <Auth />
+      ) : loading ? (
+        <div className="flex items-center justify-center" style={{ minHeight: "100vh" }}><Spinner label="Preparing your portal…" /></div>
+      ) : !profile ? (
+        <div className="flex items-center justify-center" style={{ minHeight: "100vh", padding: 20 }}>
+          <Card style={{ maxWidth: 420, textAlign: "center" }}>
+            <p className="pl-body">We couldn't load your profile. Try signing out and back in.</p>
+            <div style={{ marginTop: 12 }}><Btn onClick={logout}>Sign out</Btn></div>
+          </Card>
+        </div>
+      ) : (profile.role === "instructor" || profile.role === "admin" || profile.role === "assistant") ? (
+        <InstructorPortal profile={profile} onLogout={logout} />
+      ) : (
+        <StudentPortal profile={profile} onLogout={logout} />
+      )}
+    </div>
+  );
 }
 
-/* ═══════════════ MESSAGE THREADING ═══════════════════════════════ */
+/* ============================================================ AUTH */
+function Auth() {
+  const [tab, setTab] = useState("signin");
+  const [form, setForm] = useState({ name: "", email: "", password: "" });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
 
-export async function replyMessage({ parent_id, subject, body, recipient, sender_name }) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const { error } = await supabase.from("pl_messages").insert({
-    sender_id: user.id, sender_name, recipient, subject, body, parent_id,
-  });
-  if (error) throw error;
+  async function submit() {
+    setMsg(null); setBusy(true);
+    try {
+      if (tab === "signin") {
+        const { error } = await supabase.auth.signInWithPassword({ email: form.email.trim(), password: form.password });
+        if (error) throw error;
+      } else if (tab === "forgot") {
+        const { error } = await supabase.auth.resetPasswordForEmail(form.email.trim(), { redirectTo: window.location.origin });
+        if (error) throw error;
+        setMsg({ ok: true, text: "If that email is registered, a password reset link is on its way. Check your inbox (and spam)." });
+      } else {
+        const { error } = await supabase.auth.signUp({
+          email: form.email.trim(), password: form.password,
+          options: { data: { full_name: form.name.trim() } },
+        });
+        if (error) throw error;
+        // Let the office know. Fire-and-forget: a mail hiccup must never stop
+        // someone from creating their account.
+        fetch("/api/notify-new-account", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: form.name.trim(), email: form.email.trim() }),
+        }).catch((e) => console.error("new-account alert failed", e));
+        setMsg({ ok: true, text: "Account created. If email confirmation is on, check your inbox, then sign in." });
+        setTab("signin");
+      }
+    } catch (e) {
+      setMsg({ ok: false, text: e.message || "Something went wrong." });
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="flex items-center justify-center" style={{ minHeight: "100vh", padding: 20,
+      background: `radial-gradient(1200px 600px at 50% -10%, ${C.ink2} 0%, ${C.ink} 55%, #0d1528 100%)` }}>
+      <div className="pl-fade w-full" style={{ maxWidth: 430 }}>
+        <div className="text-center" style={{ marginBottom: 24 }}>
+          {BRAND.logoUrl ? (
+            <img src={BRAND.logoUrl} alt={BRAND.name} style={{ width: 84, height: 84, borderRadius: "50%", objectFit: "cover", background: "#fff", boxShadow: `0 0 40px ${C.gold}55`, marginBottom: 16 }} />
+          ) : (
+            <div className="inline-flex items-center justify-center" style={{ width: 64, height: 64, borderRadius: "50%",
+              background: `radial-gradient(circle at 35% 30%, ${C.goldSoft}, ${C.gold})`, boxShadow: `0 0 40px ${C.gold}55`, marginBottom: 16 }}>
+              <Sparkles size={30} color="#1a1407" />
+            </div>
+          )}
+          <div className="pl-display" style={{ color: "#fff", fontSize: 34, fontWeight: 600 }}>{BRAND.name}</div>
+          <div className="pl-body" style={{ color: C.goldSoft, fontSize: 14, letterSpacing: ".22em", textTransform: "uppercase", marginTop: 4 }}>{BRAND.tagline}</div>
+        </div>
+
+        <Card style={{ padding: 26 }}>
+          {tab === "forgot" ? (
+            <div style={{ marginBottom: 16 }}>
+              <div className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.ink }}>Reset your password</div>
+              <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>Enter your account email and we'll send you a link to set a new password.</div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2" style={{ marginBottom: 20 }}>
+              {[["signin", "Sign In"], ["signup", "Create Account"]].map(([k, label]) => (
+                <button key={k} onClick={() => { setTab(k); setMsg(null); }} className="pl-body pl-press" style={{
+                  padding: 10, borderRadius: 9, cursor: "pointer", fontWeight: 600, fontSize: 14,
+                  border: `1px solid ${tab === k ? C.ink : C.line}`, background: tab === k ? C.ink : "#fff", color: tab === k ? "#fff" : C.muted }}>{label}</button>
+              ))}
+            </div>
+          )}
+
+          {tab === "signup" && (
+            <Field label="Full name"><input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Your name" /></Field>
+          )}
+          <Field label="Email"><input style={inputStyle} type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" /></Field>
+          {tab !== "forgot" && (
+            <Field label="Password"><input style={inputStyle} type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="••••••••" onKeyDown={(e) => e.key === "Enter" && submit()} /></Field>
+          )}
+
+          {msg && (
+            <div className="pl-body" style={{ fontSize: 13, padding: "9px 12px", borderRadius: 8, marginBottom: 12,
+              background: msg.ok ? C.greenSoft : C.roseSoft, color: msg.ok ? C.green : C.rose }}>{msg.text}</div>
+          )}
+
+          <Btn full kind="gold" onClick={submit} disabled={busy}>{busy ? "Please wait…" : tab === "signin" ? "Sign in" : tab === "forgot" ? "Send reset link" : "Create account"}</Btn>
+          {tab === "signin" && (
+            <div className="text-center" style={{ marginTop: 12 }}>
+              <button onClick={() => { setTab("forgot"); setMsg(null); }} className="pl-body pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.ink, fontSize: 13, textDecoration: "underline" }}>Forgot password?</button>
+            </div>
+          )}
+          {tab === "forgot" && (
+            <div className="text-center" style={{ marginTop: 12 }}>
+              <button onClick={() => { setTab("signin"); setMsg(null); }} className="pl-body pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, fontSize: 13 }}>← Back to sign in</button>
+            </div>
+          )}
+        </Card>
+        <div className="text-center pl-body" style={{ color: "#ffffff88", fontSize: 12, marginTop: 16 }}>New students create an account. Instructor access is granted by the administrator.</div>
+      </div>
+    </div>
+  );
 }
 
-export async function markMessageRead(id) {
-  const { error } = await supabase.from("pl_messages")
-    .update({ read_at: new Date().toISOString() }).eq("id", id).is("read_at", null);
-  if (error) throw error;
+/* ============================================================ INSTRUCTOR */
+function ResetPassword({ onDone }) {
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  async function submit() {
+    setMsg(null);
+    if (pw.length < 6) { setMsg({ ok: false, text: "Password must be at least 6 characters." }); return; }
+    if (pw !== pw2) { setMsg({ ok: false, text: "The two passwords don't match." }); return; }
+    setBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: pw });
+      if (error) throw error;
+      setMsg({ ok: true, text: "Password updated. Signing you out so you can sign in with your new password…" });
+      setTimeout(async () => { try { await supabase.auth.signOut(); } catch (e) {} onDone(); }, 1600);
+    } catch (e) { setMsg({ ok: false, text: e.message || "Couldn't update password." }); setBusy(false); }
+  }
+  return (
+    <div className="flex items-center justify-center" style={{ minHeight: "100vh", padding: 20, background: `radial-gradient(1200px 600px at 50% -10%, ${C.ink2} 0%, ${C.ink} 55%, #0d1528 100%)` }}>
+      <div className="pl-fade w-full" style={{ maxWidth: 430 }}>
+        <div className="text-center" style={{ marginBottom: 24 }}>
+          <div className="pl-display" style={{ color: "#fff", fontSize: 30, fontWeight: 600 }}>{BRAND.name}</div>
+          <div className="pl-body" style={{ color: C.goldSoft, fontSize: 13, letterSpacing: ".22em", textTransform: "uppercase", marginTop: 4 }}>Set a new password</div>
+        </div>
+        <Card style={{ padding: 26 }}>
+          <Field label="New password"><input style={inputStyle} type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="••••••••" /></Field>
+          <Field label="Confirm new password"><input style={inputStyle} type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} placeholder="••••••••" onKeyDown={(e) => e.key === "Enter" && submit()} /></Field>
+          {msg && (
+            <div className="pl-body" style={{ fontSize: 13, padding: "9px 12px", borderRadius: 8, marginBottom: 12, background: msg.ok ? C.greenSoft : C.roseSoft, color: msg.ok ? C.green : C.rose }}>{msg.text}</div>
+          )}
+          <Btn full kind="gold" onClick={submit} disabled={busy}>{busy ? "Please wait…" : "Update password"}</Btn>
+        </Card>
+      </div>
+    </div>
+  );
 }
 
-/* ═══════════════ FORMS (ONBOARDING HUB) ══════════════════════════ */
+function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, certEnrollments }) {
+  const isCertStudent = (id) => (certEnrollments || []).some((e) => e.student_id === id);
+  const degreeStudents = (students || []).filter((s) => !isCertStudent(s.id));
+  const [studentId, setStudentId] = useState("");
+  const [program, setProgram] = useState("associate");
+  const [manual, setManual] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedNote, setSavedNote] = useState("");
+  const [batchSel, setBatchSel] = useState(() => new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [acadYear, setAcadYear] = useState("2026\u20132027");
 
-export async function listForms() {
-  const { data, error } = await supabase.from("pl_forms")
-    .select("*").order("sort_order").order("created_at");
-  if (error) throw error;
-  return data || [];
-}
+  const student = students.find((s) => s.id === studentId);
+  const norm = (c) => String(c || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
 
-export async function saveForm(form) {
-  const { data: { user } } = await supabase.auth.getUser();
-  let file_path = form.file_path || null;
-  if (form._file) file_path = await uploadFile("homework-submissions", form._file);
-  const rec = {
-    title: form.title, description: form.description || null,
-    type: form.type || "upload", file_path,
-    program: form.program || "all", required: form.required !== false,
-    sort_order: Number(form.sort_order) || 0, active: form.active !== false,
+  const progCourses = (courses || []).filter((c) => c.program === program && !c.is_certificate);
+  const layout = TRANSCRIPT_LAYOUT[program];
+  let semesters;
+  if (layout) {
+    const used = new Set();
+    semesters = layout.map((b) => {
+      const list = b.codes.map((cd) => progCourses.find((c) => norm(c.code) === norm(cd))).filter(Boolean);
+      list.forEach((c) => used.add(c.id));
+      return { sem: b.sem, term: b.term || [], not: b.not || [], courses: list, exams: true };
+    });
+    const other = progCourses.filter((c) => !used.has(c.id));
+    if (other.length) semesters.push({ sem: "Other Courses", term: [], not: [], courses: other, exams: false });
+  } else {
+    semesters = [{ sem: "Program Courses", term: [], not: [], courses: progCourses, exams: false }];
+  }
+
+  useEffect(() => {
+    if (!studentId) { setManual({}); return; }
+    let alive = true; setLoading(true);
+    db.listTranscriptGrades(studentId)
+      .then((rows) => {
+        if (!alive) return;
+        const m = {};
+        (rows || []).filter((r) => r.program === program).forEach((r) => { m[r.line_key] = r.score == null ? "" : String(r.score); });
+        setManual(m);
+      })
+      .catch((e) => window.alert(e.message))
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [studentId, program]);
+
+  function setScore(key, v) { setManual((p) => ({ ...p, [key]: v })); setSavedNote(""); }
+
+  function autoScore(courseId) {
+    if (!studentId || !courseId) return null;
+    const pcts = [];
+    (subs || []).filter((s) => s.student_id === studentId && s.status === "graded" && s.max_score)
+      .forEach((s) => { const t = (tests || []).find((x) => x.id === s.test_id); if (t && t.course_id === courseId) pcts.push((s.score / s.max_score) * 100); });
+    (hwSubs || []).filter((s) => s.student_id === studentId && s.status === "graded" && s.max_points)
+      .forEach((s) => { const h = (homework || []).find((x) => x.id === s.homework_id); if (h && h.course_id === courseId) pcts.push((s.score / s.max_points) * 100); });
+    if (!pcts.length) return null;
+    return Math.round((pcts.reduce((a, b) => a + b, 0) / pcts.length) * 100) / 100;
+  }
+  function examAuto(sem, type) {
+    if (!studentId) return null;
+    const kw = type === "mid" ? "mid" : "final";
+    const cands = (tests || []).filter((t) => {
+      if (t.program !== program) return false;
+      const title = (t.title || "").toLowerCase();
+      if (!title.includes(kw)) return false;
+      if ((sem.term || []).some((x) => !title.includes(x))) return false;
+      if ((sem.not || []).some((x) => title.includes(x))) return false;
+      return true;
+    });
+    for (const t of cands) {
+      const s = (subs || []).find((x) => x.test_id === t.id && x.student_id === studentId && x.status === "graded" && x.max_score);
+      if (s) return Math.round((s.score / s.max_score) * 100 * 100) / 100;
+    }
+    return null;
+  }
+
+  function effCourse(courseId) { const m = manual[courseId]; if (m !== undefined && m !== "" && m != null && !isNaN(Number(m))) return Number(m); return autoScore(courseId); }
+  function effExam(sem, si, type) { const m = manual[`EXAM-${type}-${si}`]; if (m !== undefined && m !== "" && m != null && !isNaN(Number(m))) return Number(m); return examAuto(sem, type); }
+
+  function semStats(sem, si) {
+    let hours = 0; const sc = [];
+    sem.courses.forEach((c) => { hours += Number(c.credit_hours) || 0; const e = effCourse(c.id); if (e != null) sc.push(e); });
+    if (sem.exams) { const em = effExam(sem, si, "mid"); if (em != null) sc.push(em); const ef = effExam(sem, si, "final"); if (ef != null) sc.push(ef); }
+    return { hours, avg: sc.length ? sc.reduce((a, b) => a + b, 0) / sc.length : null };
+  }
+  const cumHours = semesters.reduce((a, s, si) => a + semStats(s, si).hours, 0);
+
+  async function save() {
+    if (!studentId) return;
+    setSaving(true);
+    try {
+      const rows = [];
+      semesters.forEach((sem, si) => {
+        sem.courses.forEach((c) => rows.push({ line_key: c.id, score: manual[c.id] ?? "" }));
+        if (sem.exams) {
+          rows.push({ line_key: `EXAM-mid-${si}`, score: manual[`EXAM-mid-${si}`] ?? "" });
+          rows.push({ line_key: `EXAM-final-${si}`, score: manual[`EXAM-final-${si}`] ?? "" });
+        }
+      });
+      await db.saveTranscriptGrades(studentId, program, rows);
+      setSavedNote("Saved.");
+    } catch (e) { window.alert(e.message); }
+    setSaving(false);
+  }
+
+  function openHtml(html) {
+    try {
+      const w = window.open("", "_blank");
+      if (w && w.document) { w.document.write(html); w.document.close(); return; }
+    } catch (e) {}
+    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    window.open(url, "_blank");
+  }
+
+  function autoScoreFor(sid, courseId) {
+    if (!sid || !courseId) return null;
+    const pcts = [];
+    (subs || []).filter((s) => s.student_id === sid && s.status === "graded" && s.max_score)
+      .forEach((s) => { const t = (tests || []).find((x) => x.id === s.test_id); if (t && t.course_id === courseId) pcts.push((s.score / s.max_score) * 100); });
+    (hwSubs || []).filter((s) => s.student_id === sid && s.status === "graded" && s.max_points)
+      .forEach((s) => { const h = (homework || []).find((x) => x.id === s.homework_id); if (h && h.course_id === courseId) pcts.push((s.score / s.max_points) * 100); });
+    if (!pcts.length) return null;
+    return Math.round((pcts.reduce((a, b) => a + b, 0) / pcts.length) * 100) / 100;
+  }
+  function examAutoFor(sid, sem, type) {
+    if (!sid) return null;
+    const kw = type === "mid" ? "mid" : "final";
+    const cands = (tests || []).filter((t) => {
+      if (t.program !== program) return false;
+      const title = (t.title || "").toLowerCase();
+      if (!title.includes(kw)) return false;
+      if ((sem.term || []).some((x) => !title.includes(x))) return false;
+      if ((sem.not || []).some((x) => title.includes(x))) return false;
+      return true;
+    });
+    for (const t of cands) {
+      const s = (subs || []).find((x) => x.test_id === t.id && x.student_id === sid && x.status === "graded" && x.max_score);
+      if (s) return Math.round((s.score / s.max_score) * 100 * 100) / 100;
+    }
+    return null;
+  }
+  function recordBody(stu, mmap) {
+    const progLabel = TRANSCRIPT_PROGRAMS.find((p) => p.key === program)?.label || "";
+    const num = (v) => (v !== undefined && v !== "" && v != null && !isNaN(Number(v)));
+    const effC = (id) => (num(mmap[id]) ? Number(mmap[id]) : autoScoreFor(stu.id, id));
+    const effE = (sem, si, type) => { const k = `EXAM-${type}-${si}`; return num(mmap[k]) ? Number(mmap[k]) : examAutoFor(stu.id, sem, type); };
+    const stat = (sem, si) => { let hours = 0; const sc = []; sem.courses.forEach((c) => { hours += Number(c.credit_hours) || 0; const e = effC(c.id); if (e != null) sc.push(e); }); if (sem.exams) { const em = effE(sem, si, "mid"); if (em != null) sc.push(em); const ef = effE(sem, si, "final"); if (ef != null) sc.push(ef); } return { hours, avg: sc.length ? sc.reduce((a, b) => a + b, 0) / sc.length : null }; };
+    const examRow = (label, e) => `<tr><td></td><td>${label}</td><td class="c"></td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`;
+    const semBlock = semesters.map((sem, si) => {
+      const st = stat(sem, si);
+      const rows = sem.courses.map((c) => { const e = effC(c.id); return `<tr><td>${c.code || ""}</td><td>${(c.title || "").replace(/</g, "&lt;")}</td><td class="c">${c.credit_hours ?? ""}</td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`; }).join("");
+      const exams = sem.exams ? examRow("Mid-Term Exam", effE(sem, si, "mid")) + examRow("Final Exam", effE(sem, si, "final")) : "";
+      return `<div class="semt">${sem.sem}</div><table><thead><tr><th>Code</th><th>Course</th><th class="c">Cr. Hrs</th><th class="c">Grade</th><th class="c">Alpha</th></tr></thead><tbody>${rows}${exams}<tr class="tot"><td></td><td>Semester Totals</td><td class="c">${st.hours}</td><td class="c">${st.avg != null ? st.avg.toFixed(2) : ""}</td><td class="c">${gradeLetter(st.avg)}</td></tr></tbody></table>`;
+    }).join("");
+    const cum = semesters.reduce((a, s, si) => a + stat(s, si).hours, 0);
+    return `<div class="rec"><div class="hdr"><img class="logo" src="${SCHOOL_LOGO}" alt="" /><h1>${SCHOOL.name}</h1><div class="sub">${SCHOOL.head}</div><div class="sub">${SCHOOL.addr}</div><div class="sub">${SCHOOL.phone} &bull; ${SCHOOL.fax}</div></div>
+      <div class="title">OFFICIAL ACADEMIC RECORD</div>
+      <div class="meta"><b>Name of Student:</b> ${stu.full_name}</div>
+      <div class="meta"><b>Course of Study:</b> ${progLabel}</div>
+      <div class="meta"><b>Academic Year:</b> ${acadYear}</div>
+      <div class="meta"><b>Date Issued:</b> ${new Date().toLocaleDateString()}</div>
+      ${semBlock}
+      <table style="margin-top:8px"><tbody><tr class="tot"><td></td><td>Total Credit Hours Completed</td><td class="c">${cum}</td><td class="c"></td><td class="c"></td></tr></tbody></table>
+      <div class="foot">${SCHOOL.name} &bull; Official Academic Record</div></div>`;
+  }
+  function pageWrap(title, inner) {
+    return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
+      <style>*{box-sizing:border-box}body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;margin:0;padding:0}
+      .rec{max-width:820px;margin:0 auto;padding:28px;page-break-after:always}.rec:last-child{page-break-after:auto}
+      .hdr{position:relative;text-align:center;border-bottom:2px solid #1a1a1a;padding-bottom:10px;margin-bottom:14px}.hdr h1{font-size:20px;margin:0}.logo{position:absolute;top:0;left:0;width:74px;height:auto}.hdr .sub{font-size:12px;color:#333;margin-top:3px}
+      .title{text-align:center;font-weight:bold;letter-spacing:.08em;margin:14px 0 8px}.meta{font-size:13px;margin:2px 0}.meta b{display:inline-block;min-width:150px}
+      .semt{font-weight:bold;margin:16px 0 4px;background:#f0ece2;padding:4px 8px}table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:4px}
+      th,td{border:1px solid #cfcabb;padding:4px 6px;text-align:left}th{background:#faf8f2}td.c,th.c{text-align:center}
+      tr.tot td{font-weight:bold;background:#f6f3ea}
+      .foot{margin-top:18px;text-align:center;font-size:11px;color:#555;border-top:1px solid #ccc;padding-top:8px}@media print{.rec{padding:0}}</style></head>
+      <body onload="window.print()">${inner}</body></html>`;
+  }
+  function generate() {
+    if (!student) { window.alert("Choose a student first."); return; }
+    openHtml(pageWrap(`Official Academic Record — ${student.full_name}`, recordBody(student, manual)));
+  }
+  async function generateBatch() {
+    const ids = [...batchSel];
+    if (!ids.length) { window.alert("Select at least one student."); return; }
+    setBatchBusy(true);
+    try {
+      const parts = [];
+      for (const id of ids) {
+        const stu = students.find((s) => s.id === id);
+        if (!stu) continue;
+        const rows = await db.listTranscriptGrades(id);
+        const mmap = {};
+        (rows || []).filter((r) => r.program === program).forEach((r) => { mmap[r.line_key] = r.score == null ? "" : String(r.score); });
+        parts.push(recordBody(stu, mmap));
+      }
+      openHtml(pageWrap(`Transcripts — ${TRANSCRIPT_PROGRAMS.find((p) => p.key === program)?.label || ""}`, parts.join("")));
+    } catch (e) { window.alert(e.message); }
+    setBatchBusy(false);
+  }
+
+  const examInputRow = (sem, si, type, label) => {
+    const auto = examAuto(sem, type);
+    const key = `EXAM-${type}-${si}`;
+    const m = manual[key];
+    const hasManual = m !== undefined && m !== "" && m != null;
+    const eff = effExam(sem, si, type);
+    const lt = gradeLetter(eff);
+    return (
+      <tr key={key} style={{ borderTop: `1px solid ${C.line}`, background: C.paper2 }}>
+        <td style={{ padding: "6px 8px", color: C.muted, fontSize: 12.5 }}></td>
+        <td style={{ padding: "6px 8px", color: C.ink, fontStyle: "italic" }}>{label}</td>
+        <td style={{ padding: "6px 8px", textAlign: "center", color: C.muted }}>—</td>
+        <td style={{ padding: "4px 8px", textAlign: "center" }}>
+          <input value={hasManual ? m : ""} onChange={(e) => setScore(key, e.target.value)} inputMode="decimal" placeholder={auto != null ? `${auto}` : "—"} style={{ ...inputStyle, width: 96, textAlign: "center", padding: "5px 6px" }} />
+        </td>
+        <td style={{ padding: "6px 8px", textAlign: "center", fontWeight: 700, color: lt === "F" ? C.rose : lt ? C.green : C.muted }}>{lt || "—"}</td>
+      </tr>
+    );
   };
-  if (form.id) {
-    const { error } = await supabase.from("pl_forms").update(rec).eq("id", form.id);
-    if (error) throw error;
-  } else {
-    const { error } = await supabase.from("pl_forms").insert({ ...rec, created_by: user.id });
-    if (error) throw error;
+
+  return (
+    <>
+      <PageHead title="Transcripts" sub="Scores auto-fill from the gradebook where courses are graded; type to override. Mid-Term and Final exams appear per semester. Grades, averages, and hours compute automatically." />
+      <Card style={{ marginBottom: 16 }}>
+        <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+          <Field label="Student"><select style={{ ...inputStyle, minWidth: 220 }} value={studentId} onChange={(e) => setStudentId(e.target.value)}>
+            <option value="">— choose student —</option>
+            {degreeStudents.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+          </select></Field>
+          <Field label="Program"><select style={{ ...inputStyle, minWidth: 240 }} value={program} onChange={(e) => setProgram(e.target.value)}>
+            {TRANSCRIPT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select></Field>
+          <Field label="Academic Year"><input style={{ ...inputStyle, width: 130 }} value={acadYear} onChange={(e) => setAcadYear(e.target.value)} placeholder="2026–2027" /></Field>
+          <div style={{ marginLeft: "auto" }} className="flex gap-2">
+            <Btn kind="ghost" icon={Check} onClick={save} disabled={!studentId || saving}>{saving ? "Saving…" : "Save overrides"}</Btn>
+            <Btn icon={ScrollText} onClick={generate} disabled={!studentId}>Generate record</Btn>
+          </div>
+        </div>
+        {savedNote && <div className="pl-body" style={{ fontSize: 13, color: C.green, marginTop: 6 }}>{savedNote}</div>}
+      </Card>
+
+      <Card style={{ marginBottom: 16 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ minWidth: 0 }}>
+            <div className="pl-body" style={{ fontWeight: 700, color: C.ink }}>Batch export for main campus</div>
+            <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>Select students to export their {TRANSCRIPT_PROGRAMS.find((p) => p.key === program)?.label} records as one document — each on its own page — to save as PDF and email.</div>
+          </div>
+          <div className="flex gap-2" style={{ flexWrap: "wrap" }}>
+            <Btn small kind="ghost" onClick={() => setBatchSel(new Set(degreeStudents.map((s) => s.id)))}>Select all</Btn>
+            <Btn small kind="ghost" onClick={() => setBatchSel(new Set())}>Clear</Btn>
+            <Btn small icon={ScrollText} onClick={generateBatch} disabled={batchBusy || batchSel.size === 0}>{batchBusy ? "Preparing…" : `Download ${batchSel.size || ""} record${batchSel.size === 1 ? "" : "s"}`.replace("  ", " ")}</Btn>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 4, maxHeight: 200, overflowY: "auto", border: `1px solid ${C.line}`, borderRadius: 8, padding: 10 }}>
+          {degreeStudents.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => (
+            <label key={s.id} className="flex items-center gap-2" style={{ cursor: "pointer", padding: "3px 2px" }}>
+              <input type="checkbox" checked={batchSel.has(s.id)} onChange={() => setBatchSel((prev) => { const n = new Set(prev); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; })} />
+              <span className="pl-body" style={{ fontSize: 13.5, color: C.ink }}>{s.full_name}</span>
+            </label>
+          ))}
+        </div>
+      </Card>
+
+      {!studentId ? <Card><span className="pl-body" style={{ color: C.muted }}>Choose a student to build their transcript.</span></Card> :
+        loading ? <Card><span className="pl-body" style={{ color: C.muted }}>Loading…</span></Card> :
+        progCourses.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No courses found for this program in your catalog.</span></Card> : (
+        <>
+          {semesters.map((sem, si) => {
+            const st = semStats(sem, si);
+            return (
+              <Card key={si} style={{ marginBottom: 16 }}>
+                <h3 className="pl-display" style={{ fontSize: 16, color: C.ink, margin: "0 0 10px" }}>{sem.sem}</h3>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+                    <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12, textTransform: "uppercase", letterSpacing: ".05em" }}>
+                      <th style={{ padding: "5px 8px", width: 80 }}>Code</th>
+                      <th style={{ padding: "5px 8px" }}>Course</th>
+                      <th style={{ padding: "5px 8px", textAlign: "center", width: 70 }}>Cr. Hrs</th>
+                      <th style={{ padding: "5px 8px", textAlign: "center", width: 110 }}>Score</th>
+                      <th style={{ padding: "5px 8px", textAlign: "center", width: 60 }}>Grade</th>
+                    </tr></thead>
+                    <tbody>
+                      {sem.courses.map((c) => {
+                        const auto = autoScore(c.id);
+                        const m = manual[c.id];
+                        const hasManual = m !== undefined && m !== "" && m != null;
+                        const eff = effCourse(c.id);
+                        const lt = gradeLetter(eff);
+                        return (
+                          <tr key={c.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                            <td style={{ padding: "6px 8px", color: C.muted, fontSize: 12.5 }}>{c.code || ""}</td>
+                            <td style={{ padding: "6px 8px", color: C.ink }}>{c.title}</td>
+                            <td style={{ padding: "6px 8px", textAlign: "center", color: C.muted }}>{c.credit_hours ?? "—"}</td>
+                            <td style={{ padding: "4px 8px", textAlign: "center" }}>
+                              <input value={hasManual ? m : ""} onChange={(e) => setScore(c.id, e.target.value)} inputMode="decimal" placeholder={auto != null ? `${auto}` : "—"} style={{ ...inputStyle, width: 96, textAlign: "center", padding: "5px 6px" }} />
+                            </td>
+                            <td style={{ padding: "6px 8px", textAlign: "center", fontWeight: 700, color: lt === "F" ? C.rose : lt ? C.green : C.muted }}>{lt || "—"}</td>
+                          </tr>
+                        );
+                      })}
+                      {sem.exams && examInputRow(sem, si, "mid", "Mid-Term Exam")}
+                      {sem.exams && examInputRow(sem, si, "final", "Final Exam")}
+                      <tr style={{ borderTop: `2px solid ${C.line}` }}>
+                        <td></td>
+                        <td style={{ padding: "8px", fontWeight: 700 }}>Semester Totals</td>
+                        <td style={{ padding: "8px", textAlign: "center", fontWeight: 700 }}>{st.hours}</td>
+                        <td style={{ padding: "8px", textAlign: "center", fontWeight: 700 }}>{st.avg != null ? st.avg.toFixed(2) : "—"}</td>
+                        <td style={{ padding: "8px", textAlign: "center", fontWeight: 700, color: C.green }}>{gradeLetter(st.avg) || "—"}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            );
+          })}
+          <Card>
+            <div className="flex items-center justify-between">
+              <span className="pl-body" style={{ fontWeight: 700, color: C.ink }}>Total Credit Hours Completed</span>
+              <span className="pl-display" style={{ fontSize: 22, fontWeight: 700, color: C.ink }}>{cumHours}</span>
+            </div>
+          </Card>
+        </>
+      )}
+    </>
+  );
+}
+function InstructorPortal({ profile, onLogout }) {
+  const [active, setActive] = useState("dash");
+  const [books, setBooks] = useState([]);
+  const [tests, setTests] = useState([]);
+  const [subs, setSubs] = useState([]);
+  const [profiles, setProfiles] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [syllabi, setSyllabi] = useState([]);
+  const [homework, setHomework] = useState([]);
+  const [hwSubs, setHwSubs] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [attendance, setAttendance] = useState([]);
+  const [certificates, setCertificates] = useState([]);
+  const [ledger, setLedger] = useState([]);
+  const [assignments, setAssignments] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [certEnrollments, setCertEnrollments] = useState([]);
+  const [tuition, setTuition] = useState([]);
+  const [forms, setForms] = useState([]);
+  const [formSubs, setFormSubs] = useState([]);
+  const [surveys, setSurveys] = useState([]);
+  const [surveyResps, setSurveyResps] = useState([]);
+  const [resources, setResources] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    const safe = (p) => p.then((v) => v).catch((e) => { console.error(e); return undefined; });
+    try {
+      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen, tu, fr, fs, sv, sr, rs, an] = await Promise.all([
+        safe(db.listBooks()), safe(db.listTests()), safe(db.listSubmissions()), safe(db.listProfiles()), safe(db.listMessages()),
+        safe(db.listSyllabi()), safe(db.listHomework()), safe(db.listHomeworkSubmissions()), safe(db.listCourses()), safe(db.listAttendance()), safe(db.listCertificates()), safe(db.listLedger()), safe(db.listInstructorCourses()), safe(db.listSessions()),
+        safe(db.listCertEnrollments()), safe(db.listTuition()),
+        safe(db.listForms()), safe(db.listFormSubmissions()), safe(db.listSurveys()), safe(db.listSurveyResponses()), safe(db.listResources()), safe(db.listAnnouncements()),
+      ]);
+      if (b) setBooks(b); if (t) setTests(t); if (s) setSubs(s); if (p) setProfiles(p); if (m) setMessages(m);
+      if (sy) setSyllabi(sy); if (hw) setHomework(hw); if (hs) setHwSubs(hs); if (co) setCourses(co); if (at) setAttendance(at); if (ce) setCertificates(ce); if (lg) setLedger(lg); if (ic) setAssignments(ic); if (se) setSessions(se);
+      if (cen) setCertEnrollments(cen); if (tu) setTuition(tu);
+      if (fr) setForms(fr); if (fs) setFormSubs(fs); if (sv) setSurveys(sv); if (sr) setSurveyResps(sr); if (rs) setResources(rs); if (an) setAnnouncements(an);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const students = profiles.filter((p) => p.role === "student");
+  const pending = subs.filter((s) => s.status !== "graded").length;
+  const pendingHw = hwSubs.filter((s) => s.status !== "graded").length;
+  // Access to the Certificate Library: admins, plus instructors assigned to at least one certificate class.
+  const teachesCert = profile.role === "admin" || (assignments || []).some((a) => a.instructor_id === profile.id && (courses.find((c) => c.id === a.course_id)?.is_certificate));
+  const teachesDegree = profile.role === "admin" || (assignments || []).some((a) => a.instructor_id === profile.id && !(courses.find((c) => c.id === a.course_id)?.is_certificate));
+
+  const fullNav = [
+    { key: "dash",        label: "Dashboard",   icon: LayoutDashboard, show: true },
+    { key: "courses",     label: "Courses",      icon: GraduationCap,   show: true },
+    { key: "library",     label: "Certificate Library", icon: Library,   show: FEATURES.library && teachesCert },
+    { key: "dlibrary",    label: "Degree Library", icon: Library,        show: FEATURES.library && teachesDegree },
+    { key: "syllabus",    label: "Syllabus",     icon: ScrollText,      show: FEATURES.syllabus },
+    { key: "tests",       label: "Tests",        icon: FileText,        show: FEATURES.tests },
+    { key: "homework",    label: "Homework",     icon: NotebookPen,     show: FEATURES.homework },
+    { key: "classes",     label: "Live Classes", icon: PlayCircle,      show: FEATURES.live_classes },
+    { key: "attendance",  label: "Attendance",   icon: CalendarDays,    show: FEATURES.attendance && profile.role === "admin" },
+    { key: "grading",     label: "Grading",      icon: ClipboardCheck,  show: FEATURES.grading },
+    { key: "reports",     label: "Reports",      icon: BarChart3,       show: FEATURES.reports && profile.role === "admin" },
+    { key: "gradebook",   label: "Gradebook",    icon: LayoutGrid,      show: FEATURES.gradebook },
+    { key: "transcripts", label: "Transcripts",   icon: ScrollText,      show: FEATURES.transcripts && profile.role === "admin" },
+    { key: "students",    label: "People",       icon: Users,           show: FEATURES.people },
+    { key: "billing",     label: "Billing",      icon: Receipt,         show: FEATURES.billing },
+    { key: "tuition",     label: "Tuition",      icon: GraduationCap,   show: FEATURES.tuition },
+    { key: "certificates",label: "Certificates", icon: Medal,           show: FEATURES.certificates },
+    { key: "certprograms",label: "Cert Classes", icon: Award,           show: FEATURES.cert_classes },
+    { key: "cehours",     label: "CE Hours",     icon: Clock,           show: FEATURES.ce_hours },
+    { key: "forms",       label: "Forms",        icon: FileCheck,       show: true },
+    { key: "surveys",     label: "Surveys",      icon: BarChart2,       show: true },
+    { key: "resources",   label: "Resources",    icon: BookOpen,        show: true },
+    { key: "announce",    label: "Announcements",icon: Sparkles,        show: true },
+    { key: "messages",    label: "Messages",     icon: Mail,            show: FEATURES.messages },
+  ].filter((n) => n.show);
+  // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
+  let nav = fullNav;
+  if (profile.role === "instructor") nav = fullNav.filter((n) => !["students", "billing", "tuition", "certificates", "certprograms"].includes(n.key));
+  else if (profile.role === "assistant") nav = fullNav.filter((n) => !["billing", "tuition", "certificates", "certprograms"].includes(n.key));
+
+  // For an Instructor, grading is limited to the courses they're assigned.
+  const myCourseSet = profile.role === "instructor"
+    ? new Set(assignments.filter((a) => a.instructor_id === profile.id).map((a) => a.course_id))
+    : null;
+  const gradeSubs = myCourseSet ? subs.filter((s) => myCourseSet.has((tests.find((t) => t.id === s.test_id) || {}).course_id)) : subs;
+  const scopedHomework = myCourseSet ? homework.filter((h) => myCourseSet.has(h.course_id)) : homework;
+  const scopedHwSubs = myCourseSet ? hwSubs.filter((s) => myCourseSet.has((homework.find((h) => h.id === s.homework_id) || {}).course_id)) : hwSubs;
+
+  return (
+    <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ grading: pending, homework: pendingHw }}>
+      {loading ? <Spinner /> : (
+        <>
+          {active === "dash" && <InstructorDash {...{ students, books, tests, subs, profiles, setActive }} />}
+          {active === "courses" && <CoursesManager courses={courses.filter((c) => !c.is_certificate)} refresh={refresh} />}
+          {active === "library" && teachesCert && <LibraryManager books={books.filter((b) => b.program === "certificate" || b.program === "all")} courses={courses} refresh={refresh} profile={profile} title="Certificate Library" />}
+          {active === "dlibrary" && teachesDegree && <LibraryManager books={books.filter((b) => b.program !== "certificate")} courses={courses} refresh={refresh} profile={profile} title="Degree Library" />}
+          {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
+          {active === "tests" && <TestsManager tests={tests} books={books} courses={courses} refresh={refresh} />}
+          {active === "homework" && <HomeworkManager homework={scopedHomework} hwSubs={scopedHwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
+          {active === "classes" && <ScheduleManager sessions={sessions} courses={courses} students={students} certEnrollments={certEnrollments} profile={profile} refresh={refresh} />}
+          {active === "attendance" && profile.role === "admin" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} certEnrollments={certEnrollments} refresh={refresh} />}
+          {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} />}
+          {active === "reports" && profile.role === "admin" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
+          {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
+          {active === "transcripts" && FEATURES.transcripts && profile.role === "admin" && <TranscriptManager students={students} courses={courses} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} certEnrollments={certEnrollments} />}
+          {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
+          {active === "billing" && profile.role === "admin" && <BillingManager students={students} ledger={ledger} courses={courses} tuition={tuition} certEnrollments={certEnrollments} refresh={refresh} />}
+          {active === "tuition" && profile.role === "admin" && <TuitionManager tuition={tuition} refresh={refresh} />}
+          {active === "certificates" && profile.role === "admin" && <CertificatesManager students={students} courses={courses} certificates={certificates} refresh={refresh} />}
+          {active === "certprograms" && profile.role === "admin" && <CertClassesManager courses={courses} students={students} profiles={profiles} tests={tests} homework={homework} subs={subs} hwSubs={hwSubs} certificates={certificates} enrollments={certEnrollments} ledger={ledger} refresh={refresh} />}
+          {active === "cehours" && profile.role === "admin" && <CEHoursDashboard students={students} courses={courses} subs={subs} tests={tests} certificates={certificates} refresh={refresh} />}
+          {active === "forms" && <FormsManager forms={forms} formSubs={formSubs} profiles={profiles} refresh={refresh} />}
+          {active === "surveys" && <SurveyBuilder surveys={surveys} surveyResps={surveyResps} profiles={profiles} refresh={refresh} />}
+          {active === "resources" && <ResourcesManager resources={resources} refresh={refresh} />}
+          {active === "announce" && <AnnouncementsManager announcements={announcements} refresh={refresh} />}
+          {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
+        </>
+      )}
+    </Shell>
+  );
+}
+
+function InstructorDash({ students, books, tests, subs, profiles, setActive }) {
+  const pending = subs.filter((s) => s.status !== "graded");
+  const activeStudents = students.filter((s) => (s.status || "active") === "active");
+  const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
+  const titleOf = (id) => tests.find((t) => t.id === id)?.title || "Test";
+  return (
+    <>
+      <PageHead title="Dashboard" sub="Welcome back. Here is the state of your school." />
+      <div className="grid grid-cols-4 gap-4" style={{ marginBottom: 24 }}>
+        <Stat icon={Users} label="Active students" value={activeStudents.length} />
+        <Stat icon={BookOpen} label="Books in library" value={books.length} />
+        <Stat icon={FileText} label="Tests created" value={tests.length} />
+        <Stat icon={ClipboardCheck} label="Awaiting grading" value={pending.length} tone={C.gold} />
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <Card>
+          <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
+            <h3 className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.ink, margin: 0 }}>Needs your attention</h3>
+            <Btn small kind="ghost" onClick={() => setActive("grading")}>Open grading</Btn>
+          </div>
+          {pending.length === 0 ? <div className="pl-body" style={{ color: C.muted, fontSize: 14, padding: "10px 0" }}>All caught up.</div> :
+            pending.map((p) => (
+              <div key={p.id} className="flex items-center justify-between" style={{ padding: "11px 0", borderBottom: `1px solid ${C.line}` }}>
+                <div>
+                  <div className="pl-body" style={{ fontWeight: 600, fontSize: 14.5 }}>{nameOf(p.student_id)}</div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{titleOf(p.test_id)}</div>
+                </div>
+                <span className="pl-body inline-flex items-center gap-1" style={{ fontSize: 12, color: C.gold, fontWeight: 600 }}><Clock size={13} /> {fdate(p.submitted_at)}</span>
+              </div>
+            ))}
+        </Card>
+        <Card>
+          <h3 className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.ink, margin: "0 0 14px" }}>Recent library additions</h3>
+          {books.slice(0, 3).map((b) => (
+            <div key={b.id} className="flex items-center gap-3" style={{ padding: "11px 0", borderBottom: `1px solid ${C.line}` }}>
+              <div className="inline-flex items-center justify-center" style={{ width: 34, height: 44, borderRadius: 5, background: C.ink, color: C.goldSoft }}><BookOpen size={16} /></div>
+              <div style={{ flex: 1 }}>
+                <div className="pl-body" style={{ fontWeight: 600, fontSize: 14.5 }}>{b.title}</div>
+                <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{b.pages} pp • added {fdate(b.created_at)}</div>
+              </div>
+            </div>
+          ))}
+          {books.length === 0 && <div className="pl-body" style={{ color: C.muted }}>No books yet.</div>}
+        </Card>
+      </div>
+    </>
+  );
+}
+
+/* ---------- LIBRARY ---------- */
+function LibraryManager({ books, courses, refresh, profile, title = "Library" }) {
+  const emptyForm = { title: "", author: profile.full_name, description: "", pages: "", program: "all", category: "book", video_url: "", course_id: "", module: "", file: null };
+  const [mode, setMode] = useState("list");
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(emptyForm);
+  const [busy, setBusy] = useState(false);
+  const [sel, setSel] = useState(() => new Set());
+  const [filter, setFilter] = useState("__all__");
+  const [bulkCat, setBulkCat] = useState("");
+
+  function startCreate() { setEditingId(null); setForm(emptyForm); setMode("create"); }
+  function startEdit(b) {
+    setEditingId(b.id);
+    setForm({ title: b.title || "", author: b.author || profile.full_name, description: b.description || "", pages: b.pages || "", program: b.program || "all", category: b.category || "book", video_url: b.video_url || "", course_id: b.course_id || "", module: b.module || "", file: null });
+    setMode("create");
   }
+
+  async function save() {
+    if (!form.title.trim()) return;
+    setBusy(true);
+    try {
+      if (editingId) await db.updateBook(editingId, form); else await db.createBook(form);
+      await refresh(); setForm(emptyForm); setEditingId(null); setMode("list");
+    } catch (e) { window.alert(e.message || "Save failed"); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this book?")) return;
+    try { await db.deleteBook(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  function toggleSel(id) { setSel((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; }); }
+  async function applyBulk() {
+    if (!bulkCat || sel.size === 0) return;
+    setBusy(true);
+    try { for (const id of sel) await db.updateBook(id, { category: bulkCat }); await refresh(); setSel(new Set()); setBulkCat(""); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  if (mode === "create") {
+    return (
+      <>
+        <PageHead title={editingId ? "Edit Book" : "Add a Book"} sub={editingId ? "Update this item's details or category." : "Create a title and upload its PDF."} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => { setEditingId(null); setForm(emptyForm); setMode("list"); }}>Back</Btn>} />
+        <Card style={{ maxWidth: 640 }}>
+          <Field label="Title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Foundations of Biblical Theology" /></Field>
+          <Field label="Author"><input style={inputStyle} value={form.author} onChange={(e) => setForm({ ...form, author: e.target.value })} /></Field>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 90 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+          <Field label="Category"><select style={inputStyle} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>{CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}</select></Field>
+          <Field label="Program / level"><ProgramSelect value={form.program} onChange={(v) => setForm({ ...form, program: v })} /></Field>
+          <Field label="Video link — YouTube, Vimeo, etc. (optional)"><input style={inputStyle} value={form.video_url} onChange={(e) => setForm({ ...form, video_url: e.target.value })} placeholder="https://youtu.be/…" /></Field>
+          <CourseFields courses={courses} courseId={form.course_id} module={form.module} onCourse={(v) => { const c = courses.find((x) => x.id === v); setForm({ ...form, course_id: v, program: c && c.program ? c.program : form.program }); }} onModule={(v) => setForm({ ...form, module: v })} />
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Pages"><input style={inputStyle} type="number" value={form.pages} onChange={(e) => setForm({ ...form, pages: e.target.value })} /></Field>
+            <Field label={editingId ? "Replace file (optional)" : "PDF or video file (optional)"}>
+              <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
+                <Upload size={16} color={C.muted} />
+                <span className="pl-body" style={{ fontSize: 14, color: form.file ? C.text : C.muted }}>{form.file ? form.file.name : "Choose a file…"}</span>
+                <input type="file" accept="application/pdf,video/*,audio/*" style={{ display: "none" }} onChange={(e) => setForm({ ...form, file: e.target.files[0] })} />
+              </label>
+            </Field>
+          </div>
+          <div className="flex gap-2" style={{ marginTop: 8 }}>
+            <Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : editingId ? "Save changes" : "Publish to library"}</Btn>
+            <Btn kind="ghost" onClick={() => { setEditingId(null); setForm(emptyForm); setMode("list"); }}>Cancel</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  const shown = books.filter((b) => filter === "__all__" || (b.category || "book") === filter);
+  const groups = CATEGORIES.map((c) => ({ ...c, items: shown.filter((b) => (b.category || "book") === c.key) })).filter((g) => g.items.length > 0);
+
+  return (
+    <>
+      <PageHead title={title} sub="Books available to your students, organized by category." action={<Btn icon={Plus} onClick={startCreate}>Add book</Btn>} />
+      {books.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No books yet — add your first.</span></Card> : (
+        <>
+          <Card style={{ marginBottom: 14 }}>
+            <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+              <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Show category</span>
+              <select style={{ ...inputStyle, maxWidth: 220 }} value={filter} onChange={(e) => setFilter(e.target.value)}>
+                <option value="__all__">All categories</option>
+                {CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+              <span className="pl-body" style={{ marginLeft: "auto", fontSize: 13, color: C.muted }}>{books.length} books</span>
+            </div>
+          </Card>
+
+          {sel.size > 0 && (
+            <Card style={{ marginBottom: 14, background: C.paper2 }}>
+              <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+                <span className="pl-body" style={{ fontWeight: 700, color: C.ink }}>{sel.size} selected</span>
+                <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Move to category</span>
+                <select style={{ ...inputStyle, maxWidth: 200 }} value={bulkCat} onChange={(e) => setBulkCat(e.target.value)}>
+                  <option value="">— choose —</option>
+                  {CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                </select>
+                <Btn small icon={Check} onClick={applyBulk} disabled={!bulkCat || busy}>{busy ? "Moving…" : "Apply"}</Btn>
+                <Btn small kind="ghost" onClick={() => setSel(new Set())}>Clear</Btn>
+              </div>
+            </Card>
+          )}
+
+          {groups.map((g) => (
+            <div key={g.key} style={{ marginBottom: 22 }}>
+              <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
+                <h3 className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink, margin: 0 }}>{g.label}</h3>
+                <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>· {g.items.length}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                {g.items.map((b) => {
+                  const checked = sel.has(b.id);
+                  return (
+                    <Card key={b.id} style={checked ? { outline: `2px solid ${C.gold}` } : undefined}>
+                      <div className="flex items-center justify-center" style={{ position: "relative", height: 110, borderRadius: 9, background: `linear-gradient(150deg, ${C.ink}, ${C.ink2})`, marginBottom: 14 }}>
+                        <label style={{ position: "absolute", top: 8, left: 8, cursor: "pointer", display: "flex" }} title="Select">
+                          <input type="checkbox" checked={checked} onChange={() => toggleSel(b.id)} style={{ width: 18, height: 18, cursor: "pointer" }} />
+                        </label>
+                        <BookOpen size={34} color={C.goldSoft} />
+                      </div>
+                      <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0, lineHeight: 1.2 }}>{b.title}</h3>
+                      <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{b.author} • {b.pages} pp • {programLabel(b.program)}</div>
+                      <p className="pl-body" style={{ fontSize: 13.5, color: C.text, marginTop: 8, lineHeight: 1.5 }}>{b.description}</p>
+                      <div className="flex justify-between items-center" style={{ marginTop: 14 }}>
+                        <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>{b.video_url ? "Video link" : b.file_path ? "File attached" : "No media"}</span>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => startEdit(b)} title="Edit" className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.muted }}><PencilLine size={16} /></button>
+                          <button onClick={() => remove(b.id)} title="Delete" className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+    </>
+  );
 }
 
-export async function deleteForm(id) {
-  const { error } = await supabase.from("pl_forms").delete().eq("id", id);
-  if (error) throw error;
-}
+/* ---------- TESTS ---------- */
+function TestsManager({ tests, books, courses, refresh }) {
+  const [mode, setMode] = useState("list");
+  const [draft, setDraft] = useState(null);
+  const [qs, setQs] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [csvNote, setCsvNote] = useState("");
 
-export async function listFormSubmissions() {
-  const { data, error } = await supabase.from("pl_form_submissions")
-    .select("*").order("submitted_at", { ascending: false });
-  if (error) throw error;
-  return data || [];
-}
+  async function importTestsCsv(file) {
+    if (!file) return;
+    setCsvNote("Reading file…");
+    try {
+      const rows = parseCSV(await file.text());
+      if (rows.length < 2) { setCsvNote("That file has no rows under the header."); return; }
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const col = (n) => header.indexOf(n);
+      const iCourse = col("course_code"), iTitle = col("test_title"), iType = col("type"), iPts = col("points"), iQ = col("question"), iAns = col("correct_answer"), iOpts = col("options");
+      if (iCourse < 0 || iTitle < 0 || iQ < 0) { setCsvNote("CSV needs course_code, test_title, and question columns."); return; }
+      const groups = new Map(); const order = [];
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r]; if (!row || row.every((c) => !(c || "").trim())) continue;
+        const code = (row[iCourse] || "").trim(), title = (row[iTitle] || "").trim(), q = (row[iQ] || "").trim();
+        if (!code || !title || !q) continue;
+        const key = code + "||" + title;
+        if (!groups.has(key)) { groups.set(key, { code, title, questions: [] }); order.push(key); }
+        let type = iType >= 0 ? (row[iType] || "").trim().toLowerCase() : "short";
+        if (!QTYPE[type]) type = "short";
+        const pts = iPts >= 0 && (row[iPts] || "").trim() !== "" ? Number(row[iPts]) : 1;
+        const rawAns = iAns >= 0 ? (row[iAns] || "").trim() : "";
+        let opts = [], correct = "";
+        if (type === "tf") {
+          const a = rawAns.toLowerCase();
+          if (["true", "t", "yes", "1"].includes(a)) correct = "true";
+          else if (["false", "f", "no", "0"].includes(a)) correct = "false";
+        } else if (type === "mc") {
+          if (iOpts >= 0) opts = (row[iOpts] || "").split("|").map((s) => s.trim()).filter(Boolean);
+          if (rawAns) {
+            const byText = opts.findIndex((o) => o.toLowerCase() === rawAns.toLowerCase());
+            if (byText >= 0) correct = String(byText);
+            else if (/^[A-Za-z]$/.test(rawAns)) correct = String(rawAns.toUpperCase().charCodeAt(0) - 65);
+            else if (/^\d+$/.test(rawAns)) correct = String(Number(rawAns) - 1);
+          }
+        }
+        const qobj = { type, prompt: q, points: pts };
+        if (type === "mc" && opts.length) qobj.options = opts;
+        if (correct !== "") qobj.correct_answer = correct;
+        groups.get(key).questions.push(qobj);
+      }
+      const codeMap = new Map();
+      (courses || []).forEach((c) => { if (c.code) codeMap.set(c.code.trim().toLowerCase(), c); });
+      let made = 0; const skipped = [];
+      setCsvNote(`Importing ${order.length} test${order.length === 1 ? "" : "s"}…`);
+      for (const key of order) {
+        const g = groups.get(key); const c = codeMap.get(g.code.toLowerCase());
+        if (!c) { skipped.push(g.code); continue; }
+        await db.saveTest({ id: null, title: g.title, description: "", book_id: null, program: c.program || "all", course_id: c.id, module: "", status: "draft" }, g.questions);
+        made++;
+      }
+      await refresh();
+      const uniq = [...new Set(skipped)];
+      setCsvNote(`Created ${made} test${made === 1 ? "" : "s"} (as Draft).${uniq.length ? ` Skipped (course code not found — import courses first): ${uniq.join(", ")}.` : ""}`);
+    } catch (e) { setCsvNote("Couldn't import: " + e.message); }
+  }
 
-export async function submitForm({ form_id, file, notes }) {
-  const { data: { user } } = await supabase.auth.getUser();
-  let file_path = null;
-  if (file) file_path = await uploadFile("homework-submissions", file);
-  const { error } = await supabase.from("pl_form_submissions").insert({
-    form_id, student_id: user.id, file_path, notes: notes || null,
-  });
-  if (error) throw error;
-}
+  const toLocalInput = (iso) => { if (!iso) return ""; const d = new Date(iso); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
+  function newTest() { setDraft({ id: null, title: "", description: "", book_id: books[0]?.id || "", program: "all", course_id: "", module: "", status: "draft", available_from: "", available_until: "" }); setQs([]); setMode("build"); }
+  function editTest(t) { setDraft({ id: t.id, title: t.title, description: t.description, book_id: t.book_id || "", program: t.program || "all", course_id: t.course_id || "", module: t.module || "", status: t.status || "draft", available_from: toLocalInput(t.available_from), available_until: toLocalInput(t.available_until) }); setQs(t.questions.map((q) => ({ ...q }))); setMode("build"); }
 
-export async function reviewFormSubmission(id, status) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const { error } = await supabase.from("pl_form_submissions").update({
-    status, reviewed_at: new Date().toISOString(), reviewed_by: user.id,
-  }).eq("id", id);
-  if (error) throw error;
-}
-
-/* ═══════════════ SURVEYS ════════════════════════════════════════ */
-
-export async function listSurveys() {
-  const { data, error } = await supabase.from("pl_surveys")
-    .select("*, pl_survey_questions(*)")
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return (data || []).map((s) => ({
-    ...s,
-    questions: (s.pl_survey_questions || []).sort((a, b) => a.position - b.position),
-  }));
-}
-
-export async function saveSurvey(survey, questions) {
-  const { data: { user } } = await supabase.auth.getUser();
-  let surveyId = survey.id;
-  const rec = {
-    title: survey.title, description: survey.description || null,
-    category: survey.category || "general", program: survey.program || "all",
-    active: survey.active !== false,
+  const statusBadge = (t) => {
+    const now = Date.now();
+    let label, color, bg;
+    if ((t.status || "draft") !== "published") { label = "Draft"; color = C.muted; bg = C.paper2; }
+    else if (t.available_from && new Date(t.available_from).getTime() > now) { label = "Scheduled"; color = C.gold; bg = C.goldSoft; }
+    else if (t.available_until && new Date(t.available_until).getTime() < now) { label = "Closed"; color = C.rose; bg = C.roseSoft; }
+    else { label = "Live"; color = C.green; bg = C.greenSoft; }
+    return <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color, background: bg, padding: "2px 9px", borderRadius: 999, marginLeft: 8, verticalAlign: "middle" }}>{label}</span>;
   };
-  if (surveyId) {
-    const { error } = await supabase.from("pl_surveys").update(rec).eq("id", surveyId);
-    if (error) throw error;
-    await supabase.from("pl_survey_questions").delete().eq("survey_id", surveyId);
-  } else {
-    const { data, error } = await supabase.from("pl_surveys")
-      .insert({ ...rec, created_by: user.id }).select("id").single();
-    if (error) throw error;
-    surveyId = data.id;
+
+  function addQ(type) {
+    const base = { id: "tmp" + Date.now() + Math.random(), type, prompt: "", points: type === "essay" ? 20 : type === "short" ? 10 : 5 };
+    if (type === "mc") Object.assign(base, { options: ["", "", "", ""], correct_answer: "0" });
+    if (type === "tf") base.correct_answer = "true";
+    setQs([...qs, base]);
   }
-  if (questions && questions.length) {
-    const rows = questions.map((q, i) => ({
-      survey_id: surveyId, position: i,
-      type: q.type || "text", prompt: q.prompt,
-      options: q.options || [],
-    }));
-    const { error } = await supabase.from("pl_survey_questions").insert(rows);
-    if (error) throw error;
+  const upQ = (id, patch) => setQs(qs.map((q) => (q.id === id ? { ...q, ...patch } : q)));
+  const delQ = (id) => setQs(qs.filter((q) => q.id !== id));
+
+  async function save() {
+    if (!draft.title.trim() || qs.length === 0) { window.alert("Add a title and at least one question."); return; }
+    setBusy(true);
+    try {
+      const payload = { ...draft,
+        available_from: draft.available_from ? new Date(draft.available_from).toISOString() : null,
+        available_until: draft.available_until ? new Date(draft.available_until).toISOString() : null,
+      };
+      await db.saveTest(payload, qs); await refresh(); setMode("list");
+    }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
   }
-  return surveyId;
+  async function remove(id) {
+    if (!window.confirm("Delete this test?")) return;
+    try { await db.deleteTest(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  if (mode === "build" && draft) {
+    return (
+      <>
+        <PageHead title="Test Builder" sub="Mix question types. Multiple-choice and true/false grade automatically." action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
+        <Card style={{ marginBottom: 18 }}>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Test title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Midterm Examination" /></Field>
+            <Field label="Linked book">
+              <select style={inputStyle} value={draft.book_id} onChange={(e) => setDraft({ ...draft, book_id: e.target.value })}>
+                <option value="">— None —</option>
+                {books.map((b) => <option key={b.id} value={b.id}>{b.title}</option>)}
+              </select>
+            </Field>
+          </div>
+          <Field label="Instructions"><input style={inputStyle} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What this test covers" /></Field>
+          <Field label="Program / level"><ProgramSelect value={draft.program} onChange={(v) => setDraft({ ...draft, program: v })} /></Field>
+          <CourseFields courses={courses} courseId={draft.course_id} module={draft.module} onCourse={(v) => { const c = courses.find((x) => x.id === v); setDraft({ ...draft, course_id: v, program: c && c.program ? c.program : draft.program }); }} onModule={(v) => setDraft({ ...draft, module: v })} />
+        </Card>
+
+        <Card style={{ marginBottom: 18 }}>
+          <div className="pl-body" style={{ fontWeight: 700, color: C.ink, marginBottom: 10 }}>Visibility</div>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Status">
+              <select style={inputStyle} value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
+                <option value="draft">Draft — hidden from students</option>
+                <option value="published">Published — visible to students</option>
+              </select>
+            </Field>
+            <div />
+            <Field label="Available from (optional)"><input type="datetime-local" style={inputStyle} value={draft.available_from} onChange={(e) => setDraft({ ...draft, available_from: e.target.value })} /></Field>
+            <Field label="Closes (optional)"><input type="datetime-local" style={inputStyle} value={draft.available_until} onChange={(e) => setDraft({ ...draft, available_until: e.target.value })} /></Field>
+          </div>
+          <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 6 }}>Draft tests stay hidden from students. A Published test with an "Available from" time stays hidden until that time arrives; add a "Closes" time to hide it again afterward.</div>
+        </Card>
+
+        {qs.map((q, i) => (
+          <Card key={q.id} style={{ marginBottom: 12 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+              <span className="pl-body" style={{ fontWeight: 700, color: C.gold, fontSize: 13, textTransform: "uppercase", letterSpacing: ".06em" }}>Q{i + 1} · {QTYPE[q.type]}</span>
+              <div className="flex items-center gap-3">
+                <label className="pl-body flex items-center gap-1" style={{ fontSize: 13, color: C.muted }}>Points
+                  <input type="number" value={q.points} onChange={(e) => upQ(q.id, { points: Number(e.target.value) })} style={{ ...inputStyle, width: 64, padding: "5px 8px" }} />
+                </label>
+                <button onClick={() => delQ(q.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
+              </div>
+            </div>
+            <textarea style={{ ...inputStyle, minHeight: 52 }} placeholder="Question prompt…" value={q.prompt} onChange={(e) => upQ(q.id, { prompt: e.target.value })} />
+            {q.type === "mc" && (
+              <div style={{ marginTop: 10 }}>
+                {q.options.map((opt, oi) => (
+                  <div key={oi} className="flex items-center gap-2" style={{ marginBottom: 7 }}>
+                    <button onClick={() => upQ(q.id, { correct_answer: String(oi) })} className="pl-press inline-flex items-center justify-center" style={{ width: 24, height: 24, borderRadius: "50%", border: `2px solid ${String(q.correct_answer) === String(oi) ? C.green : C.line}`, background: String(q.correct_answer) === String(oi) ? C.green : "#fff", cursor: "pointer" }}>{String(q.correct_answer) === String(oi) && <Check size={13} color="#fff" />}</button>
+                    <input style={{ ...inputStyle, padding: "7px 10px" }} placeholder={`Option ${oi + 1}`} value={opt} onChange={(e) => { const o = [...q.options]; o[oi] = e.target.value; upQ(q.id, { options: o }); }} />
+                  </div>
+                ))}
+                <div className="pl-body" style={{ fontSize: 12, color: C.muted }}>Click the circle to mark the correct answer.</div>
+              </div>
+            )}
+            {q.type === "tf" && (
+              <div className="flex gap-2" style={{ marginTop: 10 }}>
+                {["true", "false"].map((v) => (
+                  <button key={v} onClick={() => upQ(q.id, { correct_answer: v })} className="pl-press" style={{ padding: "7px 18px", borderRadius: 8, cursor: "pointer", textTransform: "capitalize", fontWeight: 600, border: `1px solid ${q.correct_answer === v ? C.green : C.line}`, background: q.correct_answer === v ? C.greenSoft : "#fff", color: q.correct_answer === v ? C.green : C.muted }}>{v}</button>
+                ))}
+              </div>
+            )}
+            {(q.type === "short" || q.type === "essay") && <div className="pl-body" style={{ marginTop: 10, fontSize: 13, color: C.muted, fontStyle: "italic" }}>Graded manually after submission.</div>}
+          </Card>
+        ))}
+
+        <Card>
+          <div className="pl-body" style={{ fontWeight: 600, color: C.ink, marginBottom: 10 }}>Add a question</div>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(QTYPE).map(([k, v]) => <Btn key={k} small kind="ghost" icon={Plus} onClick={() => addQ(k)}>{v}</Btn>)}
+          </div>
+        </Card>
+
+        <div className="flex items-center justify-between" style={{ marginTop: 18 }}>
+          <span className="pl-body" style={{ color: C.muted, fontSize: 14 }}>{qs.length} questions · {sumPoints(qs)} points total</span>
+          <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save test"}</Btn>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Tests" sub="Build and manage assessments." action={<Btn icon={Plus} onClick={newTest}>Create test</Btn>} />
+      <Card style={{ marginBottom: 14 }}>
+        <div className="pl-body" style={{ fontWeight: 700, color: C.ink, marginBottom: 6 }}>Import tests from CSV</div>
+        <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>
+          One row per question. Columns: <b>course_code</b>, <b>test_title</b>, <b>type</b> (short / tf / essay / mc), <b>points</b>, <b>question</b>, and (optional) <b>correct_answer</b> + <b>options</b>. For auto-grading: on a <b>tf</b> row put true or false in correct_answer; on an <b>mc</b> row put the choices in options separated by | and the right one in correct_answer (number, letter, or exact text). Rows sharing a course code and test title become one test. Imported tests start as Draft.
+        </div>
+        <input type="file" accept=".csv" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; importTestsCsv(f); }} />
+        {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
+      </Card>
+      {tests.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No tests yet.</span></Card> :
+        <div className="flex flex-col gap-3">
+          {tests.map((t) => (
+            <Card key={t.id}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{t.title}{statusBadge(t)}</h3>
+                  <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{books.find((b) => b.id === t.book_id)?.title || "Unlinked"} · {t.questions.length} questions · {sumPoints(t.questions)} pts · {programLabel(t.program)}</div>
+                </div>
+                <div className="flex gap-2">
+                  <Btn small kind="ghost" icon={PencilLine} onClick={() => editTest(t)}>Edit</Btn>
+                  <button onClick={() => remove(t.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>}
+    </>
+  );
 }
 
-export async function deleteSurvey(id) {
-  const { error } = await supabase.from("pl_surveys").delete().eq("id", id);
-  if (error) throw error;
+/* ---------- GRADING ---------- */
+function Grading({ subs, tests, profiles, refresh }) {
+  const [openId, setOpenId] = useState(null);
+  const [manual, setManual] = useState({});
+  const [feedback, setFeedback] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [progFilter, setProgFilter] = useState("all");
+  const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
+
+  function open(s) { setOpenId(s.id); setManual(s.manual || {}); setFeedback(s.feedback || ""); }
+
+  if (openId) {
+    const sub = subs.find((s) => s.id === openId);
+    const test = tests.find((t) => t.id === sub.test_id);
+    if (!test) { setOpenId(null); return null; }
+    const auto = autoScore(test, sub);
+    const manualTotal = test.questions.filter((q) => q.type === "short" || q.type === "essay").reduce((a, q) => a + (Number(manual[q.id] ?? 0) || 0), 0);
+    const max = sumPoints(test.questions);
+    const total = auto + manualTotal;
+
+    async function finalize() {
+      setBusy(true);
+      try { await db.gradeSubmission(openId, { manual, score: total, max_score: max, feedback }); await refresh(); setOpenId(null); }
+      catch (e) { window.alert(e.message); }
+      setBusy(false);
+    }
+
+    return (
+      <>
+        <PageHead title="Grade Submission" sub={`${nameOf(sub.student_id)} · ${test.title}`} action={<div className="flex gap-2"><Btn kind="ghost" icon={ExternalLink} onClick={() => openSubmission(sub, test, nameOf(sub.student_id))}>View / Print</Btn><Btn kind="ghost" icon={ArrowLeft} onClick={() => setOpenId(null)}>Back</Btn></div>} />
+        {test.questions.map((q, i) => {
+          const ans = sub.answers?.[q.id];
+          const isAuto = q.type === "mc" || q.type === "tf";
+          const correct = q.type === "mc" ? String(ans) === String(q.correct_answer) : q.type === "tf" ? ans === q.correct_answer : false;
+          return (
+            <Card key={q.id} style={{ marginBottom: 12 }}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                <span className="pl-body" style={{ fontWeight: 700, color: C.gold, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".06em" }}>Q{i + 1} · {QTYPE[q.type]} · {q.points} pts</span>
+                {isAuto && <span className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: correct ? C.green : C.rose }}>{correct ? "Correct (auto)" : "Incorrect (auto)"}</span>}
+              </div>
+              <p className="pl-body" style={{ fontWeight: 600, color: C.ink, marginBottom: 8 }}>{q.prompt}</p>
+              {q.type === "mc" && <div className="pl-body" style={{ fontSize: 14 }}>Student answered: <b>{q.options[Number(ans)] ?? "—"}</b> · Correct: {q.options[Number(q.correct_answer)]}</div>}
+              {q.type === "tf" && <div className="pl-body" style={{ fontSize: 14, textTransform: "capitalize" }}>Student answered: <b>{ans ?? "—"}</b> · Correct: {q.correct_answer}</div>}
+              {(q.type === "short" || q.type === "essay") && (
+                <>
+                  <div className="pl-body" style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, lineHeight: 1.55 }}>{ans || <i style={{ color: C.muted }}>No response</i>}</div>
+                  <div className="flex items-center gap-2" style={{ marginTop: 10 }}>
+                    <span className="pl-body" style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>Award points:</span>
+                    <input type="number" min={0} max={q.points} value={manual[q.id] ?? ""} placeholder="0"
+                      onChange={(e) => setManual({ ...manual, [q.id]: Math.min(q.points, Math.max(0, Number(e.target.value) || 0)) })}
+                      style={{ ...inputStyle, width: 80, padding: "6px 10px" }} />
+                    <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>/ {q.points}</span>
+                  </div>
+                </>
+              )}
+            </Card>
+          );
+        })}
+        <Card>
+          <Field label="Feedback to student"><textarea style={{ ...inputStyle, minHeight: 80 }} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Comments, encouragement, next steps…" /></Field>
+          <div className="flex items-center justify-between">
+            <div className="pl-display" style={{ fontSize: 24, fontWeight: 600, color: C.green }}>{max ? Math.round((total / max) * 100) : 0}<span style={{ color: C.muted, fontSize: 18 }}> / 100</span> <span className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginLeft: 8 }}>({total} / {max} pts awarded)</span></div>
+            <Btn icon={Award} kind="gold" onClick={finalize} disabled={busy}>{busy ? "Saving…" : "Finalize & release grade"}</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  const subInProg = (s) => { if (progFilter === "all") return true; const t = tests.find((x) => x.id === s.test_id); return (t?.program || "all") === progFilter; };
+  const pending = subs.filter((s) => s.status !== "graded" && subInProg(s));
+  const graded = subs.filter((s) => s.status === "graded" && subInProg(s));
+  return (
+    <>
+      <PageHead title="Grading" sub="Submissions awaiting review and graded history." action={
+        <select style={{ ...inputStyle, maxWidth: 200 }} value={progFilter} onChange={(e) => setProgFilter(e.target.value)}>
+          {PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        </select>
+      } />
+      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Awaiting grading</h3>
+      <div className="flex flex-col gap-3" style={{ marginBottom: 26 }}>
+        {pending.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>Nothing pending.</span></Card>}
+        {pending.map((s) => (
+          <Card key={s.id}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
+                <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{tests.find((t) => t.id === s.test_id)?.title || "Test"} · submitted {fdate(s.submitted_at)}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, tests.find((t) => t.id === s.test_id), nameOf(s.student_id))}>View</Btn>
+                <Btn icon={ClipboardCheck} onClick={() => open(s)}>Grade</Btn>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Graded</h3>
+      <div className="flex flex-col gap-3">
+        {graded.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No graded submissions yet.</span></Card>}
+        {graded.map((s) => (
+          <Card key={s.id}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
+                <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{tests.find((t) => t.id === s.test_id)?.title || "Test"}</div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_score ? Math.round((s.score / s.max_score) * 100) : 0}%</span>
+                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, tests.find((t) => t.id === s.test_id), nameOf(s.student_id))}>View / Print</Btn>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </>
+  );
 }
 
-export async function listSurveyResponses() {
-  const { data, error } = await supabase.from("pl_survey_responses")
-    .select("*").order("submitted_at", { ascending: false });
-  if (error) throw error;
-  return data || [];
+/* ---------- PEOPLE ---------- */
+function StudentsManager({ profiles, meId, courses, assignments, canSetRole, refresh }) {
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  async function setProg(id, program) {
+    try { await db.setStudentProgram(id, program); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function setStatus(id, status) {
+    try { await db.setStudentStatus(id, status); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function changeRole(id, role) {
+    try { await db.setRole(id, role); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function toggleCourse(instructorId, courseId, isOn) {
+    try {
+      if (isOn) await db.unassignCourse(instructorId, courseId);
+      else await db.assignCourse(instructorId, courseId);
+      await refresh();
+    } catch (e) { window.alert(e.message); }
+  }
+
+  async function invite() {
+    if (!email.trim()) return;
+    setBusy(true); setNote(null);
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const res = await db.sendEmail({
+      to: email.trim(),
+      subject: `You're invited to ${BRAND.name}`,
+      html: `<p>Grace and peace,</p><p>You have been invited to enroll at <b>${BRAND.name}</b>. Create your student account here:</p><p><a href="${origin}">${origin}</a></p><p>Choose "Create Account" and sign in to begin.</p>`,
+    });
+    setNote(res.error ? { ok: false, text: "Email not sent — check Resend setup." } : { ok: true, text: "Invitation sent." });
+    setEmail(""); setBusy(false);
+  }
+
+  const ROLES = [
+    { key: "student", label: "Student" },
+    { key: "instructor", label: "Instructor" },
+    { key: "assistant", label: "Assistant" },
+    { key: "admin", label: "Administration" },
+  ];
+  const roleLabel = (r) => ROLES.find((x) => x.key === r)?.label || r;
+  const byName = (a, b) => (a.full_name || "").localeCompare(b.full_name || "");
+  const staff = [...(profiles || [])].filter((p) => p.role !== "student").sort(byName);
+  const students = [...(profiles || [])].filter((p) => p.role === "student").sort(byName);
+  const assignedSet = (instructorId) => new Set((assignments || []).filter((a) => a.instructor_id === instructorId).map((a) => a.course_id));
+
+  const personCard = (s) => {
+          const aset = s.role === "instructor" ? assignedSet(s.id) : null;
+          return (
+            <Card key={s.id} style={{ padding: 16 }}>
+              <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+                <Initials name={s.full_name} size={40} />
+                <div style={{ flex: 1, minWidth: 150 }}>
+                  <div className="pl-body" style={{ fontWeight: 600, fontSize: 15 }}>{s.full_name || "(no name)"}{s.id === meId ? " · you" : ""}</div>
+                  <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{s.email}</div>
+                </div>
+                {canSetRole ? (
+                  <select value={s.role} disabled={s.id === meId} onChange={(e) => changeRole(s.id, e.target.value)}
+                    title={s.id === meId ? "You can't change your own role" : "Set role"}
+                    style={{ ...inputStyle, width: 150, padding: "7px 10px", opacity: s.id === meId ? 0.6 : 1, cursor: s.id === meId ? "not-allowed" : "pointer" }}>
+                    {ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+                  </select>
+                ) : (
+                  <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: C.ink, background: C.paper2, padding: "6px 12px", borderRadius: 20 }}>{roleLabel(s.role)}</span>
+                )}
+                {s.role === "student" && (
+                  <select value={s.program || ""} onChange={(e) => setProg(s.id, e.target.value)} style={{ ...inputStyle, width: 150, padding: "7px 10px" }}>
+                    <option value="">— level —</option>
+                    {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+                  </select>
+                )}
+                {s.role === "student" && canSetRole && (
+                  <button onClick={() => setStatus(s.id, (s.status || "active") === "active" ? "inactive" : "active")}
+                    title={(s.status || "active") === "active" ? "Click to mark inactive" : "Click to mark active"}
+                    className="pl-press" style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "6px 12px", borderRadius: 20, cursor: "pointer", fontSize: 12.5, fontWeight: 700,
+                      border: `1px solid ${(s.status || "active") === "active" ? C.green : C.line}`,
+                      background: (s.status || "active") === "active" ? "#eef7ee" : C.paper2,
+                      color: (s.status || "active") === "active" ? C.green : C.muted }}>
+                    {(s.status || "active") === "active" ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+                    {(s.status || "active") === "active" ? "Active" : "Inactive"}
+                  </button>
+                )}
+              </div>
+              {s.role === "instructor" && (
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
+                  <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>Courses this instructor grades</div>
+                  {(!courses || courses.length === 0) ? (
+                    <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>No courses yet — create courses first.</span>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {courses.map((c) => {
+                        const on = aset.has(c.id);
+                        return (
+                          <button key={c.id} onClick={() => toggleCourse(s.id, c.id, on)} className="pl-body pl-press"
+                            style={{ padding: "6px 12px", borderRadius: 20, cursor: "pointer", fontSize: 13, fontWeight: 600,
+                              border: `1px solid ${on ? C.ink : C.line}`, background: on ? C.ink : "#fff", color: on ? "#fff" : C.muted }}>
+                            {on ? "✓ " : ""}{c.title}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>They only grade tests and homework from the selected courses.</p>
+                </div>
+              )}
+            </Card>
+          );
+        };
+
+  return (
+    <>
+      <PageHead title="People" sub="Invite students, set roles and levels, and assign instructors to courses." />
+      <Card style={{ marginBottom: 18 }}>
+        <div className="flex items-end gap-3">
+          <div style={{ flex: 1 }}><Field label="Invite a student by email"><input style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="student@example.com" /></Field></div>
+          <div style={{ marginBottom: 14 }}><Btn icon={Send} onClick={invite} disabled={busy}>{busy ? "Sending…" : "Send invite"}</Btn></div>
+        </div>
+        {note && <div className="pl-body" style={{ fontSize: 13, color: note.ok ? C.green : C.rose }}>{note.text}</div>}
+        {canSetRole && <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, margin: "6px 0 0" }}>To add an instructor: have them create an account, then set their role to <b>Instructor</b> and check the courses they should grade.</p>}
+      </Card>
+      <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+        <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>Staff</h3>
+        <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{staff.length}</span>
+      </div>
+      <div className="flex flex-col gap-2" style={{ marginBottom: 26 }}>
+        {staff.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No staff yet.</span></Card>}
+        {staff.map(personCard)}
+      </div>
+      <div className="flex items-center justify-between" style={{ marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+        <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>Students</h3>
+        <div className="flex items-center gap-2">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ ...inputStyle, width: 160, padding: "6px 10px" }}>
+            <option value="all">All students</option>
+            <option value="active">Active only</option>
+            <option value="inactive">Inactive only</option>
+          </select>
+          <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{students.length}</span>
+        </div>
+      </div>
+      {students.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card>}
+      {(() => {
+        const active = students.filter((s) => (s.status || "active") === "active");
+        const inactive = students.filter((s) => (s.status || "active") === "inactive");
+        const showActive = statusFilter === "all" || statusFilter === "active";
+        const showInactive = statusFilter === "all" || statusFilter === "inactive";
+        return (
+          <>
+            {showActive && (
+              <div style={{ marginBottom: 22 }}>
+                <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.green, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>Active · {active.length}</div>
+                <div className="flex flex-col gap-2">
+                  {active.length === 0 ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>No active students.</span> : active.map(personCard)}
+                </div>
+              </div>
+            )}
+            {showInactive && (
+              <div>
+                <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>Inactive · {inactive.length}</div>
+                <div className="flex flex-col gap-2">
+                  {inactive.length === 0 ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>No inactive students.</span> : inactive.map(personCard)}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
+    </>
+  );
 }
 
-export async function submitSurveyResponse(survey_id, answers) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const { error } = await supabase.from("pl_survey_responses").insert({
-    survey_id, student_id: user.id, answers,
+/* ---------- MESSAGES (shared) ---------- */
+function MessagesView({ messages, students, profile, canSend, refresh }) {
+  const [compose, setCompose] = useState(false);
+  const [form, setForm] = useState({ recipient: "all", subject: "", body: "" });
+  const [busy, setBusy] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null); // { id, subject, sender_id, sender_name }
+  const [replyBody, setReplyBody] = useState("");
+  const [expanded, setExpanded] = useState({});
+
+  async function send() {
+    if (!form.subject.trim()) return;
+    setBusy(true);
+    try {
+      if (canSend) {
+        // Admin / instructor composing to students
+        await db.sendMessage({ recipient: form.recipient, subject: form.subject, body: form.body, sender_name: profile.full_name });
+        const emails = form.recipient === "all" ? students.map((s) => s.email).filter(Boolean) : [students.find((s) => s.id === form.recipient)?.email].filter(Boolean);
+        if (emails.length) await db.sendEmail({ to: emails, subject: form.subject, html: `<p>${(form.body || "").replace(/\n/g, "<br/>")}</p><hr/><p style="color:#777">Sent from ${BRAND.name}</p>` });
+      } else {
+        // Student composing a new message to the office/admin
+        await db.sendMessage({ recipient: "office", subject: form.subject, body: form.body, sender_name: profile.full_name });
+      }
+      await refresh();
+      setForm({ recipient: "all", subject: "", body: "" }); setCompose(false);
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  async function sendReply() {
+    if (!replyBody.trim()) return;
+    setBusy(true);
+    try {
+      const r = replyingTo;
+      // Reply goes back to whichever side sent the original
+      const recipientId = r.sender_id === profile.id ? r.recipient : r.sender_id;
+      await db.replyMessage({
+        parent_id: r.root_id || r.id,
+        subject: "Re: " + r.subject.replace(/^Re:\s*/i, ""),
+        body: replyBody,
+        recipient: recipientId,
+        sender_name: profile.full_name,
+      });
+      // Also send email notification if admin is replying to a student
+      if (canSend && recipientId !== "all") {
+        const stu = students.find((s) => s.id === recipientId);
+        if (stu?.email) await db.sendEmail({ to: [stu.email], subject: "Re: " + r.subject, html: `<p>${replyBody.replace(/\n/g, "<br/>")}</p><hr/><p style="color:#777">Sent from ${BRAND.name}</p>` });
+      }
+      await refresh();
+      setReplyingTo(null); setReplyBody("");
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  const nameFor = (id) => students.find((s) => s.id === id)?.full_name || "Staff";
+
+  // Group messages into threads: root messages + their replies
+  const roots = messages.filter((m) => !m.parent_id);
+  const repliesFor = (rootId) => messages.filter((m) => m.parent_id === rootId)
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+  // For students: show threads where they are sender or recipient (incl. office messages they sent)
+  const visibleRoots = canSend ? roots : roots.filter((m) =>
+    m.recipient === "all" || m.recipient === profile.id || m.sender_id === profile.id
+  );
+
+  function MessageBubble({ m, isReply = false, rootId }) {
+    const isMine = m.sender_id === profile.id;
+    return (
+      <div style={{ display: "flex", gap: 10, marginBottom: 10, paddingLeft: isReply ? 28 : 0 }}>
+        {isReply && <CornerDownRight size={14} style={{ color: C.muted, marginTop: 4, flexShrink: 0 }} />}
+        <div style={{ flex: 1 }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 3 }}>
+            <span className="pl-body" style={{ fontWeight: 600, fontSize: 13.5, color: isMine ? C.navy : C.ink }}>
+              {isMine ? "You" : (m.sender_name || "Staff")}
+            </span>
+            <span className="pl-body" style={{ fontSize: 11.5, color: C.muted }}>{fdate(m.created_at)}</span>
+          </div>
+          <div style={{ background: isMine ? C.paper2 : C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 12px" }}>
+            <p className="pl-body" style={{ fontSize: 13.5, lineHeight: 1.55, whiteSpace: "pre-wrap", margin: 0 }}>{m.body}</p>
+          </div>
+          {!isReply && (
+            <button className="pl-body" style={{ background: "none", border: "none", color: C.gold, fontSize: 12.5, cursor: "pointer", marginTop: 4, padding: 0 }}
+              onClick={() => { setReplyingTo({ ...m, root_id: rootId || m.id }); setReplyBody(""); }}>
+              <Reply size={12} style={{ marginRight: 4, verticalAlign: "middle" }} />Reply
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title={canSend ? "Messages" : "Inbox"} sub={canSend ? "Email students and post announcements." : "Messages from your instructor — reply or start a new message to the office."} action={<Btn icon={PencilLine} onClick={() => setCompose(true)}>{canSend ? "Compose" : "New message"}</Btn>} />
+      {compose && (
+        <Card style={{ marginBottom: 18 }}>
+          {canSend ? (
+            <Field label="To">
+              <select style={inputStyle} value={form.recipient} onChange={(e) => setForm({ ...form, recipient: e.target.value })}>
+                <option value="all">All students</option>
+                {students.map((s) => <option key={s.id} value={s.id}>{s.full_name || s.email}</option>)}
+              </select>
+            </Field>
+          ) : (
+            <div className="pl-body" style={{ fontSize: 12.5, color: C.gold, fontWeight: 600, marginBottom: 10 }}>
+              <MessageSquare size={13} style={{ marginRight: 4, verticalAlign: "middle" }} />New message to the school office
+            </div>
+          )}
+          <Field label="Subject"><input style={inputStyle} value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} placeholder={canSend ? "" : "What is your message about?"} /></Field>
+          <Field label="Message"><textarea style={{ ...inputStyle, minHeight: 110 }} value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} placeholder={canSend ? "" : "Type your message to the office…"} /></Field>
+          <div className="flex gap-2">
+            <Btn icon={Send} kind="gold" onClick={send} disabled={busy}>{busy ? "Sending…" : "Send"}</Btn>
+            <Btn kind="ghost" onClick={() => setCompose(false)}>Cancel</Btn>
+          </div>
+        </Card>
+      )}
+      {replyingTo && (
+        <Card style={{ marginBottom: 18, borderLeft: `3px solid ${C.gold}` }}>
+          <div className="pl-body" style={{ fontSize: 12.5, color: C.gold, fontWeight: 600, marginBottom: 6 }}>
+            <Reply size={13} style={{ marginRight: 4, verticalAlign: "middle" }} />Replying to: {replyingTo.subject}
+          </div>
+          <Field label="Your reply">
+            <textarea style={{ ...inputStyle, minHeight: 90 }} value={replyBody} onChange={(e) => setReplyBody(e.target.value)} placeholder="Type your reply…" />
+          </Field>
+          <div className="flex gap-2">
+            <Btn icon={Send} kind="gold" onClick={sendReply} disabled={busy}>{busy ? "Sending…" : "Send Reply"}</Btn>
+            <Btn kind="ghost" onClick={() => { setReplyingTo(null); setReplyBody(""); }}>Cancel</Btn>
+          </div>
+        </Card>
+      )}
+      <div className="flex flex-col gap-3">
+        {visibleRoots.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No messages yet.</span></Card>}
+        {visibleRoots.map((m) => {
+          const replies = repliesFor(m.id);
+          const isExpanded = expanded[m.id] !== false; // default expanded
+          const recipientLabel = m.recipient === "all" ? "All students" : m.recipient === "office" ? "School Office" : canSend ? nameFor(m.recipient) : "You";
+          return (
+            <Card key={m.id}>
+              <div className="flex items-start gap-3">
+                <div className="inline-flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 10, background: C.paper2, color: C.gold, flexShrink: 0 }}><MessageSquare size={16} /></div>
+                <div style={{ flex: 1 }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 2 }}>
+                    <span className="pl-body" style={{ fontWeight: 700, fontSize: 15 }}>{m.subject}</span>
+                    <div className="flex items-center gap-3">
+                      {replies.length > 0 && (
+                        <button className="pl-body" style={{ background: "none", border: "none", color: C.muted, fontSize: 12, cursor: "pointer" }}
+                          onClick={() => setExpanded((e) => ({ ...e, [m.id]: !isExpanded }))}>
+                          {replies.length} {replies.length === 1 ? "reply" : "replies"} {isExpanded ? "▲" : "▼"}
+                        </button>
+                      )}
+                      <span className="pl-body" style={{ fontSize: 11.5, color: C.muted }}>{fdate(m.created_at)}</span>
+                    </div>
+                  </div>
+                  <div className="pl-body" style={{ fontSize: 12, color: C.gold, fontWeight: 600, marginBottom: 8 }}>
+                    From {m.sender_name || "Staff"} · To {recipientLabel}
+                  </div>
+                  <MessageBubble m={m} rootId={m.id} />
+                  {isExpanded && replies.map((r) => <MessageBubble key={r.id} m={r} isReply rootId={m.id} />)}
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* ============================================================ STUDENT */
+function StudentPortal({ profile, onLogout }) {
+  const [active, setActive] = useState("dash");
+  const [books, setBooks] = useState([]);
+  const [tests, setTests] = useState([]);
+  const [subs, setSubs] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [syllabi, setSyllabi] = useState([]);
+  const [homework, setHomework] = useState([]);
+  const [hwSubs, setHwSubs] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [attendance, setAttendance] = useState([]);
+  const [certificates, setCertificates] = useState([]);
+  const [ledger, setLedger] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [certEnrollments, setCertEnrollments] = useState([]);
+  const [tuition, setTuition] = useState([]);
+  const [forms, setForms] = useState([]);
+  const [myFormSubs, setMyFormSubs] = useState([]);
+  const [surveys, setSurveys] = useState([]);
+  const [mySurveyResps, setMySurveyResps] = useState([]);
+  const [resources, setResources] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    const safe = (p) => p.then((v) => v).catch((e) => { console.error(e); return undefined; });
+    try {
+      const [b, t, s, m, sy, hw, hs, co, at, ce, lg, se, cen, tu, fr, fs, sv, sr, rs, an] = await Promise.all([
+        safe(db.listBooks()), safe(db.listTests()), safe(db.listSubmissions()), safe(db.listMessages()),
+        safe(db.listSyllabi()), safe(db.listHomework()), safe(db.listHomeworkSubmissions()), safe(db.listCourses()), safe(db.listAttendance()), safe(db.listCertificates()), safe(db.listLedger()), safe(db.listSessions()),
+        safe(db.listCertEnrollments()), safe(db.listTuition()),
+        safe(db.listForms()), safe(db.listFormSubmissions()), safe(db.listSurveys()), safe(db.listSurveyResponses()), safe(db.listResources()), safe(db.listAnnouncements()),
+      ]);
+      if (b) setBooks(b); if (t) setTests(t); if (s) setSubs(s); if (m) setMessages(m);
+      if (sy) setSyllabi(sy); if (hw) setHomework(hw); if (hs) setHwSubs(hs); if (co) setCourses(co); if (at) setAttendance(at); if (ce) setCertificates(ce); if (lg) setLedger(lg); if (se) setSessions(se);
+      if (cen) setCertEnrollments(cen); if (tu) setTuition(tu);
+      if (fr) setForms(fr); if (fs) setMyFormSubs(fs.filter((x) => x.student_id === profile.id));
+      if (sv) setSurveys(sv); if (sr) setMySurveyResps(sr.filter((x) => x.student_id === profile.id));
+      if (rs) setResources(rs); if (an) setAnnouncements(an);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    if (p.get("cert_paid") || p.get("tuition_paid")) {
+      window.history.replaceState({}, "", window.location.pathname);
+      window.alert("Payment received — thank you! It will show as Paid in a moment.");
+      const t = setTimeout(() => refresh(), 2500);
+      return () => clearTimeout(t);
+    }
+  }, [refresh]);
+
+  const prog = profile.program;
+  const certCourseIds = new Set((courses || []).filter((c) => c.is_certificate).map((c) => c.id));
+  const myCertCourseIds = new Set((certEnrollments || []).filter((e) => e.student_id === profile.id).map((e) => e.course_id));
+  const isDegreeStudent = ["associate", "bachelor", "master", "master2", "doctorate", "phd"].includes(profile.program);
+  const notCert = (it) => !certCourseIds.has(it.course_id);
+  const visBooks = visibleFor(books, prog).filter(notCert);
+  // Certificate-class tests/homework now live in the main Tests/Homework tabs
+  // (not the separate Cert Classes page), but only for students actually
+  // enrolled in that specific class — not by the generic program-tag match,
+  // which would otherwise leak a class's coursework to unrelated students.
+  const certTests = (tests || []).filter((t) => myCertCourseIds.has(t.course_id));
+  const certHw = (homework || []).filter((h) => myCertCourseIds.has(h.course_id));
+  const visTests = [...visibleFor(tests, prog).filter(notCert), ...certTests];
+  const visHw = [...visibleFor(homework, prog).filter(notCert), ...certHw];
+  const degTests = (tests || []).filter(notCert);
+  const degHw = (homework || []).filter(notCert);
+  const mySubs = subs.filter((s) => s.student_id === profile.id);
+  const myHwSubs = hwSubs.filter((s) => s.student_id === profile.id);
+  const nowMs = Date.now();
+  const testLive = (t) => (t.status || "draft") === "published"
+    && (!t.available_from || new Date(t.available_from).getTime() <= nowMs)
+    && (!t.available_until || new Date(t.available_until).getTime() >= nowMs);
+  const available = visTests.filter((t) => testLive(t) && !mySubs.some((s) => s.test_id === t.id));
+  // Homework is available if never submitted, OR it was sent back ("returned") to redo.
+  const hwNowMs = Date.now();
+  const hwLive = (h) => (h.status || "published") === "published"
+    && (!h.available_from || new Date(h.available_from).getTime() <= hwNowMs)
+    && (!h.available_until || new Date(h.available_until).getTime() >= hwNowMs);
+  const availableHw = visHw.filter((h) => {
+    if (!hwLive(h)) return false;
+    const sub = myHwSubs.find((s) => s.homework_id === h.id);
+    return !sub || sub.status === "returned";
   });
-  if (error) throw error;
+
+  const nav = [
+    { key: "dash",        label: "Dashboard",   icon: LayoutDashboard, show: true },
+    { key: "courses",     label: "My Courses",  icon: GraduationCap,   show: true },
+    { key: "schedule",    label: "Schedule",    icon: CalendarDays,    show: FEATURES.live_classes },
+    { key: "library",     label: "Certificate Library", icon: Library,  show: FEATURES.library && myCertCourseIds.size > 0 },
+    { key: "dlibrary",    label: "Degree Library", icon: Library,       show: FEATURES.library && isDegreeStudent },
+    { key: "syllabus",    label: "Syllabus",    icon: ScrollText,      show: FEATURES.syllabus },
+    { key: "tests",       label: "My Tests",    icon: FileText,        show: FEATURES.tests },
+    { key: "homework",    label: "Homework",    icon: NotebookPen,     show: FEATURES.homework },
+    { key: "grades",      label: "Grades",      icon: Award,           show: FEATURES.grades },
+    { key: "progress",    label: "Progress",    icon: Medal,           show: FEATURES.degree_progress },
+    { key: "certificates",label: "Certificates",icon: Medal,           show: FEATURES.certificates },
+    { key: "cehours",     label: "CE Hours",    icon: Clock,           show: FEATURES.ce_hours },
+    { key: "certprograms",label: "Cert Classes",icon: Award,           show: FEATURES.cert_classes },
+    { key: "tuition",     label: "Tuition",     icon: Receipt,         show: FEATURES.tuition },
+    { key: "forms",       label: "Forms",       icon: FileCheck,       show: true },
+    { key: "surveys",     label: "Surveys",     icon: BarChart2,       show: true },
+    { key: "resources",   label: "Resources",   icon: BookOpen,        show: true },
+    { key: "inbox",       label: "Inbox",       icon: Mail,            show: FEATURES.messages },
+  ].filter((n) => n.show);
+
+  return (
+    <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ tests: available.length, homework: availableHw.length }}>
+      {loading ? <Spinner /> : (
+        <>
+          {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, myHwSubs, homework, tests, attendance, announcements, setActive }} />}
+          {active === "courses" && <StudentCourses courses={courses} profile={profile} />}
+          {active === "schedule" && <StudentSchedule sessions={sessions} homework={visHw} tests={visTests} courses={courses} profile={profile} />}
+          {active === "library" && myCertCourseIds.size > 0 && <StudentLibrary books={visBooks.filter((b) => b.program === "certificate" || b.program === "all")} courses={courses} title="Certificate Library" />}
+          {active === "dlibrary" && isDegreeStudent && <StudentLibrary books={visBooks.filter((b) => b.program !== "certificate")} courses={courses} title="Degree Library" />}
+          {active === "syllabus" && <StudentSyllabus syllabi={syllabi} profile={profile} />}
+          {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
+          {active === "homework" && <StudentHomework availableHw={availableHw} myHwSubs={myHwSubs} homework={homework} courses={courses} profile={profile} refresh={refresh} />}
+          {active === "grades" && <StudentGrades mySubs={mySubs} tests={degTests} myHwSubs={myHwSubs} homework={degHw} courses={courses} profile={profile} />}
+          {active === "progress" && <DegreeProgress profile={profile} courses={courses} tests={degTests} homework={degHw} mySubs={mySubs} myHwSubs={myHwSubs} />}
+          {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
+          {active === "cehours" && <StudentCEHours profile={profile} courses={courses} tests={tests} subs={mySubs} certificates={certificates} />}
+          {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certificates={certificates} ledger={ledger.filter((e) => e.student_id === profile.id)} refresh={refresh} />}
+          {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} tuition={tuition} profile={profile} />}
+          {active === "forms" && <StudentForms forms={forms} myFormSubs={myFormSubs} profile={profile} refresh={refresh} />}
+          {active === "surveys" && <StudentSurveys surveys={surveys} mySurveyResps={mySurveyResps} profile={profile} refresh={refresh} />}
+          {active === "resources" && <StudentResources resources={resources} profile={profile} />}
+          {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
+        </>
+      )}
+    </Shell>
+  );
 }
 
-/* ═══════════════ RESOURCES (INSTRUCTIONS & POLICY MANUALS) ══════ */
-
-export async function listResources() {
-  const { data, error } = await supabase.from("pl_resources")
-    .select("*").order("sort_order").order("created_at", { ascending: false });
-  if (error) throw error;
-  return data || [];
+function StudentDash({ profile, books, available, mySubs, myHwSubs, homework, tests, attendance, announcements, setActive }) {
+  const graded = mySubs.filter((s) => s.status === "graded" && s.max_score);
+  const avg = graded.length ? Math.round(graded.reduce((a, s) => a + (s.score / s.max_score) * 100, 0) / graded.length) : null;
+  const att = attendance || [];
+  const attPct = att.length ? Math.round((att.filter((a) => a.status !== "absent").length / att.length) * 100) : null;
+  const myAnnounce = (announcements || []).filter((a) => a.active && (a.program === "all" || a.program === profile.program));
+  const returnedHw = (myHwSubs || []).filter((s) => s.status === "returned");
+  const hwTitle = (id) => (homework || []).find((h) => h.id === id)?.title || "an assignment";
+  return (
+    <>
+      <PageHead title={`Welcome, ${(profile.full_name || "Student").split(" ")[0]}`} sub="Your studies at a glance." />
+      {returnedHw.length > 0 && (
+        <div style={{ background: "#fef6f6", border: `1px solid ${C.rose}`, borderLeft: `4px solid ${C.rose}`, borderRadius: 10, padding: "14px 18px", marginBottom: 16, cursor: "pointer" }} onClick={() => setActive("homework")}>
+          <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+            <RotateCcw size={16} style={{ color: C.rose }} />
+            <span className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink }}>{returnedHw.length === 1 ? "Homework returned for revision" : `${returnedHw.length} assignments returned for revision`}</span>
+          </div>
+          <p className="pl-body" style={{ fontSize: 14, color: C.ink, margin: 0, lineHeight: 1.55 }}>
+            Your instructor sent {returnedHw.length === 1 ? <b>{hwTitle(returnedHw[0].homework_id)}</b> : "some work"} back with notes. Tap here to open your Homework and resubmit.
+          </p>
+        </div>
+      )}
+      {myAnnounce.length > 0 && (
+        <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
+          {myAnnounce.map((a) => (
+            <div key={a.id} style={{ background: "#fffaf0", border: `1px solid ${C.gold}`, borderLeft: `4px solid ${C.gold}`, borderRadius: 10, padding: "14px 18px" }}>
+              <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+                <Sparkles size={16} style={{ color: C.gold }} />
+                <span className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink }}>{a.title}</span>
+              </div>
+              <p className="pl-body" style={{ fontSize: 14, color: C.ink, margin: 0, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{a.body}</p>
+              <div className="pl-body" style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>{fdate(a.created_at)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="grid grid-cols-4 gap-4" style={{ marginBottom: 24 }}>
+        <Stat icon={BookOpen} label="Lessons available" value={books.length} />
+        <Stat icon={FileText} label="Tests to take" value={available.length} tone={C.gold} />
+        <Stat icon={Award} label="Average grade" value={avg !== null ? avg + "%" : "—"} tone={C.green} />
+        <Stat icon={CalendarDays} label="Attendance" value={attPct !== null ? attPct + "%" : "—"} tone={C.ink} />
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <Card>
+          <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+            <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>Tests to complete</h3>
+            <Btn small kind="ghost" onClick={() => setActive("tests")}>Go</Btn>
+          </div>
+          {available.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>You're all caught up.</span> :
+            available.map((t) => (
+              <div key={t.id} className="flex items-center justify-between" style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
+                <span className="pl-body" style={{ fontWeight: 600, fontSize: 14.5 }}>{t.title}</span>
+                <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{t.questions.length} Q</span>
+              </div>
+            ))}
+        </Card>
+        <Card>
+          <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: "0 0 12px" }}>Recent grades</h3>
+          {graded.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No grades yet.</span> :
+            graded.map((s) => (
+              <div key={s.id} className="flex items-center justify-between" style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
+                <span className="pl-body" style={{ fontWeight: 600, fontSize: 14.5 }}>{tests.find((t) => t.id === s.test_id)?.title || "Test"}</span>
+                <span className="pl-display" style={{ fontWeight: 600, color: C.green }}>{Math.round((s.score / s.max_score) * 100)}%</span>
+              </div>
+            ))}
+        </Card>
+      </div>
+    </>
+  );
 }
 
-export async function saveResource(res) {
-  const { data: { user } } = await supabase.auth.getUser();
-  let file_path = res.file_path || null;
-  if (res._file) file_path = await uploadFile("homework-submissions", res._file);
-  const rec = {
-    title: res.title, description: res.description || null,
-    category: res.category || "instructions",
-    file_path, link_url: res.link_url || null,
-    program: res.program || "all",
-    sort_order: Number(res.sort_order) || 0, active: res.active !== false,
+function toLocalInput(iso) {
+  const d = new Date(iso); const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function fwhen(iso, withTime = true) {
+  const o = withTime
+    ? { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }
+    : { weekday: "short", month: "short", day: "numeric" };
+  return new Date(iso).toLocaleString([], o);
+}
+function JoinLink({ url }) {
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="pl-press pl-body"
+      style={{ textDecoration: "none", background: C.gold, color: "#1a1407", border: `1px solid ${C.gold}`, borderRadius: 9, padding: "7px 12px", fontSize: 13, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+      <PlayCircle size={15} /> Join
+    </a>
+  );
+}
+function SessionRow({ s, courses, onEdit, onDelete, onRemind, manage }) {
+  const c = (courses || []).find((x) => x.id === s.course_id);
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{s.title}</h3>
+          <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{fwhen(s.starts_at)}{s.duration_min ? ` · ${s.duration_min} min` : ""}{c ? ` · ${c.code ? c.code + " " : ""}${c.title}` : ""}</div>
+          {s.notes && <div className="pl-body" style={{ fontSize: 13, color: C.text, marginTop: 6, whiteSpace: "pre-wrap" }}>{s.notes}</div>}
+        </div>
+        <div className="flex items-center gap-2">
+          {s.zoom_url && <JoinLink url={s.zoom_url} />}
+          {manage && onRemind && <Btn small kind="ghost" icon={Send} onClick={onRemind}>Remind</Btn>}
+          {manage && <Btn small kind="ghost" icon={PencilLine} onClick={onEdit}>Edit</Btn>}
+          {manage && <button onClick={onDelete} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/* ---------- LIVE CLASSES (instructor) ---------- */
+function ScheduleManager({ sessions, courses, students, certEnrollments, profile, refresh }) {
+  const blank = { id: null, title: "", course_id: "", starts_at: "", duration_min: 60, zoom_url: "", notes: "" };
+  const [form, setForm] = useState(blank);
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+  const [schedules, setSchedules] = useState([]);
+  const [upBusy, setUpBusy] = useState("");
+  useEffect(() => { db.listProgramSchedules().then(setSchedules).catch(() => {}); }, []);
+  async function uploadSchedule(program, file) {
+    if (!file) return;
+    setUpBusy(program);
+    try { await db.saveProgramSchedule(program, file); setSchedules(await db.listProgramSchedules()); }
+    catch (e) { window.alert(e.message); }
+    setUpBusy("");
+  }
+  const scheduleFor = (prog) => schedules.find((s) => s.program === prog);
+
+  function edit(s) {
+    setForm({ id: s.id, title: s.title, course_id: s.course_id || "", starts_at: s.starts_at ? toLocalInput(s.starts_at) : "", duration_min: s.duration_min || 60, zoom_url: s.zoom_url || "", notes: s.notes || "" });
+    setShow(true);
+  }
+  async function remind(s) {
+    const certCourseIds = new Set((courses || []).filter((c) => c.is_certificate).map((c) => c.id));
+    const isCertClass = s.program === "certificate" || (s.course_id && certCourseIds.has(s.course_id));
+    const isActive = (st) => (st.status || "active") !== "inactive";
+    let list;
+    if (isCertClass) {
+      // Certificate class → only active students enrolled in a certificate class.
+      const certStudentIds = new Set((certEnrollments || []).map((e) => e.student_id));
+      list = (students || []).filter((st) => certStudentIds.has(st.id) && isActive(st));
+    } else {
+      // Degree class → active students in that program (or all degree students for "all"); never certificate students.
+      list = (students || []).filter((st) => isActive(st) && st.program !== "certificate" && (s.program === "all" || st.program === s.program));
+    }
+    const recips = list.filter((st) => st.email).map((st) => st.email);
+    if (recips.length === 0) { window.alert("No active enrolled students with an email for this class yet."); return; }
+    if (!window.confirm(`Email a reminder to ${recips.length} student${recips.length === 1 ? "" : "s"}?`)) return;
+    setNote("Sending reminder…");
+    const join = s.zoom_url ? `<p><a href="${s.zoom_url}">Join the class on Zoom</a></p>` : "";
+    const html = `<p>This is a reminder for your upcoming class:</p><p><b>${s.title}</b><br/>${fwhen(s.starts_at)}${s.duration_min ? ` · ${s.duration_min} min` : ""}</p>${join}${s.notes ? `<p>${s.notes}</p>` : ""}<p style="color:#888">— ${BRAND.name}</p>`;
+    const r = await db.sendEmail({ to: profile.email, bcc: recips, subject: `Class reminder: ${s.title}`, html });
+    setNote(r && !r.error ? `Reminder sent to ${recips.length} student${recips.length === 1 ? "" : "s"}.` : "Couldn't send — check your email settings.");
+  }
+  async function save() {
+    if (!form.title.trim() || !form.starts_at) { window.alert("Add a title and a date/time."); return; }
+    setBusy(true);
+    try {
+      const c = courses.find((x) => x.id === form.course_id);
+      await db.saveSession({ ...form, starts_at: new Date(form.starts_at).toISOString(), program: c ? c.program : "all" });
+      await refresh(); setShow(false); setForm(blank);
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this class session?")) return;
+    try { await db.deleteSession(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  const cut = Date.now() - 2 * 3600e3;
+  const upcoming = (sessions || []).filter((s) => new Date(s.starts_at).getTime() >= cut).sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at));
+  const past = (sessions || []).filter((s) => new Date(s.starts_at).getTime() < cut).sort((a, b) => new Date(b.starts_at) - new Date(a.starts_at));
+
+  return (
+    <>
+      <PageHead title="Live Classes" sub="Schedule Zoom sessions; students see them on their Schedule." action={<Btn icon={Plus} onClick={() => { setForm(blank); setShow(true); }}>New class</Btn>} />
+      {show && (
+        <Card style={{ marginBottom: 18, maxWidth: 640 }}>
+          <Field label="Title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Genesis — Week 3 Lecture" /></Field>
+          <Field label="Course (optional)"><select style={inputStyle} value={form.course_id} onChange={(e) => setForm({ ...form, course_id: e.target.value })}><option value="">— None —</option>{courses.map((c) => <option key={c.id} value={c.id}>{c.code ? `${c.code} — ` : ""}{c.title}</option>)}</select></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Date & time"><input type="datetime-local" style={inputStyle} value={form.starts_at} onChange={(e) => setForm({ ...form, starts_at: e.target.value })} /></Field>
+            <Field label="Length (min)"><input type="number" style={inputStyle} value={form.duration_min} onChange={(e) => setForm({ ...form, duration_min: e.target.value })} /></Field>
+          </div>
+          <Field label="Zoom link"><input style={inputStyle} value={form.zoom_url} onChange={(e) => setForm({ ...form, zoom_url: e.target.value })} placeholder="https://zoom.us/j/…" /></Field>
+          <Field label="Notes (optional)"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
+          <div className="flex gap-2"><Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save class"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
+        </Card>
+      )}
+      <Card style={{ marginBottom: 18 }}>
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 4px" }}>Program Schedules</h3>
+        <p className="pl-body" style={{ fontSize: 13, color: C.muted, margin: "0 0 12px" }}>Upload one schedule document per program (PDF or Word). Students see it on their Schedule.</p>
+        <div className="flex flex-col gap-1">
+          {PROGRAMS.filter((p) => p.key !== "all").map((p) => {
+            const sc = scheduleFor(p.key);
+            return (
+              <div key={p.key} className="flex items-center justify-between" style={{ gap: 10, flexWrap: "wrap", borderTop: `1px solid ${C.line}`, padding: "8px 0" }}>
+                <span className="pl-body" style={{ fontWeight: 600, color: C.ink, minWidth: 110 }}>{p.label}</span>
+                <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+                  {sc?.file_path ? <FileLink path={sc.file_path} label={sc.file_name || "View schedule"} /> : <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>No schedule uploaded</span>}
+                  <label className="pl-body pl-press" style={{ fontSize: 12.5, color: C.ink, cursor: "pointer", textDecoration: "underline" }}>
+                    {upBusy === p.key ? "Uploading…" : (sc ? "Replace" : "Upload")}
+                    <input type="file" accept=".pdf,.doc,.docx,image/*" style={{ display: "none" }} onChange={(e) => uploadSchedule(p.key, e.target.files?.[0])} />
+                  </label>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {note && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginBottom: 10 }}>{note}</div>}
+      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Upcoming classes</h3>
+      {upcoming.length === 0 ? (
+        <Card style={{ marginBottom: 24 }}><span className="pl-body" style={{ color: C.muted }}>No upcoming classes. Tap "New class" to schedule one.</span></Card>
+      ) : (
+        <div style={{ marginBottom: 24 }}>
+          {PROGRAMS.map((p) => ({ ...p, items: upcoming.filter((s) => (s.program || "all") === p.key) })).filter((g) => g.items.length).map((g) => (
+            <div key={g.key} style={{ marginBottom: 16 }}>
+              <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.ink2, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 8 }}>{g.label}</div>
+              <div className="flex flex-col gap-3">
+                {g.items.map((s) => <SessionRow key={s.id} s={s} courses={courses} onEdit={() => edit(s)} onDelete={() => remove(s.id)} onRemind={() => remind(s)} manage />)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {past.length > 0 && (
+        <>
+          <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Past</h3>
+          <div className="flex flex-col gap-3">{past.slice(0, 15).map((s) => <SessionRow key={s.id} s={s} courses={courses} onEdit={() => edit(s)} onDelete={() => remove(s.id)} manage />)}</div>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ---------- SCHEDULE (student) ---------- */
+function StudentSchedule({ sessions, homework, tests, courses, profile }) {
+  const prog = profile.program;
+  const [sched, setSched] = useState(null);
+  useEffect(() => { db.listProgramSchedules().then((all) => setSched((all || []).find((x) => x.program === prog) || null)).catch(() => {}); }, [prog]);
+  const cut = Date.now() - 24 * 3600e3;
+  const items = [];
+  (sessions || []).filter((s) => s.program === prog || s.program === "all").forEach((s) => items.push({ kind: "class", when: s.starts_at, data: s }));
+  (homework || []).forEach((h) => { if (h.due_date) items.push({ kind: "hw", when: h.due_date, data: h }); });
+  (tests || []).forEach((t) => { if (t.due_date) items.push({ kind: "test", when: t.due_date, data: t }); });
+  const upcoming = items.filter((i) => new Date(i.when).getTime() >= cut).sort((a, b) => new Date(a.when) - new Date(b.when));
+
+  return (
+    <>
+      <PageHead title="Schedule" sub="Your upcoming live classes and due dates." />
+      {sched?.file_path && (
+        <Card style={{ marginBottom: 14 }}>
+          <div className="flex items-center justify-between" style={{ gap: 10, flexWrap: "wrap" }}>
+            <span className="pl-body" style={{ fontWeight: 600, color: C.ink }}>{programLabel(prog)} Schedule</span>
+            <FileLink path={sched.file_path} label={sched.file_name || "Download schedule"} />
+          </div>
+        </Card>
+      )}
+      {upcoming.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>Nothing scheduled right now. Check back soon.</span></Card>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {upcoming.map((i) => {
+            if (i.kind === "class") return <SessionRow key={"c" + i.data.id} s={i.data} courses={courses} />;
+            const c = (courses || []).find((x) => x.id === i.data.course_id);
+            const tag = i.kind === "hw" ? "Homework due" : "Test due";
+            return (
+              <Card key={i.kind + i.data.id}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink, margin: 0 }}>{i.data.title}</h3>
+                    <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{tag} · {fwhen(i.when, false)}{c ? ` · ${c.code ? c.code + " " : ""}${c.title}` : ""}</div>
+                  </div>
+                  <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, letterSpacing: 0.5 }}>{i.kind === "hw" ? "HW" : "TEST"}</span>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+function StudentCourses({ courses, profile }) {
+  const mine = (courses || [])
+    .filter((c) => c.program === profile.program || c.program === "all")
+    .sort((a, b) => (a.code || a.title || "").localeCompare(b.code || b.title || ""));
+  return (
+    <>
+      <PageHead title="My Courses" sub="The courses in your program." />
+      {mine.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No courses are listed for your program yet. Check back soon.</span></Card>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {mine.map((c) => (
+            <Card key={c.id}>
+              <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} — ` : ""}{c.title}</h3>
+              <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>
+                {c.credit_hours ? `${c.credit_hours} credit hours` : ""}{c.credit_hours && c.description ? " · " : ""}{c.description || ""}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function StudentLibrary({ books, courses, title = "Library" }) {
+  const [busyId, setBusyId] = useState(null);
+  async function read(b) {
+    if (!b.file_path) { window.alert("No file attached to this book yet."); return; }
+    setBusyId(b.id);
+    try { const url = await db.signedUrl(b.file_path); if (url) window.open(url, "_blank"); }
+    catch (e) { window.alert(e.message); }
+    setBusyId(null);
+  }
+  const card = (b) => (
+    <Card key={b.id}>
+      <div className="flex items-center justify-center" style={{ height: 110, borderRadius: 9, background: `linear-gradient(150deg, ${C.ink}, ${C.ink2})`, marginBottom: 14 }}><BookOpen size={34} color={C.goldSoft} /></div>
+      <h3 className="pl-display" style={{ fontSize: 17.5, fontWeight: 600, color: C.ink, margin: 0, lineHeight: 1.2 }}>{b.title}</h3>
+      <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{b.author} · {b.pages} pp</div>
+      <p className="pl-body" style={{ fontSize: 13.5, color: C.text, marginTop: 8, lineHeight: 1.5 }}>{b.description}</p>
+      <div style={{ marginTop: 12 }} className="flex flex-col gap-2">
+        {b.video_url && <Btn small full icon={PlayCircle} onClick={() => window.open(b.video_url, "_blank")}>Watch video</Btn>}
+        {b.file_path && <Btn small full icon={BookOpen} onClick={() => read(b)} disabled={busyId === b.id}>{busyId === b.id ? "Opening…" : "Open file"}</Btn>}
+        {!b.video_url && !b.file_path && <Btn small full kind="ghost" disabled>No media yet</Btn>}
+      </div>
+    </Card>
+  );
+  const groups = CATEGORIES.map((c) => ({ ...c, items: books.filter((b) => (b.category || "book") === c.key) })).filter((g) => g.items.length > 0);
+  return (
+    <>
+      <PageHead title={title} sub="Lessons and materials, organized by type." />
+      {books.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No lessons available yet.</span></Card> : (
+        <>
+          {groups.map((g) => (
+            <div key={g.key} style={{ marginBottom: 22 }}>
+              <div className="flex items-center gap-2" style={{ marginBottom: 10 }}>
+                <h3 className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink, margin: 0 }}>{g.label}</h3>
+                <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>· {g.items.length}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-4">{g.items.map(card)}</div>
+            </div>
+          ))}
+        </>
+      )}
+    </>
+  );
+}
+
+function StudentTests({ available, books, courses, refresh }) {
+  const [taking, setTaking] = useState(null);
+  const [answers, setAnswers] = useState({});
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    setBusy(true);
+    try {
+      const maxScore = sumPoints(taking.questions);
+      await db.createSubmission({ test_id: taking.id, answers, max_score: maxScore });
+
+      // ── CE PASS-GATE ──────────────────────────────────────────
+      const course = courses.find((c) => c.id === taking.course_id);
+      if (course && isCEType(course.ce_type)) {
+        let autoPoints = 0;
+        for (const q of taking.questions) {
+          const a = answers[q.id];
+          if (q.type === "mc" && String(a) === String(q.correct_answer)) autoPoints += q.points;
+          if (q.type === "tf" && a === q.correct_answer) autoPoints += q.points;
+        }
+        const pct = maxScore > 0 ? Math.round((autoPoints / maxScore) * 100) : 0;
+        const passing = Number(course.passing_score) || 75;
+        if (pct >= passing) {
+          try {
+            await db.issueCertificate({
+              title: course.title,
+              course_id: course.id,
+              note: [course.ce_hours ? `${course.ce_hours} contact hours` : "", course.approval_number || ""].filter(Boolean).join(" · "),
+              ce_hours: course.ce_hours || null,
+              approval_number: course.approval_number || null,
+              provider_name: course.provider_name || null,
+            });
+          } catch (certErr) { console.error("CE cert auto-issue:", certErr); }
+          window.alert(`You passed with ${pct}%! 🎉\n\nYour CE certificate has been issued.\nHours earned: ${course.ce_hours || "—"} contact hours.\nView it under CE Hours in your menu.`);
+        } else {
+          window.alert(`You scored ${pct}%. A passing score of ${passing}% is required to earn CE credit for this course.\n\nYour submission has been recorded.`);
+        }
+      }
+      // ── END CE PASS-GATE ──────────────────────────────────────
+
+      await refresh(); setTaking(null); setAnswers({});
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  if (taking) {
+    const answered = taking.questions.filter((q) => answers[q.id] !== undefined && answers[q.id] !== "").length;
+    const course = courses.find((c) => c.id === taking.course_id);
+    const isCE = course && isCEType(course.ce_type);
+    return (
+      <>
+        <PageHead title={taking.title} sub={taking.description} action={<Btn kind="ghost" icon={X} onClick={() => { setTaking(null); setAnswers({}); }}>Exit</Btn>} />
+        {isCE && (
+          <Card style={{ marginBottom: 12, padding: "12px 16px", background: C.paper, border: `1px solid ${C.goldSoft}` }}>
+            <div className="flex items-center gap-2">
+              <Award size={16} color={C.gold} />
+              <span className="pl-body" style={{ fontSize: 13, color: C.gold, fontWeight: 600 }}>CE Post-Test — {course.ce_type === "faith_ce" ? "Faith-Based CE" : "Continuing Education"}</span>
+              <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>· Pass {course.passing_score || 75}% to earn {course.ce_hours || "—"} contact hours</span>
+            </div>
+          </Card>
+        )}
+        {taking.questions.map((q, i) => (
+          <Card key={q.id} style={{ marginBottom: 12 }}>
+            <span className="pl-body" style={{ fontWeight: 700, color: C.gold, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".06em" }}>Question {i + 1} · {q.points} pts</span>
+            <p className="pl-body" style={{ fontWeight: 600, color: C.ink, fontSize: 16, margin: "8px 0 12px" }}>{q.prompt}</p>
+            {q.type === "mc" && q.options.map((opt, oi) => (
+              <button key={oi} onClick={() => setAnswers({ ...answers, [q.id]: oi })} className="pl-body pl-press flex items-center gap-3" style={{ width: "100%", textAlign: "left", padding: "11px 14px", borderRadius: 9, marginBottom: 8, cursor: "pointer", border: `1px solid ${answers[q.id] === oi ? C.gold : C.line}`, background: answers[q.id] === oi ? C.paper2 : "#fff", fontSize: 15 }}>
+                <span className="inline-flex items-center justify-center" style={{ width: 22, height: 22, borderRadius: "50%", border: `2px solid ${answers[q.id] === oi ? C.gold : C.line}`, background: answers[q.id] === oi ? C.gold : "#fff" }}>{answers[q.id] === oi && <Check size={12} color="#1a1407" />}</span>
+                {opt}
+              </button>
+            ))}
+            {q.type === "tf" && ["true", "false"].map((v) => (
+              <button key={v} onClick={() => setAnswers({ ...answers, [q.id]: v })} className="pl-press" style={{ padding: "9px 22px", borderRadius: 9, marginRight: 8, cursor: "pointer", textTransform: "capitalize", fontWeight: 600, fontSize: 15, border: `1px solid ${answers[q.id] === v ? C.gold : C.line}`, background: answers[q.id] === v ? C.paper2 : "#fff", color: C.ink }}>{v}</button>
+            ))}
+            {(q.type === "short" || q.type === "essay") && (
+              <textarea style={{ ...inputStyle, minHeight: q.type === "essay" ? 220 : 110 }} placeholder="Type your answer…" value={answers[q.id] || ""} onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
+            )}
+          </Card>
+        ))}
+        <div className="flex items-center justify-between" style={{ marginTop: 16 }}>
+          <span className="pl-body" style={{ color: C.muted, fontSize: 14 }}>{answered} / {taking.questions.length} answered</span>
+          <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : isCE ? "Submit post-test" : "Submit test"}</Btn>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="My Tests" sub="Assessments assigned to you." />
+      {available.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No tests available right now.</span></Card> :
+        <Grouped items={available} courses={courses}>
+          {(items) => (
+            <div className="flex flex-col gap-3">
+              {items.map((t) => {
+                const course = courses.find((c) => c.id === t.course_id);
+                const isCE = course && isCEType(course.ce_type);
+                return (
+                  <Card key={t.id}>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{t.title}</h3>
+                          {isCE && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: C.goldSoft, padding: "2px 8px", borderRadius: 999 }}>{course.ce_type === "faith_ce" ? "Faith CE" : "CE"} Post-Test</span>}
+                        </div>
+                        <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{books.find((b) => b.id === t.book_id)?.title || "General"} · {t.questions.length} questions · {sumPoints(t.questions)} pts{isCE ? ` · Pass ${course.passing_score || 75}% for ${course.ce_hours || "—"} CE hrs` : ""}</div>
+                      </div>
+                      <Btn icon={PencilLine} onClick={() => setTaking(t)}>Begin</Btn>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </Grouped>}
+    </>
+  );
+}
+
+function DegreeProgress({ profile, courses, tests, homework, mySubs, myHwSubs }) {
+  const prog = profile?.program;
+  const progCourses = (courses || []).filter((c) => c.program === prog).slice().sort((a, b) => (a.code || a.title || "").localeCompare(b.code || b.title || ""));
+
+  function stat(c) {
+    const cts = tests.filter((t) => t.course_id === c.id);
+    const chw = homework.filter((h) => h.course_id === c.id);
+    let earned = 0, possible = 0, any = false;
+    cts.forEach((t) => { const s = mySubs.find((x) => x.test_id === t.id); if (s) { any = true; if (s.status === "graded") { earned += Number(s.score) || 0; possible += (s.max_score ?? sumPoints(t.questions)) || 0; } } });
+    chw.forEach((h) => { const s = myHwSubs.find((x) => x.homework_id === h.id); if (s) { any = true; if (s.status === "graded") { earned += Number(s.score) || 0; possible += (s.max_points ?? sumPoints(h.questions) ?? Number(h.points)) || 0; } } });
+    const grade = possible ? Math.round((earned / possible) * 100) : null;
+    let status = "Not started";
+    if (grade != null && grade >= 70) status = "Completed";
+    else if (any) status = "In progress";
+    return { grade, status, credits: Number(c.credit_hours) || 0 };
+  }
+
+  const rows = progCourses.map((c) => ({ c, ...stat(c) }));
+  const totalCredits = rows.reduce((a, r) => a + r.credits, 0);
+  const earnedCredits = rows.filter((r) => r.status === "Completed").reduce((a, r) => a + r.credits, 0);
+  const doneCount = rows.filter((r) => r.status === "Completed").length;
+  const pct = totalCredits ? Math.round((earnedCredits / totalCredits) * 100) : 0;
+  const completed = rows.filter((r) => r.status === "Completed" && r.grade != null);
+  const gpa = completed.length ? (completed.reduce((a, r) => a + gradeInfo(r.grade).points, 0) / completed.length).toFixed(2) : null;
+
+  const badge = (status) => {
+    const col = status === "Completed" ? C.green : status === "In progress" ? C.gold : C.muted;
+    return <span style={{ fontSize: 12, fontWeight: 700, color: col, background: col + "1A", padding: "3px 11px", borderRadius: 20, whiteSpace: "nowrap" }}>{status}</span>;
   };
-  if (res.id) {
-    const { error } = await supabase.from("pl_resources").update(rec).eq("id", res.id);
-    if (error) throw error;
+
+  if (!prog) return (<><PageHead title="Degree Progress" /><Card><span className="pl-body" style={{ color: C.muted }}>You haven't been assigned to a program yet. Please contact the school office.</span></Card></>);
+
+  return (
+    <>
+      <PageHead title="Degree Progress" sub={`Your journey toward the ${programLabel(prog)} program.`} />
+      <Card style={{ marginBottom: 18 }}>
+        <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginBottom: 6 }}>{pct}% of credits earned</div>
+        <div style={{ height: 14, background: (C.line || "#E7E3D6"), borderRadius: 8, overflow: "hidden", marginBottom: 18 }}>
+          <div style={{ width: pct + "%", height: "100%", background: C.gold, borderRadius: 8 }} />
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 28 }}>
+          <div><div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.ink }}>{earnedCredits}<span style={{ fontSize: 15, color: C.muted }}> / {totalCredits}</span></div><div className="pl-body" style={{ fontSize: 12, color: C.muted }}>Credits earned</div></div>
+          <div><div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.ink }}>{doneCount}<span style={{ fontSize: 15, color: C.muted }}> / {rows.length}</span></div><div className="pl-body" style={{ fontSize: 12, color: C.muted }}>Courses completed</div></div>
+          <div><div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.ink }}>{gpa ?? "—"}</div><div className="pl-body" style={{ fontSize: 12, color: C.muted }}>GPA so far</div></div>
+        </div>
+      </Card>
+
+      {rows.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No courses are listed for your program yet.</span></Card>
+      ) : (
+        <Card style={{ padding: 0, overflow: "hidden" }}>
+          {rows.map((r, i) => (
+            <div key={r.c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "13px 16px", borderTop: i ? `1px solid ${C.line || "#EEF0F4"}` : "none" }}>
+              <div style={{ minWidth: 0 }}>
+                <div className="pl-body" style={{ fontWeight: 600, color: C.ink }}>{r.c.code ? r.c.code + " — " : ""}{r.c.title}</div>
+                <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{r.credits ? r.credits + " credit" + (r.credits === 1 ? "" : "s") : "—"}{r.grade != null ? ` · ${r.grade}%` : ""}</div>
+              </div>
+              {badge(r.status)}
+            </div>
+          ))}
+        </Card>
+      )}
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 12 }}>
+        Status reflects your graded work so far — a course shows <span style={{ color: C.green }}>Completed</span> once your average reaches a passing grade. Your registrar's transcript is the official record.
+      </p>
+    </>
+  );
+}
+
+function StudentGrades({ mySubs, tests, myHwSubs, homework, courses, profile }) {
+  const items = gradedItems(profile.id, mySubs, tests, myHwSubs, homework, courses);
+  const sum = summarize(items);
+  return (
+    <>
+      <PageHead title="Grades" sub="Your results, GPA, and instructor feedback." action={items.length ? <Btn icon={ExternalLink} onClick={() => openTranscript(profile.full_name, items, sum)}>Print transcript</Btn> : null} />
+      {items.length > 0 && (
+        <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
+          <Stat icon={Award} label="Average" value={Math.round(sum.avgPct) + "%"} />
+          <Stat icon={Award} label="Letter grade" value={sum.letter} tone={C.gold} />
+          <Stat icon={GraduationCap} label="GPA (4.0)" value={sum.gpa.toFixed(2)} tone={C.green} />
+        </div>
+      )}
+      {mySubs.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No submissions yet.</span></Card> :
+        <div className="flex flex-col gap-3">
+          {mySubs.map((s) => {
+            const test = tests.find((t) => t.id === s.test_id);
+            const isGraded = s.status === "graded";
+            return (
+              <Card key={s.id}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="pl-display" style={{ fontSize: 18.5, fontWeight: 600, color: C.ink, margin: 0 }}>{test?.title || "Test"}</h3>
+                    <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>Submitted {fdate(s.submitted_at)}</div>
+                  </div>
+                  {isGraded ? (
+                    <div className="text-right">
+                      <div className="pl-display" style={{ fontSize: 24, fontWeight: 600, color: C.green }}>{s.max_score ? Math.round((s.score / s.max_score) * 100) : 0}%</div>
+                      <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{s.max_score ? Math.round((s.score / s.max_score) * 100) : 0} / 100</div>
+                    </div>
+                  ) : <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: C.gold, background: C.goldSoft, padding: "5px 12px", borderRadius: 20 }}>Awaiting grade</span>}
+                </div>
+                {isGraded && s.feedback && (
+                  <div style={{ marginTop: 12, padding: "12px 14px", background: C.paper, borderRadius: 9, borderLeft: `3px solid ${C.gold}` }}>
+                    <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>Instructor feedback</div>
+                    <p className="pl-body" style={{ fontSize: 14, lineHeight: 1.55, margin: 0 }}>{s.feedback}</p>
+                  </div>
+                )}
+                <div style={{ marginTop: 12 }}>
+                  <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, test, profile.full_name)}>View / Print</Btn>
+                </div>
+              </Card>
+            );
+          })}
+        </div>}
+    </>
+  );
+}
+
+/* ============================================================ SYLLABUS + HOMEWORK */
+function FileLink({ path, label = "Open file" }) {
+  const [busy, setBusy] = useState(false);
+  if (!path) return null;
+  async function open() {
+    setBusy(true);
+    try { const url = await db.signedUrl(path); if (url) window.open(url, "_blank"); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  return <Btn small kind="ghost" icon={ExternalLink} onClick={open} disabled={busy}>{busy ? "Opening…" : label}</Btn>;
+}
+
+/* ---------- SYLLABUS (instructor) ---------- */
+function SyllabusManager({ syllabi, refresh }) {
+  const [editing, setEditing] = useState(null); // syllabus object or {new:true}
+
+  function startNew() { setEditing({ program: "all", title: "", content: "", term: "" }); }
+
+  async function remove(id) {
+    if (!window.confirm("Delete this syllabus?")) return;
+    try { await db.deleteSyllabus(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  if (editing) {
+    return <SyllabusEditor entry={editing} onDone={() => setEditing(null)} refresh={refresh} />;
+  }
+
+  return (
+    <>
+      <PageHead title="Syllabus" sub="Post a syllabus for each program. Students see the one matching their program." action={<Btn icon={Plus} onClick={startNew}>New syllabus</Btn>} />
+      <div className="flex flex-col gap-3">
+        {(!syllabi || syllabi.length === 0) && <Card><span className="pl-body" style={{ color: C.muted }}>No syllabus posted yet. Click New syllabus to add one for a program.</span></Card>}
+        {(syllabi || []).map((s) => (
+          <Card key={s.id}>
+            <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+              <div className="flex items-center gap-2" style={{ flex: 1 }}>
+                <ScrollText size={18} color={C.gold} />
+                <div>
+                  <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{s.title || `${programLabel(s.program)} Syllabus`}</div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.gold, fontWeight: 600 }}>{s.program === "all" ? "All programs" : programLabel(s.program)}{s.term ? ` · ${s.term}` : ""}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {s.file_path && <FileLink path={s.file_path} label="PDF" />}
+                <Btn small kind="ghost" icon={PencilLine} onClick={() => setEditing(s)}>Edit</Btn>
+                <button onClick={() => remove(s.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function SyllabusEditor({ entry, onDone, refresh }) {
+  const [program, setProgram] = useState(entry.program || "all");
+  const [title, setTitle] = useState(entry.title || "");
+  const [content, setContent] = useState(entry.content || "");
+  const [term, setTerm] = useState(entry.term || "");
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    setBusy(true);
+    try {
+      await db.saveSyllabus({ id: entry.id, program, term, title, content, file });
+      await refresh();
+      onDone();
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  return (
+    <>
+      <PageHead title={entry.id ? "Edit Syllabus" : "New Syllabus"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={onDone}>Back</Btn>} />
+      <Card style={{ maxWidth: 720 }}>
+        <div className="flex items-center gap-2" style={{ marginBottom: 12 }}>
+          <ScrollText size={18} color={C.gold} />
+          <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>Syllabus details</h3>
+        </div>
+        <Field label="Program">
+          <select style={inputStyle} value={program} onChange={(e) => setProgram(e.target.value)}>
+            <option value="all">All programs</option>
+            {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Term (optional)">
+          <select style={inputStyle} value={term} onChange={(e) => setTerm(e.target.value)}>
+            <option value="">No specific term</option>
+            <option value="fall">Fall</option>
+            <option value="spring">Spring</option>
+            <option value="summer">Summer</option>
+          </select>
+        </Field>
+        <Field label="Title"><input style={inputStyle} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Fully Known — Certificate Syllabus" /></Field>
+        <Field label="Syllabus text"><textarea style={{ ...inputStyle, minHeight: 180 }} value={content} onChange={(e) => setContent(e.target.value)} placeholder="Course outline, schedule, expectations, grading policy…" /></Field>
+        <Field label="Attach PDF (optional)">
+          <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
+            <Upload size={16} color={C.muted} />
+            <span className="pl-body" style={{ fontSize: 14, color: file ? C.text : C.muted }}>{file ? file.name : (entry?.file_path ? "Replace current PDF…" : "Choose a file…")}</span>
+            <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => setFile(e.target.files[0])} />
+          </label>
+        </Field>
+        <div className="flex items-center gap-2">
+          <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save syllabus"}</Btn>
+          {entry?.file_path && <FileLink path={entry.file_path} label="View current PDF" />}
+          <Btn kind="ghost" onClick={onDone}>Cancel</Btn>
+        </div>
+      </Card>
+    </>
+  );
+}
+
+/* ---------- SYLLABUS (student) ---------- */
+function StudentSyllabus({ syllabi, profile }) {
+  // Show syllabi for the student's program, plus any marked "all programs".
+  const prog = profile?.program;
+  const items = (syllabi || []).filter((s) => s.program === "all" || s.program === prog);
+  return (
+    <>
+      <PageHead title="Syllabus" sub="Course outline for your program." />
+      {items.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No syllabus posted for your program yet.</span></Card> :
+        <div className="flex flex-col gap-4">
+          {items.map((s) => (
+            <Card key={s.id}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                <div className="flex items-center gap-2">
+                  <ScrollText size={18} color={C.gold} />
+                  <div>
+                    <h3 className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.ink, margin: 0 }}>{s.title || `${programLabel(s.program)} Syllabus`}</h3>
+                    {s.program !== "all" && <div className="pl-body" style={{ fontSize: 12, color: C.gold, fontWeight: 600 }}>{programLabel(s.program)}{s.term ? ` · ${s.term}` : ""}</div>}
+                  </div>
+                </div>
+                {s.file_path && <FileLink path={s.file_path} label="Download PDF" />}
+              </div>
+              {s.content && <p className="pl-body" style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: "pre-wrap", margin: 0 }}>{s.content}</p>}
+            </Card>
+          ))}
+        </div>}
+    </>
+  );
+}
+
+/* ---------- HOMEWORK (instructor) — builder + grading ---------- */
+function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
+  const [mode, setMode] = useState("list");
+  const [draft, setDraft] = useState(null);
+  const [qs, setQs] = useState([]);
+  const [file, setFile] = useState(null);
+  const [gradeId, setGradeId] = useState(null);
+  const [manual, setManual] = useState({});
+  const [score, setScore] = useState("");
+  const [feedback, setFeedback] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [csvNote, setCsvNote] = useState(null);
+  const [progFilter, setProgFilter] = useState("all");
+  const [gradedQ, setGradedQ] = useState("");
+  const [openHw, setOpenHw] = useState(() => new Set());
+  const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
+  const titleOf = (id) => homework.find((h) => h.id === id)?.title || "Homework";
+
+  const toLocalInput = (iso) => { if (!iso) return ""; const d = new Date(iso); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
+  const statusBadge = (h) => {
+    const now = Date.now();
+    let label, color, bg;
+    if ((h.status || "published") !== "published") { label = "Draft"; color = C.muted; bg = C.paper2; }
+    else if (h.available_from && new Date(h.available_from).getTime() > now) { label = "Scheduled"; color = C.gold; bg = C.goldSoft; }
+    else if (h.available_until && new Date(h.available_until).getTime() < now) { label = "Closed"; color = C.rose; bg = C.roseSoft; }
+    else { label = "Live"; color = C.green; bg = C.greenSoft; }
+    return <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color, background: bg, padding: "2px 9px", borderRadius: 999, marginLeft: 8, verticalAlign: "middle" }}>{label}</span>;
+  };
+  function newHw() { setDraft({ id: null, title: "", instructions: "", program: "all", due_date: "", points: 100, file_path: null, course_id: "", module: "", status: "draft", available_from: "", available_until: "" }); setQs([]); setFile(null); setMode("build"); }
+  function editHw(h) { setDraft({ id: h.id, title: h.title, instructions: h.instructions, program: h.program || "all", due_date: h.due_date || "", points: h.points, file_path: h.file_path, course_id: h.course_id || "", module: h.module || "", status: h.status || "published", available_from: toLocalInput(h.available_from), available_until: toLocalInput(h.available_until) }); setQs(h.questions.map((q) => ({ ...q }))); setFile(null); setMode("build"); }
+
+  function addQ(type) {
+    const base = { id: "tmp" + Date.now() + Math.random(), type, prompt: "", points: type === "essay" ? 20 : type === "short" ? 10 : 5 };
+    if (type === "mc") Object.assign(base, { options: ["", "", "", ""], correct_answer: "0" });
+    if (type === "tf") base.correct_answer = "true";
+    setQs([...qs, base]);
+  }
+  const upQ = (id, patch) => setQs(qs.map((q) => (q.id === id ? { ...q, ...patch } : q)));
+  const delQ = (id) => setQs(qs.filter((q) => q.id !== id));
+
+  async function save() {
+    if (!draft.title.trim()) { window.alert("Give the assignment a title."); return; }
+    setBusy(true);
+    try {
+      const payload = { ...draft,
+        available_from: draft.available_from ? new Date(draft.available_from).toISOString() : null,
+        available_until: draft.available_until ? new Date(draft.available_until).toISOString() : null,
+      };
+      await db.saveHomework(payload, qs, file); await refresh(); setMode("list");
+    }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function importCsv(file) {
+    if (!file) return;
+    setCsvNote("Reading file…");
+    try {
+      const text = await file.text();
+      const rows = parseCSV(text);
+      if (rows.length < 2) { setCsvNote("That file has no rows under the header."); return; }
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const col = (n) => header.indexOf(n);
+      const iCourse = col("course_code"), iTitle = col("assignment_title"), iDue = col("due_date"), iType = col("type"), iPts = col("points"), iQ = col("question"), iAns = col("correct_answer"), iOpts = col("options");
+      if (iCourse < 0 || iTitle < 0 || iQ < 0) { setCsvNote("CSV needs course_code, assignment_title, and question columns."); return; }
+      const groups = new Map(); const order = [];
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r]; if (!row || row.every((c) => !(c || "").trim())) continue;
+        const code = (row[iCourse] || "").trim(), title = (row[iTitle] || "").trim(), q = (row[iQ] || "").trim();
+        if (!code || !title || !q) continue;
+        const key = code + "||" + title;
+        if (!groups.has(key)) { groups.set(key, { code, title, due: iDue >= 0 ? (row[iDue] || "").trim() : "", questions: [] }); order.push(key); }
+        let type = iType >= 0 ? (row[iType] || "").trim().toLowerCase() : "short";
+        if (!QTYPE[type]) type = "short";
+        const pts = iPts >= 0 && (row[iPts] || "").trim() !== "" ? Number(row[iPts]) : 1;
+        const rawAns = iAns >= 0 ? (row[iAns] || "").trim() : "";
+        let opts = [], correct = "";
+        if (type === "tf") {
+          const a = rawAns.toLowerCase();
+          if (["true", "t", "yes", "1"].includes(a)) correct = "true";
+          else if (["false", "f", "no", "0"].includes(a)) correct = "false";
+        } else if (type === "mc") {
+          if (iOpts >= 0) opts = (row[iOpts] || "").split("|").map((s) => s.trim()).filter(Boolean);
+          if (rawAns) {
+            const byText = opts.findIndex((o) => o.toLowerCase() === rawAns.toLowerCase());
+            if (byText >= 0) correct = String(byText);
+            else if (/^[A-Za-z]$/.test(rawAns)) correct = String(rawAns.toUpperCase().charCodeAt(0) - 65);
+            else if (/^\d+$/.test(rawAns)) correct = String(Number(rawAns) - 1);
+          }
+        }
+        const qobj = { type, prompt: q, points: pts };
+        if (type === "mc" && opts.length) qobj.options = opts;
+        if (correct !== "") qobj.correct_answer = correct;
+        groups.get(key).questions.push(qobj);
+      }
+      const codeMap = new Map();
+      (courses || []).forEach((c) => { if (c.code) codeMap.set(c.code.trim().toLowerCase(), c); });
+      let made = 0; const skipped = [];
+      setCsvNote(`Importing ${order.length} assignment${order.length === 1 ? "" : "s"}…`);
+      for (const key of order) {
+        const g = groups.get(key); const c = codeMap.get(g.code.toLowerCase());
+        if (!c) { skipped.push(g.code); continue; }
+        await db.saveHomework({ id: null, title: g.title, instructions: "", due_date: g.due || "", points: 0, program: c.program || "all", course_id: c.id, module: "" }, g.questions, null);
+        made++;
+      }
+      await refresh();
+      const uniq = [...new Set(skipped)];
+      setCsvNote(`Created ${made} assignment${made === 1 ? "" : "s"}.${uniq.length ? ` Skipped (course code not found — import courses first): ${uniq.join(", ")}.` : ""}`);
+    } catch (e) { setCsvNote("Couldn't import: " + e.message); }
+  }
+  async function removeHw(id) {
+    if (!window.confirm("Delete this assignment?")) return;
+    try { await db.deleteHomework(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  function openGrade(s) { setGradeId(s.id); setManual(s.manual || {}); setScore(s.score ?? ""); setFeedback(s.feedback || ""); setMode("grade"); }
+
+  async function finalize() {
+    const sub = hwSubs.find((s) => s.id === gradeId);
+    const hw = homework.find((h) => h.id === sub.homework_id);
+    const hasQs = hw && hw.questions.length > 0;
+    let total, max = 100;
+    if (hasQs) {
+      const auto = autoScore({ questions: hw.questions }, sub);
+      const manualTotal = hw.questions.filter((q) => q.type === "short" || q.type === "essay").reduce((a, q) => a + (Number(manual[q.id] ?? 0) || 0), 0);
+      const raw = sumPoints(hw.questions); total = raw ? Math.round(((auto + manualTotal) / raw) * 100) : 0;
+    } else {
+      total = Math.max(0, Math.min(100, Number(score) || 0));
+    }
+    setBusy(true);
+    try { await db.gradeHomework(gradeId, { manual, score: total, max_points: max, feedback }); await refresh(); setMode("list"); setGradeId(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  async function saveGradingDraft() {
+    const sub = hwSubs.find((s) => s.id === gradeId);
+    const hw = homework.find((h) => h.id === sub.homework_id);
+    const hasQs = hw && hw.questions.length > 0;
+    let total = 0, max = 100;
+    if (hasQs) {
+      const auto = autoScore({ questions: hw.questions }, sub);
+      const manualTotal = hw.questions.filter((q) => q.type === "short" || q.type === "essay").reduce((a, q) => a + (Number(manual[q.id] ?? 0) || 0), 0);
+      const raw = sumPoints(hw.questions); total = raw ? Math.round(((auto + manualTotal) / raw) * 100) : 0;
+    } else {
+      total = Math.max(0, Math.min(100, Number(score) || 0));
+    }
+    setBusy(true);
+    try { await db.saveGradeDraft(gradeId, { manual, score: total, max_points: max, feedback }); await refresh(); setMode("list"); setGradeId(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  async function sendBack() {
+    const note = window.prompt("Send this homework back to the student to complete and resubmit.\n\nAdd a note telling them what to fix or finish:", feedback || "");
+    if (note === null) return; // cancelled
+    setBusy(true);
+    try { await db.sendBackHomework(gradeId, note); await refresh(); setMode("list"); setGradeId(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  if (mode === "build" && draft) {
+    return (
+      <>
+        <PageHead title="Assignment Builder" sub="Add questions (auto-graded) and/or let students upload work." action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
+        <Card style={{ marginBottom: 18 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Reading Response — Chapter 3" /></Field>
+          <Field label="Instructions"><textarea style={{ ...inputStyle, minHeight: 90 }} value={draft.instructions} onChange={(e) => setDraft({ ...draft, instructions: e.target.value })} /></Field>
+          <div className="grid grid-cols-3 gap-4">
+            <Field label="Program / level"><ProgramSelect value={draft.program} onChange={(v) => setDraft({ ...draft, program: v })} /></Field>
+            <Field label="Due date (optional)"><input type="date" style={inputStyle} value={draft.due_date} onChange={(e) => setDraft({ ...draft, due_date: e.target.value })} /></Field>
+            <Field label="Points (if no questions)"><input type="number" style={inputStyle} value={draft.points} onChange={(e) => setDraft({ ...draft, points: e.target.value })} /></Field>
+          </div>
+          <CourseFields courses={courses} courseId={draft.course_id} module={draft.module} onCourse={(v) => { const c = courses.find((x) => x.id === v); setDraft({ ...draft, course_id: v, program: c && c.program ? c.program : draft.program }); }} onModule={(v) => setDraft({ ...draft, module: v })} />
+          <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 14, paddingTop: 14 }}>
+            <div className="pl-body" style={{ fontWeight: 700, color: C.ink, marginBottom: 10 }}>Visibility</div>
+            <div className="grid grid-cols-3 gap-4">
+              <Field label="Status">
+                <select style={inputStyle} value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })}>
+                  <option value="draft">Draft — hidden from students</option>
+                  <option value="published">Published — visible to students</option>
+                </select>
+              </Field>
+              <Field label="Available from (optional)"><input type="datetime-local" style={inputStyle} value={draft.available_from} onChange={(e) => setDraft({ ...draft, available_from: e.target.value })} /></Field>
+              <Field label="Closes (optional)"><input type="datetime-local" style={inputStyle} value={draft.available_until} onChange={(e) => setDraft({ ...draft, available_until: e.target.value })} /></Field>
+            </div>
+            <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 6 }}>Draft assignments stay hidden. A Published assignment with an "Available from" time appears only once that time arrives; add a "Closes" time to hide it afterward.</div>
+          </div>
+          <Field label="Attachment (optional PDF for students)">
+            <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
+              <Upload size={16} color={C.muted} />
+              <span className="pl-body" style={{ fontSize: 14, color: file ? C.text : C.muted }}>{file ? file.name : (draft.file_path ? "Replace current file…" : "Choose a file…")}</span>
+              <input type="file" accept="application/pdf" style={{ display: "none" }} onChange={(e) => setFile(e.target.files[0])} />
+            </label>
+          </Field>
+        </Card>
+
+        {qs.map((q, i) => (
+          <Card key={q.id} style={{ marginBottom: 12 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+              <span className="pl-body" style={{ fontWeight: 700, color: C.gold, fontSize: 13, textTransform: "uppercase", letterSpacing: ".06em" }}>Q{i + 1} · {QTYPE[q.type]}</span>
+              <div className="flex items-center gap-3">
+                <label className="pl-body flex items-center gap-1" style={{ fontSize: 13, color: C.muted }}>Points
+                  <input type="number" value={q.points} onChange={(e) => upQ(q.id, { points: Number(e.target.value) })} style={{ ...inputStyle, width: 64, padding: "5px 8px" }} />
+                </label>
+                <button onClick={() => delQ(q.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
+              </div>
+            </div>
+            <textarea style={{ ...inputStyle, minHeight: 52 }} placeholder="Question prompt…" value={q.prompt} onChange={(e) => upQ(q.id, { prompt: e.target.value })} />
+            {q.type === "mc" && (
+              <div style={{ marginTop: 10 }}>
+                {q.options.map((opt, oi) => (
+                  <div key={oi} className="flex items-center gap-2" style={{ marginBottom: 7 }}>
+                    <button onClick={() => upQ(q.id, { correct_answer: String(oi) })} className="pl-press inline-flex items-center justify-center" style={{ width: 24, height: 24, borderRadius: "50%", border: `2px solid ${String(q.correct_answer) === String(oi) ? C.green : C.line}`, background: String(q.correct_answer) === String(oi) ? C.green : "#fff", cursor: "pointer" }}>{String(q.correct_answer) === String(oi) && <Check size={13} color="#fff" />}</button>
+                    <input style={{ ...inputStyle, padding: "7px 10px" }} placeholder={`Option ${oi + 1}`} value={opt} onChange={(e) => { const o = [...q.options]; o[oi] = e.target.value; upQ(q.id, { options: o }); }} />
+                  </div>
+                ))}
+                <div className="pl-body" style={{ fontSize: 12, color: C.muted }}>Click the circle to mark the correct answer.</div>
+              </div>
+            )}
+            {q.type === "tf" && (
+              <div className="flex gap-2" style={{ marginTop: 10 }}>
+                {["true", "false"].map((v) => (
+                  <button key={v} onClick={() => upQ(q.id, { correct_answer: v })} className="pl-press" style={{ padding: "7px 18px", borderRadius: 8, cursor: "pointer", textTransform: "capitalize", fontWeight: 600, border: `1px solid ${q.correct_answer === v ? C.green : C.line}`, background: q.correct_answer === v ? C.greenSoft : "#fff", color: q.correct_answer === v ? C.green : C.muted }}>{v}</button>
+                ))}
+              </div>
+            )}
+            {(q.type === "short" || q.type === "essay") && <div className="pl-body" style={{ marginTop: 10, fontSize: 13, color: C.muted, fontStyle: "italic" }}>Graded manually after submission.</div>}
+          </Card>
+        ))}
+
+        <Card>
+          <div className="pl-body" style={{ fontWeight: 600, color: C.ink, marginBottom: 10 }}>Add a question (optional)</div>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(QTYPE).map(([k, v]) => <Btn key={k} small kind="ghost" icon={Plus} onClick={() => addQ(k)}>{v}</Btn>)}
+          </div>
+        </Card>
+
+        <div className="flex items-center justify-between" style={{ marginTop: 18 }}>
+          <span className="pl-body" style={{ color: C.muted, fontSize: 14 }}>{qs.length} questions · {qs.length ? sumPoints(qs) : draft.points} points · {programLabel(draft.program)}</span>
+          <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save assignment"}</Btn>
+        </div>
+      </>
+    );
+  }
+
+  if (mode === "grade" && gradeId) {
+    const sub = hwSubs.find((s) => s.id === gradeId);
+    if (!sub) { setMode("list"); return null; }
+    const hw = homework.find((h) => h.id === sub.homework_id);
+    const hasQs = hw && hw.questions.length > 0;
+    const auto = hasQs ? autoScore({ questions: hw.questions }, sub) : 0;
+    const manualTotal = hasQs ? hw.questions.filter((q) => q.type === "short" || q.type === "essay").reduce((a, q) => a + (Number(manual[q.id] ?? 0) || 0), 0) : 0;
+    const max = hasQs ? sumPoints(hw.questions) : 100;
+    const total = hasQs ? auto + manualTotal : (Number(score) || 0);
+    return (
+      <>
+        <PageHead title="Grade Homework" sub={`${nameOf(sub.student_id)} · ${titleOf(sub.homework_id)}`} action={<div className="flex gap-2"><Btn kind="ghost" icon={ExternalLink} onClick={() => openSubmission(sub, hw, nameOf(sub.student_id))}>View / Print</Btn><Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn></div>} />
+        {hasQs && hw.questions.map((q, i) => {
+          const ans = sub.answers?.[q.id];
+          const isAuto = q.type === "mc" || q.type === "tf";
+          const correct = q.type === "mc" ? String(ans) === String(q.correct_answer) : q.type === "tf" ? ans === q.correct_answer : false;
+          return (
+            <Card key={q.id} style={{ marginBottom: 12 }}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                <span className="pl-body" style={{ fontWeight: 700, color: C.gold, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".06em" }}>Q{i + 1} · {QTYPE[q.type]} · {q.points} pts</span>
+                {isAuto && <span className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: correct ? C.green : C.rose }}>{correct ? "Correct (auto)" : "Incorrect (auto)"}</span>}
+              </div>
+              <p className="pl-body" style={{ fontWeight: 600, color: C.ink, marginBottom: 8 }}>{q.prompt}</p>
+              {q.type === "mc" && <div className="pl-body" style={{ fontSize: 14 }}>Student answered: <b>{q.options[Number(ans)] ?? "—"}</b> · Correct: {q.options[Number(q.correct_answer)]}</div>}
+              {q.type === "tf" && <div className="pl-body" style={{ fontSize: 14, textTransform: "capitalize" }}>Student answered: <b>{ans ?? "—"}</b> · Correct: {q.correct_answer}</div>}
+              {(q.type === "short" || q.type === "essay") && (
+                <>
+                  <div className="pl-body" style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 14px", fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", minHeight: 80 }}>{ans || <i style={{ color: C.muted }}>No response</i>}</div>
+                  <div className="flex items-center gap-2" style={{ marginTop: 10 }}>
+                    <span className="pl-body" style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>Award points:</span>
+                    <input type="number" min={0} max={q.points} value={manual[q.id] ?? ""} placeholder="0" onChange={(e) => setManual({ ...manual, [q.id]: Math.min(q.points, Math.max(0, Number(e.target.value) || 0)) })} style={{ ...inputStyle, width: 80, padding: "6px 10px" }} />
+                    <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>/ {q.points}</span>
+                  </div>
+                </>
+              )}
+            </Card>
+          );
+        })}
+        <Card style={{ marginBottom: 12 }}>
+          <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 6 }}>Student upload</div>
+          <div className="pl-body" style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", fontSize: 14, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{sub.response || <i style={{ color: C.muted }}>No written response</i>}</div>
+          {sub.file_path && <div style={{ marginTop: 10 }}><FileLink path={sub.file_path} label="Open submitted file" /></div>}
+        </Card>
+        <Card>
+          <Field label="Feedback"><textarea style={{ ...inputStyle, minHeight: 160 }} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Comments, encouragement, corrections, next steps…" /></Field>
+          <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+            {hasQs ? (
+              <div className="pl-display" style={{ fontSize: 24, fontWeight: 600, color: C.green }}>{max ? Math.round((total / max) * 100) : 0}<span style={{ color: C.muted, fontSize: 18 }}> / 100</span> <span className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginLeft: 8 }}>({total} / {max} pts awarded)</span></div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="pl-body" style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>Score:</span>
+                <input type="number" min={0} max={max} value={score} onChange={(e) => setScore(e.target.value)} style={{ ...inputStyle, width: 90, padding: "6px 10px" }} />
+                <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>/ {max}</span>
+              </div>
+            )}
+            <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+              <Btn kind="ghost" icon={Clock} onClick={saveGradingDraft} disabled={busy}>Save draft</Btn>
+              <Btn kind="ghost" icon={RotateCcw} onClick={sendBack} disabled={busy}>Send back</Btn>
+              <Btn icon={Award} kind="gold" onClick={finalize} disabled={busy}>{busy ? "Saving…" : (sub.status === "graded" ? "Update grade" : "Finalize & release")}</Btn>
+            </div>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  const subInProg = (s) => { if (progFilter === "all") return true; const h = homework.find((x) => x.id === s.homework_id); return (h?.program || "all") === progFilter; };
+  const pending = hwSubs.filter((s) => s.status !== "graded" && subInProg(s));
+  const graded = hwSubs.filter((s) => s.status === "graded" && subInProg(s));
+  return (
+    <>
+      <PageHead title="Homework" sub="Assignments and submissions." action={<Btn icon={Plus} onClick={newHw}>New assignment</Btn>} />
+      <Card style={{ marginBottom: 18 }}>
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 6px" }}>Import homework from CSV</h3>
+        <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, margin: "0 0 10px", lineHeight: 1.5 }}>
+          One row per question. Columns: <b>course_code</b>, <b>assignment_title</b>, <b>due_date</b>, <b>type</b> (short / tf / essay / mc), <b>points</b>, <b>question</b>, and (optional) <b>correct_answer</b> + <b>options</b>. For auto-grading: on a <b>tf</b> row put true or false in correct_answer; on an <b>mc</b> row put the choices in options separated by | and the right one in correct_answer (its number, letter, or exact text). Short/essay are graded by hand. Rows sharing a course code and title become one assignment. Import your courses first so the codes resolve.
+        </p>
+        <input type="file" accept=".csv,text/csv" onChange={(e) => importCsv(e.target.files?.[0])} className="pl-body" style={{ fontSize: 13 }} />
+        {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
+      </Card>
+      <div className="flex items-center justify-between" style={{ marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+        <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, margin: 0 }}>Assignments</h3>
+        <select style={{ ...inputStyle, maxWidth: 220 }} value={progFilter} onChange={(e) => setProgFilter(e.target.value)}>
+          <option value="all">All programs</option>
+          {PROGRAMS.filter((p) => p.key !== "all").map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        </select>
+      </div>
+      {homework.length === 0 && <Card style={{ marginBottom: 24 }}><span className="pl-body" style={{ color: C.muted }}>No assignments yet.</span></Card>}
+      {(() => {
+        const codeOf = (h) => (courses.find((c) => c.id === h.course_id)?.code || "");
+        const strandOf = (h) => { const c = codeOf(h).toUpperCase(); if (c.includes("BS")) return "bs"; if (c.includes("TS")) return "ts"; return "other"; };
+        const STRANDS = [{ key: "bs", label: "Biblical Studies" }, { key: "ts", label: "Theology" }, { key: "other", label: "Other" }];
+        const visible = progFilter === "all" ? homework : homework.filter((h) => (h.program || "all") === progFilter);
+        if (visible.length === 0) return <Card style={{ marginBottom: 24 }}><span className="pl-body" style={{ color: C.muted }}>No assignments for this program.</span></Card>;
+        const card = (h) => (
+          <Card key={h.id}>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}{statusBadge(h)}</h3>
+                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(h.program)} · {h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""} · {hwSubs.filter((s) => s.homework_id === h.id).length} submitted</div>
+              </div>
+              <div className="flex items-center gap-2">
+                {h.file_path && <FileLink path={h.file_path} label="Attachment" />}
+                <Btn small kind="ghost" icon={PencilLine} onClick={() => editHw(h)}>Edit</Btn>
+                <button onClick={() => removeHw(h.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+              </div>
+            </div>
+          </Card>
+        );
+        const byCourseGroups = (items) => {
+          const byCourse = new Map();
+          items.forEach((h) => { const code = codeOf(h) || "No course"; if (!byCourse.has(code)) byCourse.set(code, []); byCourse.get(code).push(h); });
+          return [...byCourse.entries()].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })).map(([code, hs]) => ({ code, name: courses.find((c) => c.code === code)?.title || "", items: hs.slice().sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true })) }));
+        };
+        const order = PROGRAMS.map((p) => p.key);
+        const known = new Set(order);
+        const progGroups = order.map((pk) => ({ key: pk, label: programLabel(pk), items: visible.filter((h) => (h.program || "all") === pk) })).filter((g) => g.items.length);
+        const otherProg = visible.filter((h) => !known.has(h.program || "all"));
+        if (otherProg.length) progGroups.push({ key: "__other", label: "Other", items: otherProg });
+        return progGroups.map((pg) => (
+          <div key={pg.key} style={{ marginBottom: 28 }}>
+            <div className="pl-body" style={{ fontSize: 14, fontWeight: 800, color: C.ink, textTransform: "uppercase", letterSpacing: ".08em", borderBottom: `2px solid ${C.gold}`, paddingBottom: 6, marginBottom: 12 }}>{pg.label} · {pg.items.length}</div>
+            {STRANDS.map((st) => {
+              const sitems = pg.items.filter((h) => strandOf(h) === st.key);
+              if (!sitems.length) return null;
+              return (
+                <div key={st.key} style={{ marginBottom: 14 }}>
+                  <div className="pl-body" style={{ fontSize: 13, fontWeight: 700, color: C.ink2, marginBottom: 8 }}>{st.label}</div>
+                  {byCourseGroups(sitems).map((cg) => (
+                    <div key={cg.code} style={{ marginBottom: 14, paddingLeft: 4 }}>
+                      <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 8 }}>{cg.code}{cg.name ? ` — ${cg.name}` : ""} · {cg.items.length}</div>
+                      <div className="flex flex-col gap-3">{cg.items.map(card)}</div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        ));
+      })()}
+
+      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Awaiting grading</h3>
+      <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
+        {pending.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>Nothing pending.</span></Card>}
+        {pending.map((s) => {
+          const st = s.status === "grading" ? { label: "Draft saved", color: C.gold, bg: "#fffaf0" }
+            : s.status === "returned" ? { label: "Sent back", color: C.rose, bg: "#fef6f6" }
+            : null;
+          return (
+          <Card key={s.id}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
+                  {st && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: st.color, background: st.bg, border: `1px solid ${st.color}`, borderRadius: 6, padding: "2px 8px" }}>{st.label}</span>}
+                </div>
+                <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{titleOf(s.homework_id)} · submitted {fdate(s.submitted_at)}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), nameOf(s.student_id))}>View</Btn>
+                <Btn icon={ClipboardCheck} onClick={() => openGrade(s)}>{s.status === "grading" ? "Resume" : "Grade"}</Btn>
+              </div>
+            </div>
+          </Card>
+          );
+        })}
+      </div>
+
+      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Graded</h3>
+      {graded.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>None yet.</span></Card> : (() => {
+        const q = gradedQ.trim().toLowerCase();
+        const pctOf = (s) => s.max_points ? Math.round((s.score / s.max_points) * 100) : 0;
+        const match = (s) => !q || nameOf(s.student_id).toLowerCase().includes(q) || titleOf(s.homework_id).toLowerCase().includes(q);
+        const shown = graded.filter(match);
+        const byId = new Map(); const groups = [];
+        shown.forEach((s) => { if (!byId.has(s.homework_id)) { const g = { id: s.homework_id, title: titleOf(s.homework_id), subs: [] }; byId.set(s.homework_id, g); groups.push(g); } byId.get(s.homework_id).subs.push(s); });
+        groups.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
+        return (
+          <>
+            <Card style={{ marginBottom: 12 }}>
+              <input value={gradedQ} onChange={(e) => setGradedQ(e.target.value)} placeholder="Search graded by student or assignment…" style={inputStyle} />
+            </Card>
+            <div className="flex flex-col gap-3">
+              {groups.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No matches.</span></Card>}
+              {groups.map((g) => {
+                const avg = g.subs.length ? Math.round(g.subs.reduce((a, s) => a + pctOf(s), 0) / g.subs.length) : 0;
+                const open = q ? true : openHw.has(g.id);
+                return (
+                  <Card key={g.id} style={{ padding: 0, overflow: "hidden" }}>
+                    <div className="flex items-center justify-between pl-press" style={{ padding: "14px 16px", cursor: "pointer" }} onClick={() => setOpenHw((prev) => { const n = new Set(prev); n.has(g.id) ? n.delete(g.id) : n.add(g.id); return n; })}>
+                      <div className="flex items-center gap-2" style={{ minWidth: 0 }}>
+                        <ChevronRight size={16} color={C.muted} style={{ flexShrink: 0, transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+                        <span className="pl-body" style={{ fontWeight: 700, color: C.ink, fontSize: 15 }}>{g.title}</span>
+                      </div>
+                      <span className="pl-body" style={{ fontSize: 12.5, color: C.muted, whiteSpace: "nowrap", marginLeft: 10 }}>{g.subs.length} graded · avg {avg}%</span>
+                    </div>
+                    {open && (
+                      <div style={{ borderTop: `1px solid ${C.line}` }}>
+                        {g.subs.slice().sort((a, b) => nameOf(a.student_id).localeCompare(nameOf(b.student_id))).map((s) => (
+                          <div key={s.id} className="flex items-center justify-between" style={{ padding: "10px 16px", borderTop: `1px solid ${C.line}` }}>
+                            <span className="pl-body" style={{ fontWeight: 600, fontSize: 14.5, color: C.ink }}>{nameOf(s.student_id)}</span>
+                            <div className="flex items-center gap-3">
+                              <span className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: pctOf(s) >= 70 ? C.green : C.rose }}>{pctOf(s)}%</span>
+                              <Btn small kind="ghost" icon={PencilLine} onClick={() => openGrade(s)}>Edit</Btn>
+                              <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), nameOf(s.student_id))}>View / Print</Btn>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
+          </>
+        );
+      })()}
+    </>
+  );
+}
+
+/* ---------- HOMEWORK (student) ---------- */
+function StudentHomework({ availableHw, myHwSubs, homework, courses, profile, refresh }) {
+  const [doing, setDoing] = useState(null);
+  const [answers, setAnswers] = useState({});
+  const [response, setResponse] = useState("");
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [savedNote, setSavedNote] = useState(false);
+  const titleOf = (id) => homework.find((h) => h.id === id)?.title || "Homework";
+
+  const draftKey = (id) => `pl_hw_draft_${id}`;
+
+  function loadDraft(id) {
+    try {
+      const raw = window.localStorage.getItem(draftKey(id));
+      if (raw) return JSON.parse(raw);
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  function start(h) {
+    const draft = loadDraft(h.id);
+    // If this assignment was returned for correction, load the student's
+    // previous submission so they only fix the flagged issue — not redo it all.
+    const prior = (myHwSubs || []).find((s) => s.homework_id === h.id && s.status === "returned");
+    setDoing(h);
+    setAnswers(draft?.answers || prior?.answers || {});
+    setResponse(draft?.response || prior?.response || "");
+    setFile(null); // files can't be restored; student re-attaches if needed
+  }
+
+  // Auto-save the draft whenever answers or response change (while an assignment is open)
+  useEffect(() => {
+    if (!doing) return;
+    try {
+      window.localStorage.setItem(draftKey(doing.id), JSON.stringify({ answers, response, savedAt: Date.now() }));
+      setSavedNote(true);
+      const t = setTimeout(() => setSavedNote(false), 1500);
+      return () => clearTimeout(t);
+    } catch (e) { /* storage may be full/blocked; submitting still works */ }
+  }, [answers, response, doing]);
+
+  function clearDraft(id) {
+    try { window.localStorage.removeItem(draftKey(id)); } catch (e) { /* ignore */ }
+  }
+
+  async function submit() {
+    const maxPts = doing.questions.length ? sumPoints(doing.questions) : doing.points;
+    setBusy(true);
+    try {
+      await db.submitHomework({ homework_id: doing.id, answers, response, file, max_points: maxPts });
+      clearDraft(doing.id);
+      await refresh();
+      setDoing(null); setAnswers({}); setResponse(""); setFile(null);
+    }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  function saveAndExit() {
+    // Draft is already auto-saved; just confirm and leave.
+    try { window.localStorage.setItem(draftKey(doing.id), JSON.stringify({ answers, response, savedAt: Date.now() })); } catch (e) { /* ignore */ }
+    setDoing(null); setAnswers({}); setResponse(""); setFile(null);
+  }
+
+  if (doing) {
+    const qs = doing.questions || [];
+    const hasDraftProgress = Object.keys(answers).length > 0 || response.trim().length > 0;
+    const returnedSub = myHwSubs.find((s) => s.homework_id === doing.id && s.status === "returned");
+    return (
+      <>
+        <PageHead title={doing.title} sub={doing.due_date ? `Due ${fdate(doing.due_date)}` : ""} action={<div className="flex items-center gap-2">{savedNote && <span className="pl-body" style={{ fontSize: 12.5, color: C.green, fontWeight: 600 }}><Check size={13} style={{ verticalAlign: "middle", marginRight: 3 }} />Draft saved</span>}<Btn kind="ghost" icon={X} onClick={saveAndExit}>Save & exit</Btn></div>} />
+        {returnedSub && returnedSub.feedback && (
+          <Card style={{ marginBottom: 12, background: "#fef6f6", border: `1px solid ${C.rose}`, borderLeft: `4px solid ${C.rose}` }}>
+            <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.rose, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}><RotateCcw size={13} style={{ verticalAlign: "middle", marginRight: 4 }} />Returned — please complete and resubmit</div>
+            <p className="pl-body" style={{ fontSize: 14, color: C.ink, margin: 0, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{returnedSub.feedback}</p>
+          </Card>
+        )}
+        <Card style={{ marginBottom: 12, background: "#fffaf0", border: `1px solid ${C.gold}` }}>
+          <div className="pl-body" style={{ fontSize: 13, color: C.ink }}>
+            <Sparkles size={13} style={{ color: C.gold, verticalAlign: "middle", marginRight: 4 }} />
+            Your answers save automatically as you type. You can leave and come back anytime — just click <b>Start</b> on this assignment again to pick up where you left off. Your work is saved on this device.
+          </div>
+        </Card>
+        <Card style={{ marginBottom: 12 }}>
+          <p className="pl-body" style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: "pre-wrap", margin: 0 }}>{doing.instructions}</p>
+          {doing.file_path && <div style={{ marginTop: 10 }}><FileLink path={doing.file_path} label="Open attachment" /></div>}
+        </Card>
+        {qs.map((q, i) => (
+          <Card key={q.id} style={{ marginBottom: 12 }}>
+            <span className="pl-body" style={{ fontWeight: 700, color: C.gold, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".06em" }}>Question {i + 1} · {q.points} pts</span>
+            <p className="pl-body" style={{ fontWeight: 600, color: C.ink, fontSize: 16, margin: "8px 0 12px" }}>{q.prompt}</p>
+            {q.type === "mc" && q.options.map((opt, oi) => (
+              <button key={oi} onClick={() => setAnswers({ ...answers, [q.id]: oi })} className="pl-body pl-press flex items-center gap-3" style={{ width: "100%", textAlign: "left", padding: "11px 14px", borderRadius: 9, marginBottom: 8, cursor: "pointer", border: `1px solid ${answers[q.id] === oi ? C.gold : C.line}`, background: answers[q.id] === oi ? C.paper2 : "#fff", fontSize: 15 }}>
+                <span className="inline-flex items-center justify-center" style={{ width: 22, height: 22, borderRadius: "50%", border: `2px solid ${answers[q.id] === oi ? C.gold : C.line}`, background: answers[q.id] === oi ? C.gold : "#fff" }}>{answers[q.id] === oi && <Check size={12} color="#1a1407" />}</span>
+                {opt}
+              </button>
+            ))}
+            {q.type === "tf" && ["true", "false"].map((v) => (
+              <button key={v} onClick={() => setAnswers({ ...answers, [q.id]: v })} className="pl-press" style={{ padding: "9px 22px", borderRadius: 9, marginRight: 8, cursor: "pointer", textTransform: "capitalize", fontWeight: 600, fontSize: 15, border: `1px solid ${answers[q.id] === v ? C.gold : C.line}`, background: answers[q.id] === v ? C.paper2 : "#fff", color: C.ink }}>{v}</button>
+            ))}
+            {(q.type === "short" || q.type === "essay") && (
+              <textarea style={{ ...inputStyle, minHeight: q.type === "essay" ? 220 : 110 }} placeholder="Type your answer…" value={answers[q.id] || ""} onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
+            )}
+          </Card>
+        ))}
+        <Card>
+          <div className="pl-body" style={{ fontWeight: 600, color: C.ink, marginBottom: 8 }}>{qs.length ? "Additional work (optional)" : "Your submission"}</div>
+          <Field label="Written response"><textarea style={{ ...inputStyle, minHeight: 100 }} value={response} onChange={(e) => setResponse(e.target.value)} placeholder="Type here…" /></Field>
+          <Field label="Attach a file (optional)">
+            <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
+              <Upload size={16} color={C.muted} />
+              <span className="pl-body" style={{ fontSize: 14, color: file ? C.text : C.muted }}>{file ? file.name : "Choose a file…"}</span>
+              <input type="file" style={{ display: "none" }} onChange={(e) => setFile(e.target.files[0])} />
+            </label>
+          </Field>
+          <div className="flex items-center gap-2">
+            <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : "Submit homework"}</Btn>
+            <Btn kind="ghost" icon={Clock} onClick={saveAndExit}>Save & finish later</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Homework" sub="Your assignments." />
+      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>To do</h3>
+      <div style={{ marginBottom: 24 }}>
+        {availableHw.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>You're all caught up.</span></Card>}
+        <Grouped items={availableHw} courses={courses}>
+          {(items) => (
+            <div className="flex flex-col gap-3">
+              {items.map((h) => {
+                let hasDraft = false;
+                try { hasDraft = !!window.localStorage.getItem(`pl_hw_draft_${h.id}`); } catch (e) { /* ignore */ }
+                const returned = myHwSubs.find((s) => s.homework_id === h.id && s.status === "returned");
+                return (
+                <Card key={h.id} style={returned ? { border: `1px solid ${C.rose}`, borderLeft: `4px solid ${C.rose}` } : undefined}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                        <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: 0 }}>{h.title}</h3>
+                        {returned && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.rose, background: "#fef6f6", border: `1px solid ${C.rose}`, borderRadius: 6, padding: "2px 8px" }}><RotateCcw size={11} style={{ verticalAlign: "middle", marginRight: 3 }} />Returned — needs revision</span>}
+                        {!returned && hasDraft && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: "#fffaf0", border: `1px solid ${C.gold}`, borderRadius: 6, padding: "2px 8px" }}>In progress</span>}
+                      </div>
+                      {returned && returned.feedback && <div className="pl-body" style={{ fontSize: 13, color: C.rose, marginTop: 4, lineHeight: 1.5 }}><b>Instructor note:</b> {returned.feedback}</div>}
+                      <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{h.questions.length ? `${h.questions.length} questions · ${sumPoints(h.questions)} pts` : `${h.points} pts`}{h.due_date ? ` · due ${fdate(h.due_date)}` : ""}</div>
+                    </div>
+                    <Btn icon={returned ? RotateCcw : (hasDraft ? Clock : PencilLine)} kind={returned ? "gold" : undefined} onClick={() => start(h)}>{returned ? "Revise & resubmit" : (hasDraft ? "Resume" : "Start")}</Btn>
+                  </div>
+                </Card>
+                );
+              })}
+            </div>
+          )}
+        </Grouped>
+      </div>
+
+      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Submitted</h3>
+      <div className="flex flex-col gap-3">
+        {myHwSubs.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>Nothing submitted yet.</span></Card>}
+        {myHwSubs.map((s) => (
+          <Card key={s.id}>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink, margin: 0 }}>{titleOf(s.homework_id)}</h3>
+                <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>Submitted {fdate(s.submitted_at)}</div>
+              </div>
+              <div className="flex items-center gap-3">
+                {s.status === "graded"
+                  ? <span className="pl-display" style={{ fontSize: 20, fontWeight: 600, color: C.green }}>{s.max_points ? Math.round((s.score / s.max_points) * 100) : 0}%</span>
+                  : <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: C.gold, background: C.goldSoft, padding: "5px 12px", borderRadius: 20 }}>Awaiting grade</span>}
+                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, homework.find((h) => h.id === s.homework_id), profile?.full_name || "Student", true)}>View / Print</Btn>
+              </div>
+            </div>
+            {s.status === "graded" && s.feedback && (
+              <div style={{ marginTop: 12, padding: "12px 14px", background: C.paper, borderRadius: 9, borderLeft: `3px solid ${C.gold}` }}>
+                <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>Feedback</div>
+                <p className="pl-body" style={{ fontSize: 14, lineHeight: 1.55, margin: 0 }}>{s.feedback}</p>
+              </div>
+            )}
+          </Card>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/* ---------- COURSES (instructor) ---------- */
+function CoursesManager({ courses, refresh }) {
+  const blankForm = {
+    code: "", title: "", credit_hours: "", description: "", program: "all",
+    ce_type: "none", ce_hours: "", passing_score: "75", approval_number: "", provider_name: "",
+  };
+  const [form, setForm] = useState(blankForm);
+  const [busy, setBusy] = useState(false);
+  const [show, setShow] = useState(false);
+  const [csvNote, setCsvNote] = useState(null);
+
+  async function create() {
+    if (!form.title.trim()) return;
+    setBusy(true);
+    try { await db.createCourse(form); await refresh(); setForm(blankForm); setShow(false); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this course? Its lessons/tests/homework remain, but lose the course label.")) return;
+    try { await db.deleteCourse(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function onCsv(file) {
+    if (!file) return;
+    setCsvNote("Reading file…");
+    try {
+      const text = await file.text();
+      const rows = parseCSV(text);
+      if (rows.length < 2) { setCsvNote("That file has no rows under the header."); return; }
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const col = (n) => header.indexOf(n);
+      const iCode = col("code"), iTitle = col("title"), iCred = col("credit_hours"), iProg = col("program"), iDesc = col("description");
+      if (iTitle < 0) { setCsvNote("CSV needs at least a 'title' column."); return; }
+      const valid = new Set(PROGRAMS.map((p) => p.key));
+      const recs = []; let skipped = 0;
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r]; if (!row || row.every((c) => !(c || "").trim())) continue;
+        const title = (row[iTitle] || "").trim();
+        if (!title) { skipped++; continue; }
+        let prog = iProg >= 0 ? (row[iProg] || "").trim().toLowerCase() : "all";
+        if (!valid.has(prog)) prog = "all";
+        recs.push({ code: iCode >= 0 ? (row[iCode] || "").trim() : "", title, credit_hours: iCred >= 0 ? (row[iCred] || "").trim() : "", program: prog, description: iDesc >= 0 ? (row[iDesc] || "").trim() : "", ce_type: "none", ce_hours: null, passing_score: 75, approval_number: null, provider_name: null });
+      }
+      if (recs.length) await db.bulkAddCourses(recs);
+      await refresh();
+      setCsvNote(`Imported ${recs.length} course${recs.length === 1 ? "" : "s"}${skipped ? `, skipped ${skipped} (missing title)` : ""}.`);
+    } catch (e) { setCsvNote("Couldn't read that file: " + e.message); }
+  }
+
+  const ceOn = isCEType(form.ce_type);
+
+  return (
+    <>
+      <PageHead title="Courses" sub="Group lessons, tests, and homework into courses and weeks." action={<Btn icon={Plus} onClick={() => setShow(true)}>New course</Btn>} />
+      <Card style={{ marginBottom: 18 }}>
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 6px" }}>Import courses from CSV</h3>
+        <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, margin: "0 0 10px", lineHeight: 1.5 }}>
+          Columns: <b>code</b>, <b>title</b>, <b>credit_hours</b>, <b>program</b>, <b>description</b>. Only <b>title</b> is required. Use a program key: {PROGRAMS.map((p) => p.key).join(", ")}.
+        </p>
+        <input type="file" accept=".csv,text/csv" onChange={(e) => onCsv(e.target.files?.[0])} className="pl-body" style={{ fontSize: 13 }} />
+        {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
+      </Card>
+      {show && (
+        <Card style={{ marginBottom: 18, maxWidth: 680 }}>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Course code"><input style={inputStyle} value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="e.g. ABS-101" /></Field>
+            <Field label="Credit hours"><input style={inputStyle} value={form.credit_hours} onChange={(e) => setForm({ ...form, credit_hours: e.target.value })} placeholder="e.g. 4" inputMode="decimal" /></Field>
+          </div>
+          <Field label="Course title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Introduction to the Bible" /></Field>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 80 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+          <Field label="Program / level"><ProgramSelect value={form.program} onChange={(v) => setForm({ ...form, program: v })} /></Field>
+          <Field label="Course type">
+            <select style={inputStyle} value={form.ce_type} onChange={(e) => setForm({ ...form, ce_type: e.target.value })}>
+              {CE_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+            </select>
+          </Field>
+          {ceOn && (
+            <div style={{ background: C.paper, border: `1px solid ${C.goldSoft}`, borderRadius: 10, padding: "14px 16px", marginBottom: 10 }}>
+              <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>CE Settings — required for certificate issuance</div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="CE / contact hours"><input style={inputStyle} type="number" step="0.5" value={form.ce_hours} onChange={(e) => setForm({ ...form, ce_hours: e.target.value })} placeholder="e.g. 2.0" /></Field>
+                <Field label="Passing score (%)"><input style={inputStyle} type="number" value={form.passing_score} onChange={(e) => setForm({ ...form, passing_score: e.target.value })} placeholder="75" /></Field>
+              </div>
+              <Field label="CE approval number"><input style={inputStyle} value={form.approval_number} onChange={(e) => setForm({ ...form, approval_number: e.target.value })} placeholder="e.g. NBCC ACEP #12345" /></Field>
+              <Field label="Provider name (appears on CE certificate)"><input style={inputStyle} value={form.provider_name} onChange={(e) => setForm({ ...form, provider_name: e.target.value })} placeholder="e.g. Healing Forward LLC" /></Field>
+              <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 6 }}>Learners must score ≥ {form.passing_score || 75}% on the post-test to receive a CE certificate. The certificate auto-issues on pass.</div>
+            </div>
+          )}
+          <div className="flex gap-2"><Btn icon={Check} onClick={create} disabled={busy}>{busy ? "Saving…" : "Create course"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
+        </Card>
+      )}
+      {courses.length === 0 ? (
+        <div className="flex flex-col gap-3"><Card><span className="pl-body" style={{ color: C.muted }}>No courses yet. Create one or import a CSV, then choose it when you add a lesson, test, or homework.</span></Card></div>
+      ) : (() => {
+        const order = PROGRAMS.map((p) => p.key);
+        const known = new Set(order);
+        const byCode = (a, b) => (a.code || a.title || "").localeCompare(b.code || b.title || "", undefined, { numeric: true });
+        const groups = order
+          .map((key) => ({ key, label: programLabel(key), items: courses.filter((c) => (c.program || "all") === key).slice().sort(byCode) }))
+          .filter((g) => g.items.length);
+        const other = courses.filter((c) => !known.has(c.program || "all")).slice().sort(byCode);
+        if (other.length) groups.push({ key: "other", label: "Other", items: other });
+        return groups.map((g) => (
+          <div key={g.key} style={{ marginBottom: 24 }}>
+            <div className="pl-body" style={{ fontSize: 14, fontWeight: 800, color: C.ink, textTransform: "uppercase", letterSpacing: ".08em", borderBottom: `2px solid ${C.gold}`, paddingBottom: 6, marginBottom: 12 }}>{g.label} · {g.items.length}</div>
+            <div className="flex flex-col gap-3">
+              {g.items.map((c) => (
+                <Card key={c.id}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                        <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>{c.code ? `${c.code} — ` : ""}{c.title}</h3>
+                        {isCEType(c.ce_type) && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.gold, background: C.goldSoft, padding: "2px 9px", borderRadius: 999 }}>{c.ce_type === "faith_ce" ? "Faith CE" : "CE"} · {c.ce_hours || "?"} hrs</span>}
+                        {c.ce_type === "open" && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: C.muted, background: C.paper, padding: "2px 9px", borderRadius: 999, border: `1px solid ${C.line}` }}>Open / Elective</span>}
+                      </div>
+                      <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{programLabel(c.program)}{c.credit_hours ? ` · ${c.credit_hours} cr` : ""}{isCEType(c.ce_type) && c.approval_number ? ` · ${c.approval_number}` : ""}{c.description ? ` · ${c.description}` : ""}</div>
+                    </div>
+                    <button onClick={() => remove(c.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </div>
+        ));
+      })()}
+    </>
+  );
+}
+
+/* ---------- ATTENDANCE & PROGRESS (instructor) ---------- */
+const todayStr = () => {
+  const d = new Date();
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+};
+
+function AttendanceManager({ students, attendance, subs, hwSubs, certEnrollments, refresh }) {
+  const [date, setDate] = useState(todayStr());
+  const [savingId, setSavingId] = useState(null);
+  const isCertStudent = (id) => (certEnrollments || []).some((e) => e.student_id === id);
+
+  function attendanceReport() {
+    const now = new Date();
+    const when = now.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
+    const degree = students.filter((s) => !isCertStudent(s.id)).slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
+    const dates = [...new Set((attendance || []).map((a) => a.date).filter(Boolean))];
+    const totalSessions = dates.length;
+    const rows = degree.map((s) => {
+      const my = (attendance || []).filter((a) => a.student_id === s.id);
+      const present = my.filter((a) => a.status === "present").length;
+      const excused = my.filter((a) => a.status === "excused").length;
+      const absent = my.filter((a) => a.status === "absent").length;
+      const attended = present + excused;
+      const rate = totalSessions ? Math.round((attended / totalSessions) * 100) : (my.length ? Math.round((attended / my.length) * 100) : 0);
+      return { s, present, excused, absent, rate };
+    });
+    const avgRate = rows.length ? Math.round(rows.reduce((a, r) => a + r.rate, 0) / rows.length) : 0;
+    const body = rows.map((r) => `<tr><td>${(r.s.full_name || "").replace(/</g, "&lt;")}</td><td class="c">${totalSessions}</td><td class="c" style="color:#2e7d32">${r.present}</td><td class="c" style="color:#C5922E">${r.excused}</td><td class="c" style="color:#B23A3A">${r.absent}</td><td class="c" style="font-weight:700;color:${r.rate >= 70 ? "#2e7d32" : "#B23A3A"}">${r.rate}%</td></tr>`).join("");
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Attendance Report</title>
+      <style>body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;max-width:820px;margin:24px auto;padding:0 20px}
+      .head{text-align:center;border-bottom:3px solid #1B3A6B;padding-bottom:12px;margin-bottom:8px}.head .n{color:#C5922E;font-family:Arial,sans-serif;font-size:12px;letter-spacing:2px;font-weight:bold}
+      h1{color:#1B3A6B;font-size:22px;margin:6px 0 2px}.sub2{color:#666;font-size:13px;margin-bottom:20px;text-align:center}
+      table{width:100%;border-collapse:collapse;font-size:13.5px}th{font-family:Arial,sans-serif;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#666;border-bottom:2px solid #1B3A6B;padding:8px}
+      td{padding:7px 8px;border-bottom:1px solid #eee}td.c,th.c{text-align:center}.foot{margin-top:22px;text-align:center;color:#888;font-size:11px;font-family:Arial,sans-serif}
+      @media print{.noprint{display:none}}</style></head><body>
+      <div class="head"><div class="n">NCTS PURE LIGHT SCHOOL OF MINISTRY</div><h1>Attendance Report</h1></div>
+      <div class="sub2">Degree Students &bull; ${when}</div>
+      <button class="noprint" onclick="window.print()" style="display:block;margin:0 auto 20px;padding:8px 18px;background:#1B3A6B;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Print / Save as PDF</button>
+      <div class="sub2" style="text-align:left;margin-bottom:8px">${degree.length} students &bull; ${totalSessions} session${totalSessions === 1 ? "" : "s"} held &bull; average attendance ${avgRate}%</div>
+      <table><thead><tr><th>Student</th><th class="c">Sessions</th><th class="c">Present</th><th class="c">Excused</th><th class="c">Absent</th><th class="c">Attendance</th></tr></thead>
+      <tbody>${body || '<tr><td colspan="6">No degree students.</td></tr>'}</tbody></table>
+      <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
+      </body></html>`;
+    let w = null;
+    try { w = window.open("", "_blank"); } catch (e) { w = null; }
+    if (w && w.document) { w.document.write(html); w.document.close(); }
+    else {
+      try { const url = URL.createObjectURL(new Blob([html], { type: "text/html" })); const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(() => URL.revokeObjectURL(url), 10000); }
+      catch (e) { window.alert("Please allow pop-ups to view the report."); }
+    }
+  }
+
+  async function mark(sid, status) {
+    setSavingId(sid);
+    try { await db.setAttendance(sid, date, status); await refresh(); }
+    catch (e) { window.alert(e.message); }
+    setSavingId(null);
+  }
+  const statusOf = (sid) => attendance.find((a) => a.student_id === sid && a.date === date)?.status || null;
+
+  const STATUSES = [
+    { key: "present", label: "Present", color: C.green },
+    { key: "absent", label: "Absent", color: C.rose },
+    { key: "excused", label: "Excused", color: C.gold },
+  ];
+  const dayMarked = students.filter((s) => statusOf(s.id)).length;
+
+  function progress(sid) {
+    const myAtt = attendance.filter((a) => a.student_id === sid);
+    const attended = myAtt.filter((a) => a.status !== "absent").length;
+    const attPct = myAtt.length ? Math.round((attended / myAtt.length) * 100) : null;
+    const ts = subs.filter((s) => s.student_id === sid && s.status === "graded" && s.max_score);
+    const tAvg = ts.length ? Math.round(ts.reduce((a, s) => a + (s.score / s.max_score) * 100, 0) / ts.length) : null;
+    const hs = hwSubs.filter((s) => s.student_id === sid && s.status === "graded" && s.max_points);
+    const hAvg = hs.length ? Math.round(hs.reduce((a, s) => a + (s.score / s.max_points) * 100, 0) / hs.length) : null;
+    return { attCount: myAtt.length, attPct, tCount: ts.length, tAvg, hCount: hs.length, hAvg };
+  }
+
+  return (
+    <>
+      <PageHead title="Attendance & Progress" sub="Mark attendance by date and track each student's progress." action={<Btn small kind="gold" icon={FileText} onClick={attendanceReport}>Management report</Btn>} />
+
+      <Card style={{ marginBottom: 20 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+          <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>Take attendance</h3>
+          <div className="flex items-center gap-2">
+            <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{dayMarked}/{students.length} marked</span>
+            <input type="date" style={{ ...inputStyle, width: "auto" }} value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+        </div>
+        {students.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No students yet.</span> :
+          <div className="flex flex-col gap-2">
+            {students.map((s) => {
+              const cur = statusOf(s.id);
+              return (
+                <div key={s.id} className="flex items-center justify-between" style={{ padding: "8px 0", borderBottom: `1px solid ${C.line}`, flexWrap: "wrap", gap: 8 }}>
+                  <div className="flex items-center gap-3">
+                    <Initials name={s.full_name} size={34} />
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15 }}>{s.full_name}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    {STATUSES.map((st) => (
+                      <button key={st.key} disabled={savingId === s.id} onClick={() => mark(s.id, st.key)} className="pl-press pl-body"
+                        style={{ padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontSize: 13.5, fontWeight: 600,
+                          border: `1px solid ${cur === st.key ? st.color : C.line}`,
+                          background: cur === st.key ? st.color : "#fff",
+                          color: cur === st.key ? "#fff" : C.muted, opacity: savingId === s.id ? 0.5 : 1 }}>
+                        {st.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>}
+      </Card>
+
+      <Card>
+        <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: "0 0 14px" }}>Student progress</h3>
+        {students.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No students yet.</span> :
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+              <thead>
+                <tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
+                  <th style={{ padding: "6px 8px" }}>Student</th>
+                  <th style={{ padding: "6px 8px" }}>Attendance</th>
+                  <th style={{ padding: "6px 8px" }}>Tests</th>
+                  <th style={{ padding: "6px 8px" }}>Homework</th>
+                </tr>
+              </thead>
+              <tbody>
+                {students.map((s) => {
+                  const p = progress(s.id);
+                  return (
+                    <tr key={s.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                      <td style={{ padding: "10px 8px", fontWeight: 600, color: C.ink }}>{s.full_name}</td>
+                      <td style={{ padding: "10px 8px" }}>{p.attPct !== null ? `${p.attPct}% · ${p.attCount} days` : "—"}</td>
+                      <td style={{ padding: "10px 8px" }}>{p.tCount ? `${p.tCount} done · ${p.tAvg}% avg` : "—"}</td>
+                      <td style={{ padding: "10px 8px" }}>{p.hCount ? `${p.hCount} done · ${p.hAvg}% avg` : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>}
+      </Card>
+    </>
+  );
+}
+
+/* ---------- SUBMISSION REPORT (view / print) ---------- */
+function openSubmission(sub, assessment, studentName, hideCorrect) {
+  const safe = (s) => String(s ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  const qs = (assessment && assessment.questions) || [];
+  const max = sub.max_score ?? sub.max_points ?? sumPoints(qs);
+  const graded = sub.status === "graded";
+  const pct = graded && max ? Math.round((sub.score / max) * 100) : null;
+  const dateStr = sub.submitted_at ? new Date(sub.submitted_at).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }) : "";
+  const qHtml = qs.map((q, i) => {
+    const ans = sub.answers?.[q.id];
+    let answer = "", correct = "", badge = "";
+    if (q.type === "mc") {
+      answer = safe(q.options?.[Number(ans)] ?? "—");
+      correct = hideCorrect ? "" : safe(q.options?.[Number(q.correct_answer)] ?? "");
+      const ok = String(ans) === String(q.correct_answer);
+      badge = `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
+    } else if (q.type === "tf") {
+      answer = safe(ans ?? "—");
+      correct = hideCorrect ? "" : safe(q.correct_answer);
+      const ok = ans === q.correct_answer;
+      badge = `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
+    } else {
+      answer = safe(ans || "(no response)");
+      const aw = sub.manual?.[q.id];
+      badge = `<span class="b man">${aw != null && aw !== "" ? aw : "—"}/${q.points} pts</span>`;
+    }
+    return `<div class="q"><div class="qh"><span class="qn">Q${i + 1} \u00b7 ${safe(QTYPE[q.type] || q.type)} \u00b7 ${q.points} pts</span>${badge}</div>
+      <div class="pr">${safe(q.prompt)}</div>
+      <div class="an"><span class="lab">Answer</span> ${answer}</div>
+      ${correct ? `<div class="co"><span class="lab">Correct</span> ${correct}</div>` : ""}</div>`;
+  }).join("");
+  const respHtml = sub.response ? `<div class="q"><div class="pr">Written response</div><div class="an">${safe(sub.response)}</div></div>` : "";
+  const fileHtml = sub.file_path ? `<div class="note">A file was uploaded with this submission (open it in the app).</div>` : "";
+  const fbHtml = sub.feedback ? `<div class="fb"><div class="fbh">Instructor feedback</div>${safe(sub.feedback)}</div>` : "";
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${safe(studentName)} — ${safe(assessment?.title || "Submission")}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    @page { size: portrait; margin: 14mm; }
+    * { box-sizing: border-box; }
+    body { font-family:'Source Serif 4',Georgia,serif; color:#1e2742; margin:0; padding:28px; max-width:820px; }
+    .top { border-bottom:2px solid #bd9a44; padding-bottom:14px; margin-bottom:20px; overflow:hidden; }
+    .kick { letter-spacing:.22em; text-transform:uppercase; font-size:11px; color:#bd9a44; font-weight:600; }
+    .school { font-family:'Fraunces',serif; font-size:15px; color:#15213d; margin-top:2px; }
+    h1 { font-family:'Fraunces',serif; font-size:26px; color:#15213d; margin:10px 0 4px; }
+    .meta { font-size:13px; color:#5b6478; }
+    .score { float:right; text-align:right; }
+    .score .big { font-family:'Fraunces',serif; font-size:30px; color:#2e7d52; font-weight:600; }
+    .score .sm { font-size:12px; color:#5b6478; }
+    .q { border:1px solid #e2e5ec; border-radius:9px; padding:12px 14px; margin-bottom:11px; }
+    .qh { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:6px; }
+    .qn { font-size:10.5px; letter-spacing:.05em; text-transform:uppercase; color:#9a7b30; font-weight:600; }
+    .pr { font-weight:600; color:#15213d; margin-bottom:7px; }
+    .an,.co { font-size:14px; margin-top:3px; }
+    .lab { display:inline-block; min-width:62px; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#9aa2b3; }
+    .co { color:#2e7d52; }
+    .b { font-size:11.5px; font-weight:600; padding:2px 9px; border-radius:20px; white-space:nowrap; }
+    .b.ok { background:#e7f3ec; color:#2e7d52; } .b.no { background:#fbeaea; color:#b3261e; } .b.man { background:#f3eede; color:#9a7b30; }
+    .fb { margin-top:16px; padding:12px 14px; background:#f7f4ec; border-left:3px solid #bd9a44; border-radius:8px; font-size:14px; }
+    .fbh { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#9a7b30; font-weight:600; margin-bottom:4px; }
+    .note { font-size:12.5px; color:#5b6478; font-style:italic; margin-bottom:11px; }
+    .print { position:fixed; top:14px; right:14px; background:#15213d; color:#f6f1e7; border:none; padding:9px 16px; border-radius:8px; font-family:'Source Serif 4',serif; font-size:13px; cursor:pointer; }
+    @media print { .print { display:none; } body { padding:0; } }
+  </style></head><body>
+  <button class="print" onclick="window.print()">Print / Save as PDF</button>
+  <div class="top">
+    ${graded ? `<div class="score"><div class="big">${pct}%</div><div class="sm">${pct} / 100</div></div>` : `<div class="score"><div class="sm" style="color:#9a7b30;font-weight:600">Not yet graded</div></div>`}
+    <div class="kick">Submission Report</div>
+    <div class="school">${safe(BRAND.name)}</div>
+    <h1>${safe(assessment?.title || "Submission")}</h1>
+    <div class="meta">${safe(studentName)}${dateStr ? ` \u00b7 submitted ${dateStr}` : ""}</div>
+  </div>
+  ${qHtml}${respHtml}${fileHtml}${fbHtml}
+  </body></html>`;
+  // Try opening a new tab first. If the browser blocks it, fall back to a blob
+  // download so the report still opens without needing pop-ups enabled.
+  let w = null;
+  try { w = window.open("", "_blank"); } catch (e) { w = null; }
+  if (w && w.document) {
+    w.document.write(html);
+    w.document.close();
   } else {
-    const { error } = await supabase.from("pl_resources").insert({ ...rec, created_by: user.id });
-    if (error) throw error;
+    try {
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (e) {
+      window.alert("Could not open the report. Please allow pop-ups for this site and try again.");
+    }
   }
 }
 
-export async function deleteResource(id) {
-  const { error } = await supabase.from("pl_resources").delete().eq("id", id);
-  if (error) throw error;
+/* ---------- CERTIFICATES ---------- */
+function openCertificate(cert, studentName) {
+  const dateStr = new Date(cert.issued_on).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  const safe = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${safe(cert.title)} — Certificate</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    @page { size: landscape; margin: 0; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:'Source Serif 4',Georgia,serif; color:#15213d; background:#e9e3d4; display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; }
+    .cert { width:1000px; max-width:96vw; aspect-ratio:1.414/1; background:#f6f1e7; position:relative; padding:60px 70px; box-shadow:0 24px 70px rgba(0,0,0,.20); }
+    .frame { position:absolute; inset:20px; border:2px solid #bd9a44; pointer-events:none; }
+    .frame:before { content:''; position:absolute; inset:7px; border:1px solid #d9c184; }
+    .inner { position:relative; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+    .kicker { letter-spacing:.34em; text-transform:uppercase; font-size:12.5px; color:#bd9a44; font-weight:600; }
+    .school { font-family:'Fraunces',serif; font-size:32px; font-weight:600; margin:8px 0 0; letter-spacing:.01em; }
+    .rule { width:64px; height:2px; background:#bd9a44; margin:18px 0 22px; }
+    .pres { font-size:15px; color:#5b6478; font-style:italic; }
+    .name { font-family:'Fraunces',serif; font-size:44px; font-weight:600; margin:10px 0 16px; padding:0 28px 10px; border-bottom:2px solid #bd9a44; }
+    .body { font-size:16.5px; max-width:640px; line-height:1.65; color:#2a3147; }
+    .body b { color:#15213d; }
+    .row { display:flex; gap:90px; margin-top:46px; }
+    .sigline { width:210px; border-top:1.5px solid #15213d; padding-top:7px; font-size:12.5px; color:#5b6478; letter-spacing:.04em; }
+    .serial { position:absolute; bottom:2px; right:4px; font-size:10.5px; color:#9aa2b3; letter-spacing:.06em; }
+    .print { position:fixed; top:16px; right:16px; background:#15213d; color:#f6f1e7; border:none; padding:10px 18px; border-radius:8px; font-family:'Source Serif 4',serif; font-size:14px; cursor:pointer; box-shadow:0 6px 18px rgba(0,0,0,.2); }
+    @media print { .print { display:none; } body { background:#fff; padding:0; } .cert { box-shadow:none; } }
+  </style></head>
+  <body>
+    <button class="print" onclick="window.print()">Print / Save as PDF</button>
+    <div class="cert"><div class="frame"></div>
+      <div class="inner">
+        ${BRAND.logoUrl ? `<img src="${BRAND.logoUrl}" alt="" style="height:66px;width:auto;margin-bottom:12px;border-radius:50%;object-fit:cover;" />` : ""}
+        <div class="kicker">Certificate of Completion</div>
+        <div class="school">${safe(BRAND.name)}</div>
+        <div class="rule"></div>
+        <div class="pres">This certificate is proudly presented to</div>
+        <div class="name">${safe(studentName)}</div>
+        <div class="body">in recognition of the faithful and successful completion of <b>${safe(cert.title)}</b>${cert.note ? `, ${safe(cert.note)}` : ""}, awarded this ${dateStr}.</div>
+        <div class="row">
+          <div><div class="sigline">Instructor signature</div></div>
+          <div><div class="sigline">Date — ${dateStr}</div></div>
+        </div>
+        <div class="serial">Serial ${safe(cert.serial)}</div>
+      </div>
+    </div>
+  </body></html>`;
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); }
+  else window.alert("Please allow pop-ups to view the certificate.");
 }
 
-/* ═══════════════ ANNOUNCEMENTS (dashboard notices) ══════════════ */
-
-export async function listAnnouncements() {
-  const { data, error } = await supabase.from("pl_announcements")
-    .select("*").order("created_at", { ascending: false });
-  if (error) throw error;
-  return data || [];
+function openCECertificate(cert, studentName, course) {
+  const safe = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  const dateStr = new Date(cert.issued_on).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  const providerName = safe(course?.provider_name || cert.provider_name || BRAND.name);
+  const approvalNum = safe(course?.approval_number || cert.approval_number || "");
+  const ceHours = safe(course?.ce_hours || cert.ce_hours || "");
+  const ceTypeLabel = course?.ce_type === "faith_ce" ? "Faith-Based Continuing Education" : "Continuing Education";
+  const serial = safe(cert.serial || "");
+  const html = `<!doctype html><html><head><meta charset="utf-8">
+  <title>CE Certificate — ${safe(studentName)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    @page { size: landscape; margin: 0; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:'Source Serif 4',Georgia,serif; color:#15213d; background:#e9e3d4; display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; }
+    .cert { width:1050px; max-width:96vw; aspect-ratio:1.414/1; background:#f6f1e7; position:relative; padding:52px 64px; box-shadow:0 24px 70px rgba(0,0,0,.20); }
+    .frame { position:absolute; inset:18px; border:2px solid #1B3A6B; pointer-events:none; }
+    .frame:before { content:''; position:absolute; inset:7px; border:1px solid #5b7fc4; }
+    .inner { position:relative; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+    .kicker { letter-spacing:.34em; text-transform:uppercase; font-size:11.5px; color:#1B3A6B; font-weight:600; }
+    .provider { font-family:'Fraunces',serif; font-size:26px; font-weight:600; margin:6px 0 0; color:#1B3A6B; }
+    .cetype { font-size:13.5px; color:#5b6478; font-style:italic; margin:4px 0 0; }
+    .rule { width:64px; height:2px; background:#C49A1A; margin:16px auto 20px; }
+    .pres { font-size:14.5px; color:#5b6478; font-style:italic; }
+    .name { font-family:'Fraunces',serif; font-size:42px; font-weight:600; margin:8px 0 14px; padding:0 24px 10px; border-bottom:2px solid #C49A1A; }
+    .body { font-size:15.5px; max-width:660px; line-height:1.7; color:#2a3147; }
+    .body b { color:#15213d; }
+    .hours-badge { display:inline-block; margin:14px 0 0; background:#1B3A6B; color:#f6f1e7; font-family:'Fraunces',serif; font-size:16px; font-weight:600; padding:8px 28px; border-radius:999px; letter-spacing:.04em; }
+    .row { display:flex; gap:70px; margin-top:32px; }
+    .sigline { width:200px; border-top:1.5px solid #15213d; padding-top:7px; font-size:12px; color:#5b6478; letter-spacing:.04em; }
+    .approval { position:absolute; bottom:30px; left:50%; transform:translateX(-50%); font-size:10.5px; color:#7a8299; letter-spacing:.06em; text-align:center; white-space:nowrap; }
+    .serial { position:absolute; bottom:8px; right:6px; font-size:10px; color:#9aa2b3; letter-spacing:.06em; }
+    .print { position:fixed; top:16px; right:16px; background:#1B3A6B; color:#f6f1e7; border:none; padding:10px 18px; border-radius:8px; font-family:'Source Serif 4',serif; font-size:14px; cursor:pointer; }
+    @media print { .print { display:none; } body { background:#fff; padding:0; } .cert { box-shadow:none; } }
+  </style></head>
+  <body>
+    <button class="print" onclick="window.print()">Print / Save as PDF</button>
+    <div class="cert"><div class="frame"></div>
+      <div class="inner">
+        <div class="kicker">Certificate of Completion</div>
+        <div class="provider">${providerName}</div>
+        <div class="cetype">${ceTypeLabel}</div>
+        <div class="rule"></div>
+        <div class="pres">This certifies that</div>
+        <div class="name">${safe(studentName)}</div>
+        <div class="body">has successfully completed <b>${safe(cert.title)}</b>${cert.note ? `, ${safe(cert.note)}` : ""}, demonstrating competency through successful completion of the required post-assessment.</div>
+        ${ceHours ? `<div class="hours-badge">${ceHours} Contact Hour${Number(ceHours) === 1 ? "" : "s"}</div>` : ""}
+        <div class="row">
+          <div><div class="sigline">Presenter / Instructor</div></div>
+          <div><div class="sigline">Completion Date — ${dateStr}</div></div>
+        </div>
+        ${approvalNum ? `<div class="approval">Approved by ${approvalNum}</div>` : ""}
+        <div class="serial">Serial ${serial}</div>
+      </div>
+    </div>
+  </body></html>`;
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); }
+  else window.alert("Please allow pop-ups to view the certificate.");
 }
 
-export async function saveAnnouncement(a) {
-  const { data: { user } } = await supabase.auth.getUser();
-  const rec = { title: a.title, body: a.body, program: a.program || "all", active: a.active !== false };
-  if (a.id) {
-    const { error } = await supabase.from("pl_announcements").update(rec).eq("id", a.id);
-    if (error) throw error;
-  } else {
-    const { error } = await supabase.from("pl_announcements").insert({ ...rec, created_by: user.id });
-    if (error) throw error;
+function CertificatesManager({ students, courses, certificates, refresh }) {
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({ student_id: "", course_id: "", title: "", note: "" });
+  const nameOf = (id) => students.find((s) => s.id === id)?.full_name || "Student";
+
+  function pickCourse(cid) {
+    const c = courses.find((x) => x.id === cid);
+    setForm((f) => ({ ...f, course_id: cid, title: c ? c.title : f.title }));
   }
+  async function issue() {
+    if (!form.student_id) { window.alert("Choose a student."); return; }
+    if (!form.title.trim()) { window.alert("Enter a certificate title."); return; }
+    setBusy(true);
+    try {
+      await db.issueCertificate({ student_id: form.student_id, title: form.title.trim(), course_id: form.course_id || null, note: form.note.trim() });
+      await refresh();
+      setForm({ student_id: "", course_id: "", title: "", note: "" });
+      setShow(false);
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this certificate? The student will no longer see it.")) return;
+    try { await db.deleteCertificate(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  return (
+    <>
+      <PageHead title="Certificates" sub="Award and reprint certificates of completion." action={<Btn icon={Plus} onClick={() => setShow(true)}>Issue certificate</Btn>} />
+      {show && (
+        <Card style={{ marginBottom: 18, maxWidth: 660 }}>
+          <Field label="Student">
+            <select style={inputStyle} value={form.student_id} onChange={(e) => setForm({ ...form, student_id: e.target.value })}>
+              <option value="">— choose student —</option>
+              {students.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+            </select>
+          </Field>
+          <Field label="Course (optional — fills in the title)">
+            <select style={inputStyle} value={form.course_id} onChange={(e) => pickCourse(e.target.value)}>
+              <option value="">— none —</option>
+              {courses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+            </select>
+          </Field>
+          <Field label="Certificate title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Systematic Theology I  •  or  •  the Master's Program" /></Field>
+          <Field label="Note (optional)"><input style={inputStyle} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="e.g. with high honors" /></Field>
+          <div className="flex gap-2"><Btn icon={Check} onClick={issue} disabled={busy}>{busy ? "Issuing…" : "Issue certificate"}</Btn><Btn kind="ghost" onClick={() => setShow(false)}>Cancel</Btn></div>
+        </Card>
+      )}
+      <div className="flex flex-col gap-3">
+        {certificates.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No certificates issued yet.</span></Card>}
+        {certificates.map((c) => (
+          <Card key={c.id}>
+            <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center" style={{ width: 42, height: 42, borderRadius: 10, background: C.paper2, border: `1px solid ${C.goldSoft}` }}><Medal size={20} color={C.gold} /></div>
+                <div>
+                  <div className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink }}>{c.title}</div>
+                  <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{nameOf(c.student_id)} · {fdate(c.issued_on)} · {c.serial}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Btn small icon={ExternalLink} onClick={() => openCertificate(c, nameOf(c.student_id))}>Preview</Btn>
+                <button onClick={() => remove(c.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </>
+  );
 }
 
-export async function deleteAnnouncement(id) {
-  const { error } = await supabase.from("pl_announcements").delete().eq("id", id);
-  if (error) throw error;
+function StudentCertificates({ certificates, profile }) {
+  return (
+    <>
+      <PageHead title="Certificates" sub="Your awards. Open one to print or save as a PDF." />
+      {certificates.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>You haven't earned any certificates yet. Keep going!</span></Card> :
+        <div className="grid grid-cols-2 gap-4">
+          {certificates.map((c) => (
+            <Card key={c.id}>
+              <div className="flex items-center gap-3" style={{ marginBottom: 12 }}>
+                <div className="flex items-center justify-center" style={{ width: 46, height: 46, borderRadius: 11, background: `linear-gradient(150deg, ${C.ink}, ${C.ink2})` }}><Medal size={22} color={C.goldSoft} /></div>
+                <div>
+                  <div className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, lineHeight: 1.2 }}>{c.title}</div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>Awarded {fdate(c.issued_on)}</div>
+                </div>
+              </div>
+              {c.note && <p className="pl-body" style={{ fontSize: 13.5, color: C.text, fontStyle: "italic", margin: "0 0 12px" }}>{c.note}</p>}
+              <Btn full icon={ExternalLink} onClick={() => openCertificate(c, profile.full_name)}>View / Print</Btn>
+            </Card>
+          ))}
+        </div>}
+    </>
+  );
+}
+
+/* ============================================================ CERTIFICATE CLASSES (cohort) */
+/* A certificate class is a pl_courses row flagged is_certificate, with a length (6/12 weeks)
+   and optional start date. It reuses the normal Tests, Homework, and Grading. A roster table
+   (pl_cert_enrollments) tracks who's in each class; the certificate is awarded through the
+   existing pl_certificates system so it prints on the same layout. */
+const PILLAR = { stew: "Stewardship", theo: "Theology", grief: "Grief Care", bib: "Biblical Studies", thp: "The Healed Place" };
+
+function PillarTag({ pillar }) {
+  const tone = { stew: C.green, theo: C.gold, grief: C.rose, bib: C.ink2, thp: C.ink }[pillar] || C.gold;
+  return (
+    <span className="pl-body" style={{ fontSize: 11.5, fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase",
+      color: tone, background: C.paper2, border: `1px solid ${C.line}`, padding: "3px 9px", borderRadius: 999 }}>
+      {PILLAR[pillar] || pillar}
+    </span>
+  );
+}
+
+function CertClassesManager({ courses, students, profiles, tests, homework, subs, hwSubs, certificates, enrollments, ledger, refresh }) {
+  const [editing, setEditing] = useState(null);
+  const [openId, setOpenId] = useState(null);
+  const [addStu, setAddStu] = useState("");
+  const classes = courses.filter((c) => c.is_certificate);
+  const nameOf = (id) => (profiles.find((p) => p.id === id) || {}).full_name || "Student";
+
+  async function remove(c) {
+    if (!window.confirm(`Delete "${c.title}"? Its roster is removed; any tests/homework keep their work but lose the class label.`)) return;
+    try { await db.deleteCourse(c.id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function enroll(courseId, studentId) {
+    if (!studentId) return;
+    try { await db.enrollCertClass(courseId, studentId); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function unenroll(id) {
+    if (!window.confirm("Remove this student from the class?")) return;
+    try { await db.unenrollCertClass(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function award(c, studentId) {
+    try {
+      await db.issueCertificate({ student_id: studentId, title: c.title, course_id: c.id, program: "certificate", note: c.duration_weeks ? `${c.duration_weeks}-week certificate class` : "Certificate class" });
+      await refresh();
+    } catch (e) { window.alert(e.message); }
+  }
+  function progressFor(c, studentId) {
+    const ct = tests.filter((t) => t.course_id === c.id);
+    const ch = homework.filter((h) => h.course_id === c.id);
+    const total = ct.length + ch.length;
+    let done = 0;
+    ct.forEach((t) => { if (subs.some((s) => s.test_id === t.id && s.student_id === studentId && s.status === "graded")) done++; });
+    ch.forEach((h) => { if (hwSubs.some((s) => s.homework_id === h.id && s.student_id === studentId && s.status === "graded")) done++; });
+    return { done, total };
+  }
+
+  return (
+    <>
+      <PageHead title="Certificate Classes" sub="Cohort classes (6 or 12 weeks) with their own homework and tests, ending in a certificate." action={<Btn icon={Plus} onClick={() => setEditing({ title: "", code: "", description: "", pillar: "theo", fee: 0, duration_weeks: 6, start_date: "" })}>New class</Btn>} />
+      {editing && <ClassEditor draft={editing} onClose={() => setEditing(null)} refresh={refresh} />}
+      <div className="flex flex-col gap-3">
+        {classes.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No certificate classes yet. Create one, then add its homework and tests from the Homework and Tests tabs (choose this class under “Course”).</span></Card>}
+        {classes.map((c) => {
+          const roster = enrollments.filter((e) => e.course_id === c.id);
+          const ct = tests.filter((t) => t.course_id === c.id).length;
+          const ch = homework.filter((h) => h.course_id === c.id).length;
+          const open = openId === c.id;
+          const enrolledIds = new Set(roster.map((r) => r.student_id));
+          const notEnrolled = students.filter((s) => !enrolledIds.has(s.id));
+          return (
+            <Card key={c.id}>
+              <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-center" style={{ width: 42, height: 42, borderRadius: 10, background: C.paper2, border: `1px solid ${C.goldSoft}` }}><Award size={20} color={C.gold} /></div>
+                  <div>
+                    <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                      <span className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink }}>{c.code ? `${c.code} — ` : ""}{c.title}</span>
+                      {c.pillar && <PillarTag pillar={c.pillar} />}
+                    </div>
+                    <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{c.duration_weeks ? `${c.duration_weeks} weeks` : "Length TBD"}{c.start_date ? ` · starts ${fdate(c.start_date)}` : ""} · {ct} tests · {ch} homework · {roster.length} enrolled · {c.fee ? money(c.fee) : "No fee"}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Btn small kind="ghost" onClick={() => setOpenId(open ? null : c.id)}>{open ? "Hide roster" : "Roster"}</Btn>
+                  <Btn small kind="ghost" icon={PencilLine} onClick={() => setEditing(c)}>Edit</Btn>
+                  <button onClick={() => remove(c)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
+                </div>
+              </div>
+              {open && (
+                <div style={{ marginTop: 14, borderTop: `1px solid ${C.line}`, paddingTop: 12 }}>
+                  <div className="flex items-center gap-2" style={{ marginBottom: 12, flexWrap: "wrap" }}>
+                    <select style={{ ...inputStyle, marginBottom: 0, maxWidth: 280 }} value={addStu} onChange={(e) => setAddStu(e.target.value)}>
+                      <option value="">— enroll a student —</option>
+                      {notEnrolled.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                    </select>
+                    <Btn small icon={Plus} onClick={() => { enroll(c.id, addStu); setAddStu(""); }}>Enroll</Btn>
+                  </div>
+                  {roster.length === 0 ? <span className="pl-body" style={{ color: C.muted, fontSize: 13.5 }}>No students enrolled yet.</span> : roster.map((r) => {
+                    const { done, total } = progressFor(c, r.student_id);
+                    const ready = total > 0 && done >= total;
+                    const cert = certificates.find((x) => x.course_id === c.id && x.student_id === r.student_id);
+                    const paidAmt = (ledger || []).filter((e) => e.kind === "payment" && e.course_id === c.id && e.student_id === r.student_id).reduce((a, e) => a + (Number(e.amount) || 0), 0);
+                    const paid = Number(c.fee) > 0 && paidAmt >= Number(c.fee) - 0.005;
+                    return (
+                      <div key={r.id} className="flex items-center justify-between gap-3" style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div className="pl-body" style={{ fontWeight: 600, fontSize: 14.5 }}>{nameOf(r.student_id)}</div>
+                          <div className="pl-body" style={{ fontSize: 12.5, color: ready ? C.green : C.muted, marginTop: 2 }}>{total ? `${done}/${total} coursework graded` : "No coursework added yet"}{ready ? " · ready for certificate" : ""}{Number(c.fee) > 0 ? (paid ? " · paid" : " · unpaid") : ""}</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {cert
+                            ? <Btn small icon={ExternalLink} onClick={() => openCertificate(cert, nameOf(r.student_id))}>View cert</Btn>
+                            : <Btn small icon={Award} onClick={() => award(c, r.student_id)}>Issue cert</Btn>}
+                          <button onClick={() => unenroll(r.id)} title="Remove from class" className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><X size={17} /></button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function ClassEditor({ draft, onClose, refresh }) {
+  const [f, setF] = useState({ ...draft, code: draft.code || "", description: draft.description || "", pillar: draft.pillar || "theo", fee: draft.fee ?? 0, duration_weeks: draft.duration_weeks || 6, start_date: draft.start_date || "" });
+  const [busy, setBusy] = useState(false);
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  async function save() {
+    if (!f.title.trim()) { window.alert("Enter a class title."); return; }
+    setBusy(true);
+    try {
+      await db.saveCertClass({ id: f.id, title: f.title.trim(), code: f.code.trim(), description: f.description.trim(), pillar: f.pillar, fee: Number(f.fee) || 0, duration_weeks: Number(f.duration_weeks) || null, start_date: f.start_date || null });
+      await refresh(); onClose();
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  return (
+    <Card style={{ marginBottom: 18, maxWidth: 680 }}>
+      <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: "0 0 12px" }}>{f.id ? "Edit certificate class" : "New certificate class"}</h3>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Class code (optional)"><input style={inputStyle} value={f.code} onChange={(e) => set("code", e.target.value)} placeholder="e.g. CERT-GRF" /></Field>
+        <Field label="Fee (USD)"><input style={inputStyle} type="number" value={f.fee} onChange={(e) => set("fee", e.target.value)} placeholder="0" /></Field>
+      </div>
+      <Field label="Class title"><input style={inputStyle} value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="Certificate in Grief Care" /></Field>
+      <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 70 }} value={f.description} onChange={(e) => set("description", e.target.value)} /></Field>
+      <div className="grid grid-cols-3 gap-3">
+        <Field label="Pillar">
+          <select style={inputStyle} value={f.pillar} onChange={(e) => set("pillar", e.target.value)}>
+            {Object.entries(PILLAR).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+          </select>
+        </Field>
+        <Field label="Length">
+          <select style={inputStyle} value={f.duration_weeks} onChange={(e) => set("duration_weeks", e.target.value)}>
+            <option value={6}>6 weeks</option>
+            <option value={12}>12 weeks</option>
+          </select>
+        </Field>
+        <Field label="Start date (optional)"><input style={inputStyle} type="date" value={f.start_date} onChange={(e) => set("start_date", e.target.value)} /></Field>
+      </div>
+      <div className="flex gap-2" style={{ marginTop: 8 }}><Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : "Save class"}</Btn><Btn kind="ghost" onClick={onClose}>Cancel</Btn></div>
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>After saving, add this class's homework and tests from the Homework and Tests tabs — choose this class under “Course.”</p>
+    </Card>
+  );
+}
+
+function StudentCertClasses({ courses, enrollments, profile, certificates, ledger, refresh }) {
+  const myEnroll = enrollments.filter((e) => e.student_id === profile.id);
+  const myClassIds = new Set(myEnroll.map((e) => e.course_id));
+  const myClasses = courses.filter((c) => c.is_certificate && myClassIds.has(c.id));
+  const myCerts = certificates.filter((c) => c.student_id === profile.id && myClassIds.has(c.course_id));
+  const paidForCourse = (id) => (ledger || [])
+    .filter((e) => e.kind === "payment" && e.course_id === id)
+    .reduce((a, e) => a + (Number(e.amount) || 0), 0);
+
+  // Billing summary across all enrolled cert classes — same shape as the
+  // Tuition page (Total charged / Total paid / Balance due + a statement).
+  const certCharged = myClasses.reduce((a, c) => a + (Number(c.fee) || 0), 0);
+  const certEntries = (ledger || []).filter((e) => myClassIds.has(e.course_id));
+  const certPaid = certEntries.filter((e) => e.kind === "payment").reduce((a, e) => a + (Number(e.amount) || 0), 0);
+  const certBalance = certCharged - certPaid;
+  const certEs = [...certEntries].sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  async function pay(c, plan, customAmt) {
+    try { const url = await db.startCertCheckout(c.id, plan, customAmt ?? null); window.location.href = url; }
+    catch (e) { window.alert(e.message); }
+  }
+  function payCustom(c, remaining) {
+    const input = window.prompt(`Enter the amount you'd like to pay toward ${c.title}:`, remaining ? String(remaining) : "");
+    if (input === null) return;
+    const amt = Math.round(Number(input) * 100) / 100;
+    if (isNaN(amt) || amt < 0.5) { window.alert("Please enter an amount of at least $0.50."); return; }
+    pay(c, "custom", amt);
+  }
+
+  return (
+    <>
+      <PageHead title="Certificate Classes" sub="Your enrolled certificate classes, billing, and the certificates you've earned. Tests and homework for these classes are in the main Tests and Homework tabs." />
+      {myClasses.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>You're not enrolled in any certificate classes yet. Your instructor will add you to one.</span></Card>}
+      <div className="flex flex-col gap-3" style={{ marginBottom: myClasses.length ? 24 : 0 }}>
+        {myClasses.map((c) => {
+          const cert = myCerts.find((x) => x.course_id === c.id);
+          const fee = Number(c.fee) || 0;
+          const cPaid = paidForCourse(c.id);
+          const cRemaining = Math.max(0, Math.round((fee - cPaid) * 100) / 100);
+          const isPaid = fee > 0 && cRemaining <= 0.005;
+          const weeks = Number(c.duration_weeks) || 0;
+          return (
+            <Card key={c.id}>
+              <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                  <span className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink }}>{c.title}</span>
+                  {c.pillar && <PillarTag pillar={c.pillar} />}
+                </div>
+                {cert
+                  ? <Btn small icon={ExternalLink} onClick={() => openCertificate(cert, profile.full_name)}>View / Print certificate</Btn>
+                  : <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{c.duration_weeks ? `${c.duration_weeks} weeks` : ""}{c.start_date ? ` · starts ${fdate(c.start_date)}` : ""}</span>}
+              </div>
+              {c.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.text, margin: "8px 0 0", lineHeight: 1.55 }}>{c.description}</p>}
+              {fee > 0 && (
+                <div className="flex items-center justify-between" style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}`, gap: 10, flexWrap: "wrap" }}>
+                  <span className="pl-body" style={{ fontSize: 14, color: C.ink }}>Tuition: <b>{money(fee)}</b>{cPaid > 0 && !isPaid ? <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}> · {money(cRemaining)} left</span> : null}</span>
+                  {isPaid ? (
+                    <span className="pl-body" style={{ fontSize: 13, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={15} /> Paid</span>
+                  ) : (
+                    <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                      {weeks >= 12 && cRemaining > Math.round((fee / 4) * 100) / 100 + 0.005 && (
+                        <Btn small kind="ghost" icon={Receipt} onClick={() => pay(c, "quarter")}>Pay 1 of 4 {money(Math.min(Math.round((fee / 4) * 100) / 100, cRemaining))}</Btn>
+                      )}
+                      {weeks >= 12 && cRemaining > Math.round((fee / 2) * 100) / 100 + 0.005 && (
+                        <Btn small kind="ghost" icon={Receipt} onClick={() => pay(c, "half")}>Pay half {money(Math.min(Math.round((fee / 2) * 100) / 100, cRemaining))}</Btn>
+                      )}
+                      <Btn small icon={Receipt} onClick={() => pay(c, "full")}>Pay {money(cRemaining)}</Btn>
+                      <Btn small kind="ghost" onClick={() => payCustom(c, cRemaining)}>Other amount</Btn>
+                    </div>
+                  )}
+                </div>
+              )}
+              {cert && <div className="pl-body" style={{ marginTop: 10, color: C.green, fontWeight: 600, fontSize: 14 }}>Certificate earned {fdate(cert.issued_on)} — well done.</div>}
+            </Card>
+          );
+        })}
+      </div>
+
+      {myClasses.length > 0 && certCharged > 0 && (
+        <>
+          <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
+            <Stat icon={Receipt} label="Total charged" value={money(certCharged)} />
+            <Stat icon={Check} label="Total paid" value={money(certPaid)} tone={C.green} />
+            <Stat icon={Receipt} label="Balance due" value={money(certBalance)} tone={certBalance > 0 ? C.rose : C.green} />
+          </div>
+          <Card style={{ marginBottom: 24 }}>
+            <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Statement</h3>
+            {certEs.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No charges or payments on record yet.</span> :
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+                  <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5 }}>
+                    <th style={{ padding: "6px 8px" }}>Date</th><th style={{ padding: "6px 8px" }}>Description</th>
+                    <th style={{ padding: "6px 8px", textAlign: "right" }}>Charge</th><th style={{ padding: "6px 8px", textAlign: "right" }}>Payment</th>
+                  </tr></thead>
+                  <tbody>
+                    {certEs.map((e) => {
+                      const v = ledgerRowView(e);
+                      return (
+                      <tr key={e.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                        <td style={{ padding: "8px" }}>{fdate(e.date)}</td>
+                        <td style={{ padding: "8px", color: v.isRefund ? C.rose : undefined }}>{v.label}</td>
+                        <td style={{ padding: "8px", textAlign: "right", color: v.isRefund ? C.rose : C.ink }}>{v.charge}</td>
+                        <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{v.payment}</td>
+                      </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>}
+          </Card>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ---------- CSV PARSER (handles quoted fields) ---------- */
+function parseCSV(text) {
+  const rows = []; let i = 0, field = "", row = [], inQ = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+      else field += c;
+    } else {
+      if (c === '"') inQ = true;
+      else if (c === ",") { row.push(field); field = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        row.push(field); field = "";
+        if (row.length > 1 || (row[0] || "").trim() !== "") rows.push(row);
+        row = [];
+      } else field += c;
+    }
+    i++;
+  }
+  if (field !== "" || row.length) { row.push(field); if (row.length > 1 || (row[0] || "").trim() !== "") rows.push(row); }
+  return rows;
+}
+
+/* ---------- BILLING (instructor) ---------- */
+function BillingManager({ students, ledger, courses, tuition, certEnrollments, refresh }) {
+  const [selected, setSelected] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [csvNote, setCsvNote] = useState(null);
+  const [scope, setScope] = useState("degree");
+  const [charge, setCharge] = useState({ description: "", amount: "", date: todayStr() });
+  const [pay, setPay] = useState({ amount: "", date: todayStr(), method: "Wave", note: "", applyTo: "" });
+
+  const certClasses = (courses || []).filter((c) => c.is_certificate);
+  const isCertStudent = (id) => (certEnrollments || []).some((e) => e.student_id === id);
+
+  const entriesFor = (id) => ledger.filter((e) => e.student_id === id);
+  const totals = (id) => {
+    const es = entriesFor(id);
+    const charged = es.filter((e) => e.kind === "charge").reduce((a, e) => a + Number(e.amount || 0), 0);
+    const paid = es.filter((e) => e.kind === "payment").reduce((a, e) => a + Number(e.amount || 0), 0);
+    // A scholarship is a credit toward the balance, but NOT cash collected.
+    const scholarship = es.filter((e) => e.kind === "scholarship").reduce((a, e) => a + Number(e.amount || 0), 0);
+    return { charged, paid, scholarship, balance: charged - paid - scholarship };
+  };
+  const nameOf = (id) => students.find((s) => s.id === id)?.full_name || "Student";
+
+  // Build a printable monthly statement (HTML) for one student and open it.
+  function makeStatementHtml(student) {
+    const es = entriesFor(student.id).slice().sort((a, b) => String(a.date || a.created_at || "").localeCompare(String(b.date || b.created_at || "")));
+    const t = totals(student.id);
+    const now = new Date();
+    const stmtMonth = now.toLocaleString(undefined, { month: "long", year: "numeric" });
+    const stmtNo = `STM-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}-${String(student.id).slice(0, 4).toUpperCase()}`;
+    const progLabel = student.program ? programLabel(student.program) : "—";
+    const stmtIsCert = student.program === "certificate" || /cert/i.test(String(student.program || ""));
+    const schoolName = stmtIsCert ? "The Healed Place" : "NCTS Pure Light School of Ministry";
+    let running = 0;
+    const rows = es.map((e) => {
+      const amt = Number(e.amount) || 0;
+      const isCharge = e.kind === "charge";
+      const isScholarship = e.kind === "scholarship";
+      const isRefund = e.kind === "payment" && amt < 0; // negative payment = refund/credit
+      running += isCharge ? amt : -amt; // payment, scholarship, and refund all move the balance down (refund amt is negative so it raises it)
+      // Clean up the description: refund rows get a plain "Refund" label and a
+      // readable method, not the raw "card-refund" / stored text.
+      let desc;
+      if (isScholarship) {
+        desc = `Scholarship${e.description && e.description !== "Scholarship" ? ` <span class="method">(${e.description.replace(/</g, "&lt;")})</span>` : ""}`;
+      } else if (isRefund) {
+        const m = /Stripe (re_[A-Za-z0-9]+)/.exec(e.description || "");
+        desc = `Refund${m ? ` <span class="method">(Stripe ${m[1]})</span>` : (e.method ? ` <span class="method">(${e.method.replace("card-refund", "to card").replace("refund", "credit")})</span>` : "")}`;
+      } else {
+        desc = `${(e.description || (isCharge ? "Charge" : "Payment")).replace(/</g, "&lt;")}${e.method ? ` <span class="method">(${e.method})</span>` : ""}`;
+      }
+      const chargeCell = isCharge ? money(amt) : (isRefund ? money(Math.abs(amt)) : "");
+      const paymentCell = (e.kind === "payment" && !isRefund) ? money(amt) : (isScholarship ? money(amt) : "");
+      return `<tr${isRefund ? ' style="color:#B23A3A;"' : (isScholarship ? ' style="color:#C5922E;"' : "")}>
+        <td>${fdate(e.date || e.created_at) || ""}</td>
+        <td>${desc}</td>
+        <td class="r">${chargeCell}</td>
+        <td class="r">${paymentCell}</td>
+        <td class="r">${money(running)}</td>
+      </tr>`;
+    }).join("");
+
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Statement — ${nameOf(student.id)}</title>
+<style>
+  @page { margin: 0.75in; }
+  * { box-sizing: border-box; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: #1a1a1a; margin: 0; padding: 32px; }
+  .mast { text-align: center; margin-bottom: 8px; }
+  .mast .school { color: #C5922E; font-family: Arial, sans-serif; font-weight: bold; font-size: 11px; letter-spacing: 2px; }
+  .mast .brand { color: #1B3A6B; font-size: 26px; font-weight: bold; margin: 2px 0; }
+  .mast .tag { color: #1B3A6B; font-style: italic; font-size: 12px; }
+  .rule { border: 0; border-top: 2px solid #1B3A6B; margin: 12px 0; }
+  h1 { text-align: center; font-size: 22px; letter-spacing: 1px; margin: 10px 0 2px; }
+  .sub { text-align: center; color: #C5922E; font-style: italic; font-size: 12px; margin-bottom: 18px; }
+  .meta { width: 100%; border-collapse: collapse; background: #F5F0E8; border: 1px solid #ddd; margin-bottom: 18px; }
+  .meta td { padding: 7px 12px; font-size: 12.5px; vertical-align: top; }
+  .meta .lbl { color: #1B3A6B; font-family: Arial, sans-serif; font-weight: bold; width: 90px; }
+  table.ledger { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 12.5px; }
+  table.ledger th { background: #1B3A6B; color: #fff; font-family: Arial, sans-serif; font-size: 11px; text-align: left; padding: 8px 10px; }
+  table.ledger th.r, table.ledger td.r { text-align: right; }
+  table.ledger td { padding: 8px 10px; border-bottom: 1px solid #eee; }
+  table.ledger tr:nth-child(even) td { background: #FBF8F2; }
+  .method { color: #888; font-size: 11px; }
+  .totals { width: 300px; margin-left: auto; border-collapse: collapse; font-size: 13px; }
+  .totals td { padding: 6px 12px; }
+  .totals .lbl { color: #1B3A6B; font-family: Arial, sans-serif; font-weight: bold; text-align: right; }
+  .totals .val { text-align: right; }
+  .totals .bal td { border-top: 2px solid #1B3A6B; font-weight: bold; font-size: 15px; }
+  .bal .val { color: ${t.balance > 0 ? "#B23A3A" : "#2E7D32"}; }
+  .pay { margin-top: 20px; background: #F5F0E8; border-left: 4px solid #C5922E; padding: 12px 16px; font-size: 12.5px; }
+  .foot { text-align: center; color: #666; font-size: 11px; margin-top: 26px; border-top: 1px solid #ccc; padding-top: 8px; }
+  @media print { .noprint { display: none; } body { padding: 0; } }
+</style></head><body>
+  <div class="noprint" style="text-align:center;margin-bottom:16px;">
+    <button onclick="window.print()" style="background:#1B3A6B;color:#fff;border:0;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save as PDF</button>
+  </div>
+  ${docMastheadHtml(student.program)}
+  <hr class="rule"/>
+  <h1>MONTHLY STATEMENT</h1>
+  <div class="sub">Statement for ${stmtMonth}</div>
+  <table class="meta">
+    <tr><td class="lbl">Statement</td><td>${stmtNo}</td><td class="lbl">Date</td><td>${fdate(now.toISOString())}</td></tr>
+    <tr><td class="lbl">Student</td><td>${nameOf(student.id).replace(/</g, "&lt;")}</td><td class="lbl">Program</td><td>${progLabel}</td></tr>
+    <tr><td class="lbl">Email</td><td>${(student.email || "—").replace(/</g, "&lt;")}</td><td class="lbl">School</td><td>${schoolName}</td></tr>
+  </table>
+  <table class="ledger">
+    <thead><tr><th>Date</th><th>Description</th><th class="r">Charges</th><th class="r">Payments</th><th class="r">Balance</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="5" style="text-align:center;color:#888;padding:20px;">No charges or payments on record.</td></tr>`}</tbody>
+  </table>
+  <table class="totals">
+    <tr><td class="lbl">Total Charged</td><td class="val">${money(t.charged)}</td></tr>
+    <tr><td class="lbl">Total Paid</td><td class="val">${money(t.paid)}</td></tr>
+    <tr class="bal"><td class="lbl">Balance Due</td><td class="val">${money(t.balance)}</td></tr>
+  </table>
+  ${t.balance > 0 ? `<div class="pay"><b>Payment options:</b> Pay in full (${money(t.balance)}), or contact the office to arrange installments. Pay online through your student portal under Cert Classes, or by another method arranged with the office.</div>` : `<div class="pay">Your account is paid in full. Thank you!</div>`}
+  <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
+</body></html>`;
+  }
+
+  function openStatement(student) {
+    const w = window.open("", "_blank");
+    if (!w) { window.alert("Please allow pop-ups to view the statement."); return; }
+    w.document.write(makeStatementHtml(student));
+    w.document.close();
+  }
+
+  // Build a printable INVOICE (request for payment) for one student.
+  // Installment options divide only the TUITION portion (not registration/books).
+  function makeInvoiceHtml(student, amountDue) {
+    const t = totals(student.id);
+    const now = new Date();
+    const invNo = `INV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}-${String(student.id).slice(0, 4).toUpperCase()}`;
+    const progLabel = student.program ? programLabel(student.program) : "—";
+    const isCert = student.program === "certificate" || /cert/i.test(progLabel);
+    const due = Number(amountDue) || 0;
+
+    // Find this student's tuition portion (total − registration − books) for their level.
+    let tuitionPortion = due; // fallback for cert / unknown levels
+    let regFee = 0, bookFee = 0, levelTotal = 0;
+    if (!isCert && student.program) {
+      const lvl = (tuition || []).find((x) => x.program === student.program);
+      if (lvl) {
+        levelTotal = Number(lvl.amount) || 0;
+        regFee = Number(lvl.registration) || 0;
+        bookFee = Number(lvl.books) || 0;
+        tuitionPortion = Math.max(0, Math.round((levelTotal - regFee - bookFee) * 100) / 100);
+      }
+    }
+
+    // How much has been paid toward each bucket (from the ledger descriptions).
+    const es = entriesFor(student.id);
+    const label = progLabel;
+    const paidBucket = (word) => es
+      .filter((e) => e.kind === "payment" && (e.description || "").trim().toLowerCase() === `${label} ${word}`.toLowerCase())
+      .reduce((a, e) => a + (Number(e.amount) || 0), 0);
+
+    // Build the charge line-items for the billing summary.
+    let billRows;
+    if (!isCert && (regFee > 0 || bookFee > 0 || tuitionPortion > 0)) {
+      const regPaid = paidBucket("registration"), bookPaid = paidBucket("books"), tuiPaid = paidBucket("tuition");
+      const line = (name, charged, paid) => `<tr><td>${name}</td><td class="r">${money(charged)}</td><td class="r">${paid > 0 ? money(paid) : "—"}</td><td class="r">${money(Math.max(0, charged - paid))}</td></tr>`;
+      billRows = `
+        ${regFee > 0 ? line("Registration", regFee, regPaid) : ""}
+        ${bookFee > 0 ? line("Books", bookFee, bookPaid) : ""}
+        ${tuitionPortion > 0 ? line("Tuition", tuitionPortion, tuiPaid) : ""}
+        <tr class="tot"><td><b>Total</b></td><td class="r"><b>${money(t.charged)}</b></td><td class="r"><b>${money(t.paid)}</b></td><td class="r"><b>${money(t.balance)}</b></td></tr>`;
+    } else {
+      // Certificate or no level data: show the simple charged/paid/balance.
+      billRows = `
+        <tr><td>Total Charged</td><td class="r">${money(t.charged)}</td><td class="r">—</td><td class="r"></td></tr>
+        <tr><td>Total Paid</td><td class="r">—</td><td class="r">${money(t.paid)}</td><td class="r"></td></tr>
+        <tr class="tot"><td><b>Balance</b></td><td class="r"></td><td class="r"></td><td class="r"><b>${money(t.balance)}</b></td></tr>`;
+    }
+
+    // Payment options.
+    //
+    // Once a student has paid anything, they have already chosen a plan and
+    // made a payment against it. The remaining balance is what they owe next —
+    // it must NOT be sliced into fresh halves and quarters. (A student who paid
+    // half of $199 owes the other $99.50; offering a "half" of $99.50 invents a
+    // plan that doesn't exist and under-bills them.)
+    //
+    // Only when nothing has been paid yet do we present the plan choices, and
+    // then they divide the ORIGINAL amount, never a remainder. Any option that
+    // would meet or exceed the amount due is dropped, since "pay in full"
+    // already covers it.
+    // Once a student has paid INTO the thing being split, they have chosen a
+    // plan and made a payment against it. Show the NEXT installment for that
+    // plan (from the stored plan on their prior payment), not a re-divided
+    // remainder. If we can't tell the plan, fall back to "pay in full".
+    const es2 = entriesFor(student.id);
+    const priorPlan = (() => {
+      const pays = es2.filter((e) => e.kind === "payment" && e.plan);
+      return pays.length ? pays[pays.length - 1].plan : null;
+    })();
+    const hasPaid = isCert ? t.paid > 0.005 : paidBucket("tuition") > 0.005;
+    const splitBase = isCert ? due : tuitionPortion;
+    const planFraction = { half: 2, quarter: 4, four: 4, seven: 7 };
+    let options = [["Pay in Full", due]];
+    if (hasPaid && priorPlan && planFraction[priorPlan]) {
+      // Next installment = original ÷ plan divisor, but never more than what's left.
+      const origAmt = isCert ? (t.charged) : tuitionPortion;
+      const inst = Math.min(Math.round((origAmt / planFraction[priorPlan]) * 100) / 100, due);
+      if (inst < due - 0.005) options.push([`Next installment (${priorPlan})`, inst]);
+    } else if (!hasPaid) {
+      const plans = isCert
+        ? [["Pay Half", splitBase / 2], ["Pay 1 of 4", splitBase / 4]]
+        : [["Pay Half (tuition)", splitBase / 2], ["Pay 1 of 4 (tuition)", splitBase / 4], ["Pay 1 of 7 (tuition)", splitBase / 7]];
+      for (const [label, amt] of plans) {
+        if (amt < due - 0.005) options.push([label, amt]);
+      }
+    }
+    const optRows = options.map(([label, amt]) => `<tr><td>${label}</td><td class="r">${money(Math.round(amt * 100) / 100)}</td></tr>`).join("");
+    const noteLine = hasPaid
+      ? (priorPlan && planFraction[priorPlan]
+        ? "You may pay your next installment or the full remaining balance."
+        : "This is the remaining balance on your account and is due in full.")
+      : (isCert
+        ? "Certificate tuition may be paid in full, half, or in four installments."
+        : "Registration and Books are paid separately. Only the tuition portion may be split into half, four, or seven installments.");
+
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Invoice — ${nameOf(student.id)}</title>
+<style>
+  @page { margin: 0.75in; }
+  * { box-sizing: border-box; }
+  body { font-family: Georgia, 'Times New Roman', serif; color: #1a1a1a; margin: 0; padding: 32px; }
+  .mast { text-align: center; margin-bottom: 8px; }
+  .mast .school { color: #C5922E; font-family: Arial, sans-serif; font-weight: bold; font-size: 11px; letter-spacing: 2px; }
+  .mast .brand { color: #1B3A6B; font-size: 26px; font-weight: bold; margin: 2px 0; }
+  .mast .tag { color: #1B3A6B; font-style: italic; font-size: 12px; }
+  .rule { border: 0; border-top: 2px solid #1B3A6B; margin: 12px 0; }
+  h1 { text-align: center; font-size: 22px; letter-spacing: 2px; margin: 10px 0 2px; }
+  .sub { text-align: center; color: #C5922E; font-style: italic; font-size: 12px; margin-bottom: 18px; }
+  .meta { width: 100%; border-collapse: collapse; background: #F5F0E8; border: 1px solid #ddd; margin-bottom: 18px; }
+  .meta td { padding: 7px 12px; font-size: 12.5px; vertical-align: top; }
+  .meta .lbl { color: #1B3A6B; font-family: Arial, sans-serif; font-weight: bold; width: 90px; }
+  table.bill { width: 100%; border-collapse: collapse; margin-bottom: 8px; font-size: 13px; }
+  table.bill th { background: #1B3A6B; color: #fff; font-family: Arial, sans-serif; font-size: 11px; text-align: left; padding: 8px 10px; }
+  table.bill th.r, table.bill td.r { text-align: right; }
+  table.bill td { padding: 9px 10px; border-bottom: 1px solid #eee; }
+  table.bill tr.tot td { border-top: 2px solid #1B3A6B; border-bottom: none; }
+  .due { background: #1B3A6B; color: #fff; text-align: center; padding: 12px; font-size: 17px; font-weight: bold; font-family: Arial, sans-serif; letter-spacing: 1px; margin: 16px 0; border-radius: 4px; }
+  .opts { width: 340px; margin-left: auto; border-collapse: collapse; font-size: 13px; border: 1px solid #ddd; }
+  .opts caption { text-align: left; font-family: Arial, sans-serif; font-weight: bold; color: #1B3A6B; font-size: 12px; padding: 6px 0; }
+  .opts td { padding: 7px 12px; border-bottom: 1px solid #eee; }
+  .opts .r { text-align: right; font-weight: bold; }
+  .pay { margin-top: 18px; background: #F5F0E8; border-left: 4px solid #C5922E; padding: 12px 16px; font-size: 12.5px; }
+  .foot { text-align: center; color: #666; font-size: 11px; margin-top: 26px; border-top: 1px solid #ccc; padding-top: 8px; }
+  @media print { .noprint { display: none; } body { padding: 0; } }
+</style></head><body>
+  <div class="noprint" style="text-align:center;margin-bottom:16px;">
+    <button onclick="window.print()" style="background:#1B3A6B;color:#fff;border:0;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save as PDF</button>
+  </div>
+  ${docMastheadHtml(student.program)}
+  <hr class="rule"/>
+  <h1>INVOICE</h1>
+  <div class="sub">Document No. ${invNo} &bull; Issued ${fdate(now.toISOString())}</div>
+  <table class="meta">
+    <tr><td class="lbl">Student</td><td>${nameOf(student.id).replace(/</g, "&lt;")}</td><td class="lbl">Program</td><td>${progLabel}</td></tr>
+    <tr><td class="lbl">Email</td><td>${(student.email || "—").replace(/</g, "&lt;")}</td><td class="lbl">School</td><td>${isCert ? "The Healed Place" : "NCTS Pure Light School of Ministry"}</td></tr>
+  </table>
+  <table class="bill">
+    <thead><tr><th>Billing Summary</th><th class="r">Charged</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
+    <tbody>${billRows}</tbody>
+  </table>
+  <div class="due">AMOUNT DUE: ${money(due)}</div>
+  <table class="opts"><caption>Payment Options</caption><tbody>${optRows}</tbody></table>
+  <div class="pay"><b>How to pay:</b> Pay online through your student portal (${isCert ? "Cert Classes" : "Tuition"} tab), or contact the office to arrange payment. ${noteLine} Thank you!</div>
+  <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
+</body></html>`;
+  }
+
+  function openInvoice(student) {
+    const t = totals(student.id);
+    const input = window.prompt(
+      `Invoice for ${nameOf(student.id)}\n\nEnter the amount to invoice, or leave as-is for the full balance:`,
+      String(Math.max(0, Math.round(t.balance * 100) / 100))
+    );
+    if (input === null) return; // cancelled
+    const amt = Number(input);
+    if (isNaN(amt) || amt < 0) { window.alert("Please enter a valid amount."); return; }
+    const w = window.open("", "_blank");
+    if (!w) { window.alert("Please allow pop-ups to view the invoice."); return; }
+    w.document.write(makeInvoiceHtml(student, amt));
+    w.document.close();
+  }
+
+  async function emailAllStatements(list) {
+    const withActivity = list.filter((s) => entriesFor(s.id).length > 0 && s.email);
+    if (withActivity.length === 0) { window.alert("No students with billing activity and an email on file."); return; }
+    if (!window.confirm(`Email a monthly statement to ${withActivity.length} student${withActivity.length === 1 ? "" : "s"} now?`)) return;
+    let sent = 0, failed = 0;
+    for (const s of withActivity) {
+      const html = makeStatementHtml(s);
+      try {
+        const res = await db.sendEmail({ to: [s.email], subject: `Your monthly statement — ${new Date().toLocaleString(undefined, { month: "long", year: "numeric" })}`, html });
+        if (res && res.error) { failed++; console.error("statement email failed", s.email, res.error); }
+        else sent++;
+      } catch (e) { failed++; console.error("statement email failed", s.email, e); }
+    }
+    window.alert(`Statements sent: ${sent}${failed ? ` · failed: ${failed}` : ""}.`);
+  }
+
+  function printAllStatements(list) {
+    const withActivity = list.filter((s) => entriesFor(s.id).length > 0);
+    if (withActivity.length === 0) { window.alert("No students have billing activity yet."); return; }
+    const w = window.open("", "_blank");
+    if (!w) { window.alert("Please allow pop-ups to print all statements."); return; }
+    const pages = withActivity.map((s) => makeStatementHtml(s)
+      .replace(/^[\s\S]*?<body>/, "").replace(/<\/body>[\s\S]*$/, "")
+      .replace(/<div class="noprint"[\s\S]*?<\/div>\s*/, "")
+    ).join('<div style="page-break-after:always;"></div>');
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Monthly Statements</title>
+<style>@page{margin:0.75in;} body{font-family:Georgia,serif;color:#1a1a1a;padding:32px;} .mast{text-align:center;margin-bottom:8px;} .mast .school{color:#C5922E;font-family:Arial,sans-serif;font-weight:bold;font-size:11px;letter-spacing:2px;} .mast .brand{color:#1B3A6B;font-size:26px;font-weight:bold;margin:2px 0;} .mast .tag{color:#1B3A6B;font-style:italic;font-size:12px;} .rule{border:0;border-top:2px solid #1B3A6B;margin:12px 0;} h1{text-align:center;font-size:22px;letter-spacing:1px;margin:10px 0 2px;} .sub{text-align:center;color:#C5922E;font-style:italic;font-size:12px;margin-bottom:18px;} .meta{width:100%;border-collapse:collapse;background:#F5F0E8;border:1px solid #ddd;margin-bottom:18px;} .meta td{padding:7px 12px;font-size:12.5px;} .meta .lbl{color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;width:90px;} table.ledger{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12.5px;} table.ledger th{background:#1B3A6B;color:#fff;font-family:Arial,sans-serif;font-size:11px;text-align:left;padding:8px 10px;} table.ledger th.r,table.ledger td.r{text-align:right;} table.ledger td{padding:8px 10px;border-bottom:1px solid #eee;} table.ledger tr:nth-child(even) td{background:#FBF8F2;} .method{color:#888;font-size:11px;} .totals{width:300px;margin-left:auto;border-collapse:collapse;font-size:13px;} .totals td{padding:6px 12px;} .totals .lbl{color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;text-align:right;} .totals .val{text-align:right;} .totals .bal td{border-top:2px solid #1B3A6B;font-weight:bold;font-size:15px;} .pay{margin-top:20px;background:#F5F0E8;border-left:4px solid #C5922E;padding:12px 16px;font-size:12.5px;} .foot{text-align:center;color:#666;font-size:11px;margin-top:26px;border-top:1px solid #ccc;padding-top:8px;}</style></head><body>
+    <div style="text-align:center;margin-bottom:16px;"><button onclick="window.print()" style="background:#1B3A6B;color:#fff;border:0;padding:10px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save All as PDF</button></div>
+    ${pages}</body></html>`);
+    w.document.close();
+  }
+
+  async function addCharge() {
+    if (!charge.amount) return;
+    setBusy(true);
+    try { await db.addLedgerEntry({ student_id: selected, kind: "charge", description: charge.description, amount: charge.amount, date: charge.date }); await refresh(); setCharge({ description: "", amount: "", date: todayStr() }); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function addScholarship() {
+    const input = window.prompt(`Record a scholarship for ${nameOf(selected)}.\n\nThis reduces their balance but is NOT counted as cash collected.\n\nScholarship amount:`, "");
+    if (input === null) return;
+    const amt = Math.round(Number(input) * 100) / 100;
+    if (isNaN(amt) || amt <= 0) { window.alert("Please enter a scholarship amount greater than zero."); return; }
+    const note = window.prompt("Description (optional) — e.g. 'Pastor's scholarship', 'Need-based award':", "Scholarship") || "Scholarship";
+    setBusy(true);
+    try { await db.addLedgerEntry({ student_id: selected, kind: "scholarship", description: note, amount: amt, date: todayStr() }); await refresh(); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function addPayment() {
+    if (!pay.amount) return;
+    setBusy(true);
+    try {
+      const cls = certClasses.find((c) => c.id === pay.applyTo);
+      const description = pay.note || (cls ? cls.title : "Payment");
+      await db.addLedgerEntry({ student_id: selected, kind: "payment", description, amount: pay.amount, date: pay.date, method: pay.method, course_id: cls ? cls.id : undefined });
+      await refresh();
+      setPay({ amount: "", date: todayStr(), method: pay.method, note: "", applyTo: "" });
+    }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this entry?")) return;
+    try { await db.deleteLedgerEntry(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function refund(entry) {
+    const max = Number(entry.amount) || 0;
+    const isCard = entry.method === "card" || entry.method === "Stripe";
+    const input = window.prompt(
+      `Refund ${nameOf(entry.student_id)}\n\n${isCard ? "This will refund the card through Stripe AND credit their account." : "This will credit their account (no card involved)."}\n\nAmount to refund (up to ${money(max)}):`,
+      String(max)
+    );
+    if (input === null) return;
+    const amt = Number(input);
+    if (isNaN(amt) || amt <= 0 || amt > max + 0.005) { window.alert("Please enter a valid amount up to the payment total."); return; }
+    if (!window.confirm(`Refund ${money(amt)} to ${nameOf(entry.student_id)}?${isCard ? " This returns money to their card." : ""}`)) return;
+    try {
+      const res = await db.refundPayment(entry.id, amt);
+      if (res && res.ok) {
+        window.alert(`Refunded ${money(res.refunded)}${res.card ? " to the card" : ""}. Their account has been credited.`);
+        await refresh();
+      } else {
+        window.alert(res?.error || "The refund could not be completed.");
+      }
+    } catch (e) { window.alert(e.message); }
+  }
+  async function onCsv(file) {
+    if (!file) return;
+    setCsvNote("Reading file…");
+    try {
+      const text = await file.text();
+      const rows = parseCSV(text);
+      if (rows.length < 2) { setCsvNote("That file has no rows under the header."); return; }
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const col = (n) => header.indexOf(n);
+      const iE = col("student_email"), iT = col("type"), iD = col("description"), iA = col("amount"), iDt = col("date"), iM = col("method");
+      if (iE < 0 || iA < 0) { setCsvNote("CSV needs at least 'student_email' and 'amount' columns."); return; }
+      const byEmail = {}; students.forEach((s) => { byEmail[(s.email || "").trim().toLowerCase()] = s.id; });
+      const entries = []; let skipped = 0;
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r]; if (!row || row.every((c) => !(c || "").trim())) continue;
+        const sid = byEmail[(row[iE] || "").trim().toLowerCase()];
+        const amount = parseFloat((row[iA] || "").replace(/[^0-9.\-]/g, ""));
+        const kind = (iT >= 0 && (row[iT] || "").trim().toLowerCase().startsWith("pay")) ? "payment" : "charge";
+        if (!sid || !amount || isNaN(amount)) { skipped++; continue; }
+        entries.push({ student_id: sid, kind, description: iD >= 0 ? (row[iD] || "").trim() : "", amount: Math.abs(amount), date: (iDt >= 0 && (row[iDt] || "").trim()) ? row[iDt].trim() : null, method: iM >= 0 ? (row[iM] || "").trim() : "" });
+      }
+      if (entries.length) await db.bulkAddLedger(entries);
+      await refresh();
+      setCsvNote(`Imported ${entries.length} ${entries.length === 1 ? "entry" : "entries"}${skipped ? `, skipped ${skipped} (unknown email or bad amount)` : ""}.`);
+    } catch (e) { setCsvNote("Couldn't read that file: " + e.message); }
+  }
+
+  if (selected) {
+    const t = totals(selected);
+    const es = [...entriesFor(selected)].sort((a, b) => (a.date < b.date ? -1 : 1));
+    return (
+      <>
+        <PageHead title={nameOf(selected)} sub="Account ledger" action={<Btn kind="ghost" onClick={() => setSelected(null)}>← All students</Btn>} />
+        <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 18 }}>
+          <Stat icon={Receipt} label="Charged" value={money(t.charged)} />
+          <Stat icon={Check} label="Paid" value={money(t.paid)} tone={C.green} />
+          <Stat icon={Receipt} label="Balance due" value={money(t.balance)} tone={t.balance > 0 ? C.rose : C.green} />
+        </div>
+        <div className="grid grid-cols-2 gap-4" style={{ marginBottom: 18 }}>
+          <Card>
+            <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Add a charge</h3>
+            <Field label="Description"><input style={inputStyle} value={charge.description} onChange={(e) => setCharge({ ...charge, description: e.target.value })} placeholder="e.g. Fall tuition" /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Amount"><input style={inputStyle} value={charge.amount} onChange={(e) => setCharge({ ...charge, amount: e.target.value })} placeholder="300" inputMode="decimal" /></Field>
+              <Field label="Date"><input type="date" style={inputStyle} value={charge.date} onChange={(e) => setCharge({ ...charge, date: e.target.value })} /></Field>
+            </div>
+            <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+              <Btn small icon={Plus} onClick={addCharge} disabled={busy}>Add charge</Btn>
+              <Btn small kind="ghost" icon={Award} onClick={addScholarship} disabled={busy}>Add scholarship</Btn>
+            </div>
+          </Card>
+          <Card>
+            <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Record a payment</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Amount"><input style={inputStyle} value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} placeholder="100" inputMode="decimal" /></Field>
+              <Field label="Date"><input type="date" style={inputStyle} value={pay.date} onChange={(e) => setPay({ ...pay, date: e.target.value })} /></Field>
+            </div>
+            {certClasses.length > 0 && (
+              <Field label="Apply to (for installment tracking)">
+                <select style={inputStyle} value={pay.applyTo} onChange={(e) => setPay({ ...pay, applyTo: e.target.value })}>
+                  <option value="">General account (degree tuition)</option>
+                  {certClasses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+                </select>
+              </Field>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Method"><input style={inputStyle} value={pay.method} onChange={(e) => setPay({ ...pay, method: e.target.value })} placeholder="Wave" /></Field>
+              <Field label="Note (optional)"><input style={inputStyle} value={pay.note} onChange={(e) => setPay({ ...pay, note: e.target.value })} placeholder={pay.applyTo ? "Leave blank to use class name" : "e.g. Bachelor tuition"} /></Field>
+            </div>
+            <Btn small icon={Plus} onClick={addPayment} disabled={busy}>Record payment</Btn>
+            {pay.applyTo && <p className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>This payment will apply to the student's balance for that certificate class and show as paid on their Cert Classes page.</p>}
+          </Card>
+        </div>
+        <Card>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Statement</h3>
+          {es.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No entries yet.</span> :
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+                <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5 }}>
+                  <th style={{ padding: "6px 8px" }}>Date</th><th style={{ padding: "6px 8px" }}>Description</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Charge</th><th style={{ padding: "6px 8px", textAlign: "right" }}>Payment</th><th></th>
+                </tr></thead>
+                <tbody>
+                  {es.map((e) => {
+                    const v = ledgerRowView(e);
+                    return (
+                    <tr key={e.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                      <td style={{ padding: "8px" }}>{fdate(e.date)}</td>
+                      <td style={{ padding: "8px", color: v.isRefund ? C.rose : undefined }}>{v.label}</td>
+                      <td style={{ padding: "8px", textAlign: "right", color: v.isRefund ? C.rose : C.ink }}>{v.charge}</td>
+                      <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{v.payment}</td>
+                      <td style={{ padding: "8px", textAlign: "right", whiteSpace: "nowrap" }}>
+                        {e.kind === "payment" && Number(e.amount) > 0 && (
+                          <button onClick={() => refund(e)} className="pl-press" title="Refund this payment" style={{ background: "none", border: "none", cursor: "pointer", color: C.gold, marginRight: 10, fontSize: 12.5, fontWeight: 700 }}>Refund</button>
+                        )}
+                        <button onClick={() => remove(e.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
+                      </td>
+                    </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>}
+        </Card>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Billing" sub="Charges, payments, and balances. Add entries by hand or import a CSV." action={
+        <div className="flex gap-2">
+          <Btn small kind={scope === "degree" ? "gold" : "ghost"} onClick={() => setScope("degree")}>Degree</Btn>
+          <Btn small kind={scope === "certificate" ? "gold" : "ghost"} onClick={() => setScope("certificate")}>Certificate</Btn>
+        </div>
+      } />
+      <Card style={{ marginBottom: 18 }}>
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 6px" }}>Import from CSV</h3>
+        <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, margin: "0 0 10px", lineHeight: 1.5 }}>
+          Columns: <b>student_email</b>, <b>type</b> (charge or payment), <b>description</b>, <b>amount</b>, <b>date</b> (YYYY-MM-DD), <b>method</b>. Only <b>student_email</b> and <b>amount</b> are required; rows with an unknown email are skipped.
+        </p>
+        <input type="file" accept=".csv,text/csv" onChange={(e) => onCsv(e.target.files?.[0])} className="pl-body" style={{ fontSize: 13 }} />
+        {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
+      </Card>
+      {students.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card> :
+        (() => {
+          // Scope by degree vs certificate (certificate student = enrolled in a cert class).
+          const scoped = students.filter((s) => (scope === "certificate" ? isCertStudent(s.id) : !isCertStudent(s.id)));
+          // Split by status; treat missing status as active.
+          const isActive = (s) => (s.status || "active") !== "inactive";
+          const activeStudents = scoped.filter(isActive);
+          const inactiveStudents = scoped.filter((s) => !isActive(s));
+
+          // Funds summary across the scoped group.
+          const sumFor = (list) => list.reduce((acc, s) => {
+            const t = totals(s.id);
+            acc.charged += t.charged; acc.paid += t.paid; acc.scholarship += t.scholarship; acc.balance += Math.max(0, t.balance);
+            return acc;
+          }, { charged: 0, paid: 0, scholarship: 0, balance: 0 });
+          const all = sumFor(scoped);
+          const act = sumFor(activeStudents);
+          const owing = scoped.filter((s) => totals(s.id).balance > 0.005).length;
+
+          function fundsReport() {
+            const now = new Date();
+            const when = now.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
+            const scopeLabel = scope === "certificate" ? "Certificate Students" : "Degree Students";
+            const orgName = scope === "certificate" ? "THE HEALED PLACE" : "NCTS PURE LIGHT SCHOOL OF MINISTRY";
+            const rowsHtml = (list, heading) => {
+              if (!list.length) return "";
+              const body = list.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => {
+                const t = totals(s.id);
+                return `<tr><td>${(s.full_name || "").replace(/</g, "&lt;")}</td><td class="r">${money(t.charged)}</td><td class="r" style="color:#C5922E">${t.scholarship > 0 ? money(t.scholarship) : "—"}</td><td class="r" style="color:#2e7d32">${money(t.paid)}</td><td class="r" style="color:${t.balance > 0.005 ? "#B23A3A" : "#2e7d32"};font-weight:700">${money(Math.max(0, t.balance))}</td></tr>`;
+              }).join("");
+              const sub = sumFor(list);
+              return `<tr class="sub"><td colspan="5">${heading} (${list.length})</td></tr>${body}<tr class="tot"><td>Subtotal</td><td class="r">${money(sub.charged)}</td><td class="r">${money(sub.scholarship)}</td><td class="r">${money(sub.paid)}</td><td class="r">${money(sub.balance)}</td></tr>`;
+            };
+            const html = `<!doctype html><html><head><meta charset="utf-8"><title>Funds Report</title>
+              <style>
+                body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;max-width:820px;margin:24px auto;padding:0 20px;}
+                .head{text-align:center;border-bottom:3px solid #1B3A6B;padding-bottom:12px;margin-bottom:8px;}
+                .head .n{color:#C5922E;font-family:Arial,sans-serif;font-size:12px;letter-spacing:2px;font-weight:bold;}
+                h1{color:#1B3A6B;font-size:22px;margin:6px 0 2px;}
+                .sub2{color:#666;font-size:13px;margin-bottom:20px;text-align:center;}
+                .cards{display:flex;gap:12px;margin:0 0 22px;}
+                .card{flex:1;border:1px solid #ddd;border-radius:8px;padding:14px 16px;text-align:center;}
+                .card .lbl{font-family:Arial,sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#666;}
+                .card .val{font-size:24px;font-weight:bold;color:#1B3A6B;margin-top:4px;}
+                .card.paid .val{color:#2e7d32}.card.owed .val{color:#B23A3A}
+                table{width:100%;border-collapse:collapse;font-size:13.5px;}
+                th{font-family:Arial,sans-serif;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#666;border-bottom:2px solid #1B3A6B;padding:8px;}
+                td{padding:7px 8px;border-bottom:1px solid #eee;}
+                td.r,th.r{text-align:right;}
+                tr.sub td{background:#F5F0E8;font-family:Arial,sans-serif;font-weight:bold;color:#1B3A6B;font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding-top:14px;}
+                tr.tot td{font-weight:bold;border-top:2px solid #1B3A6B;border-bottom:none;background:#faf7f2;}
+                .grand td{font-size:15px;font-weight:bold;color:#1B3A6B;border-top:3px double #1B3A6B;background:#F5F0E8;padding:12px 8px;}
+                .foot{margin-top:22px;text-align:center;color:#888;font-size:11px;font-family:Arial,sans-serif;}
+                @media print{.noprint{display:none}}
+              </style></head><body>
+              <div class="head"><div class="n">${orgName}</div><h1>Funds Collected &amp; Owed</h1></div>
+              <div class="sub2">Management Report — ${scopeLabel} &bull; ${when}</div>
+              <button class="noprint" onclick="window.print()" style="display:block;margin:0 auto 20px;padding:8px 18px;background:#1B3A6B;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Print / Save as PDF</button>
+              <div class="cards">
+                <div class="card paid"><div class="lbl">Total Collected</div><div class="val">${money(all.paid)}</div></div>
+                <div class="card owed"><div class="lbl">Total Outstanding</div><div class="val">${money(all.balance)}</div></div>
+                ${all.scholarship > 0 ? `<div class="card"><div class="lbl">Scholarships</div><div class="val" style="color:#C5922E">${money(all.scholarship)}</div></div>` : ""}
+                <div class="card"><div class="lbl">Total Billed</div><div class="val">${money(all.charged)}</div></div>
+              </div>
+              <div class="sub2" style="text-align:left;margin-bottom:8px;">
+                ${scoped.length} students &bull; ${activeStudents.length} active, ${inactiveStudents.length} inactive &bull; ${owing} with a balance owing
+              </div>
+              <table>
+                <thead><tr><th>Student</th><th class="r">Billed</th><th class="r">Scholarship</th><th class="r">Paid</th><th class="r">Balance</th></tr></thead>
+                <tbody>
+                  ${rowsHtml(activeStudents, "Active students")}
+                  ${rowsHtml(inactiveStudents, "Inactive students")}
+                  <tr class="grand"><td>ALL STUDENTS</td><td class="r">${money(all.charged)}</td><td class="r">${money(all.scholarship)}</td><td class="r">${money(all.paid)}</td><td class="r">${money(all.balance)}</td></tr>
+                </tbody>
+              </table>
+              <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div>
+              </body></html>`;
+            let w = null;
+            try { w = window.open("", "_blank"); } catch (e) { w = null; }
+            if (w && w.document) { w.document.write(html); w.document.close(); }
+            else {
+              try {
+                const blob = new Blob([html], { type: "text/html" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener";
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 10000);
+              } catch (e) { window.alert("Please allow pop-ups to view the report."); }
+            }
+          }
+
+          const renderTable = (list) => (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+                <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
+                  <th style={{ padding: "6px 8px" }}>Student</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Charged</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Scholarship</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Paid</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Balance</th><th></th>
+                </tr></thead>
+                <tbody>
+                  {list.map((s) => {
+                    const t = totals(s.id);
+                    return (
+                      <tr key={s.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                        <td style={{ padding: "10px 8px", fontWeight: 600, color: C.ink }}>{s.full_name}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right" }}>{money(t.charged)}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", color: t.scholarship > 0 ? C.gold : C.muted }}>{t.scholarship > 0 ? money(t.scholarship) : "—"}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", color: C.green }}>{money(t.paid)}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", fontWeight: 700, color: t.balance > 0.005 ? C.rose : C.green }}>{money(t.balance)}</td>
+                        <td style={{ padding: "10px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
+                          <Btn small kind="ghost" icon={FileText} onClick={() => openInvoice(s)}>Invoice</Btn>
+                          <Btn small kind="ghost" icon={Receipt} onClick={() => openStatement(s)}>Statement</Btn>
+                          <Btn small kind="ghost" onClick={() => setSelected(s.id)}>Manage</Btn>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          );
+
+          return (
+            <>
+              {/* Funds summary */}
+              <Card style={{ marginBottom: 16 }}>
+                <div className="flex items-center justify-between" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                  <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: 0 }}>Funds Summary</h3>
+                  <Btn small kind="gold" icon={FileText} onClick={fundsReport}>Management report</Btn>
+                </div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ flex: "1 1 160px", background: "#f2f8f3", border: `1px solid ${C.green}33`, borderRadius: 10, padding: "14px 16px" }}>
+                    <div className="pl-body" style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".06em", color: C.muted }}>Total Collected</div>
+                    <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.green, marginTop: 2 }}>{money(all.paid)}</div>
+                  </div>
+                  <div style={{ flex: "1 1 160px", background: "#fdf3f3", border: `1px solid ${C.rose}33`, borderRadius: 10, padding: "14px 16px" }}>
+                    <div className="pl-body" style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".06em", color: C.muted }}>Outstanding</div>
+                    <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.rose, marginTop: 2 }}>{money(all.balance)}</div>
+                    <div className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{owing} student{owing === 1 ? "" : "s"} owing</div>
+                  </div>
+                  <div style={{ flex: "1 1 160px", background: C.paper, border: `1px solid ${C.line}`, borderRadius: 10, padding: "14px 16px" }}>
+                    <div className="pl-body" style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".06em", color: C.muted }}>Total Billed</div>
+                    <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.ink, marginTop: 2 }}>{money(all.charged)}</div>
+                    <div className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{activeStudents.length} active · {inactiveStudents.length} inactive</div>
+                  </div>
+                  {all.scholarship > 0 && (
+                    <div style={{ flex: "1 1 160px", background: "#fffaf0", border: `1px solid ${C.gold}44`, borderRadius: 10, padding: "14px 16px" }}>
+                      <div className="pl-body" style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: ".06em", color: C.muted }}>Scholarships Awarded</div>
+                      <div className="pl-display" style={{ fontSize: 26, fontWeight: 700, color: C.gold, marginTop: 2 }}>{money(all.scholarship)}</div>
+                    </div>
+                  )}
+                </div>
+              </Card>
+
+              <Card>
+                <div className="flex items-center justify-between" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                  <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: 0 }}>Active Students &amp; Statements</h3>
+                  <Btn small icon={Receipt} onClick={() => printAllStatements(activeStudents)}>Print all statements</Btn>
+                  <Btn small kind="gold" icon={Send} onClick={() => emailAllStatements(activeStudents)}>Email all statements</Btn>
+                </div>
+                {activeStudents.length ? renderTable(activeStudents) : <span className="pl-body" style={{ color: C.muted }}>No active students.</span>}
+              </Card>
+
+              {inactiveStudents.length > 0 && (
+                <Card style={{ marginTop: 16, opacity: 0.92 }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                    <h3 className="pl-display" style={{ fontSize: 17, color: C.muted, margin: 0 }}>Inactive Students</h3>
+                  </div>
+                  {renderTable(inactiveStudents)}
+                </Card>
+              )}
+            </>
+          );
+        })()}
+    </>
+  );
+}
+
+/* ---------- TUITION (admin: payment plan per level) ---------- */
+function TuitionManager({ tuition, refresh }) {
+  const [rows, setRows] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const m = {};
+    TUITION_LEVELS.forEach((p) => {
+      const t = (tuition || []).find((x) => x.program === p.key) || {};
+      m[p.key] = {
+        amount: t.amount != null ? String(t.amount) : "",
+        registration: t.registration != null ? String(t.registration) : "",
+        books: t.books != null ? String(t.books) : "",
+      };
+    });
+    setRows(m);
+  }, [tuition]);
+
+  const set = (key, field, val) => setRows((r) => ({ ...r, [key]: { ...r[key], [field]: val } }));
+
+  async function save() {
+    setBusy(true); setSaved(false);
+    try {
+      for (const p of TUITION_LEVELS) {
+        const r = rows[p.key] || {};
+        await db.setTuition(p.key, { amount: r.amount, registration: r.registration, books: r.books });
+      }
+      await refresh();
+      setSaved(true);
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  const planNote = (r) => {
+    const total = Number(r?.amount) || 0, reg = Number(r?.registration) || 0, bk = Number(r?.books) || 0;
+    const portion = Math.max(0, total - reg - bk);
+    if (total <= 0) return "";
+    return `Tuition balance ${money(portion)} — students can pay in full (${money(portion)}), half (${money(portion / 2)}), four payments of ${money(portion / 4)}, or seven payments of ${money(portion / 7)}`;
+  };
+
+  return (
+    <>
+      <PageHead title="Tuition" sub="Set the total, registration, and books for each level. Students choose to pay tuition in full, half, or four payments." />
+      <div className="flex flex-col gap-3" style={{ maxWidth: 760 }}>
+        {TUITION_LEVELS.map((p) => {
+          const r = rows[p.key] || {};
+          return (
+            <Card key={p.key}>
+              <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: "0 0 12px" }}>{p.label}</h3>
+              <div className="grid grid-cols-3 gap-3">
+                <Field label="Total (USD)"><input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={r.amount ?? ""} onChange={(e) => set(p.key, "amount", e.target.value)} /></Field>
+                <Field label="Registration"><input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={r.registration ?? ""} onChange={(e) => set(p.key, "registration", e.target.value)} /></Field>
+                <Field label="Books"><input style={inputStyle} type="number" inputMode="decimal" placeholder="0" value={r.books ?? ""} onChange={(e) => set(p.key, "books", e.target.value)} /></Field>
+              </div>
+              {planNote(r) && <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{planNote(r)}</div>}
+            </Card>
+          );
+        })}
+        <Card>
+          <div className="flex items-center gap-3">
+            <Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : "Save all levels"}</Btn>
+            {saved && <span className="pl-body" style={{ color: C.green, fontSize: 13 }}>Saved</span>}
+          </div>
+          <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 10, lineHeight: 1.5 }}>
+            Degree students pay Registration, then Books (due September), then the remaining tuition balance — in full, half, four payments, or seven payments, in any combination. Certificate classes pay from their own fee — 6-week in full, 12-week in full or two installments.
+          </p>
+        </Card>
+      </div>
+    </>
+  );
+}
+
+/* ---------- TUITION (student) ---------- */
+function StudentTuition({ ledger, tuition, profile }) {
+  const charged = ledger.filter((e) => e.kind === "charge").reduce((a, e) => a + Number(e.amount || 0), 0);
+  const paid = ledger.filter((e) => e.kind === "payment").reduce((a, e) => a + Number(e.amount || 0), 0);
+  const scholarship = ledger.filter((e) => e.kind === "scholarship").reduce((a, e) => a + Number(e.amount || 0), 0);
+  const balance = charged - paid - scholarship;
+  const es = [...ledger].sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  const prog = profile?.program;
+  const isTuitionLevel = TUITION_LEVELS.some((p) => p.key === prog);
+  const myT = prog && isTuitionLevel ? (tuition || []).find((t) => t.program === prog) : null;
+  const total = myT ? Number(myT.amount) || 0 : 0;
+  const regFee = myT ? Number(myT.registration) || 0 : 0;
+  const bookFee = myT ? Number(myT.books) || 0 : 0;
+  const tuitionPortion = Math.max(0, Math.round((total - regFee - bookFee) * 100) / 100);
+  const label = prog ? programLabel(prog) : "";
+
+  const paidFor = (word) => ledger
+    .filter((e) => e.kind === "payment" && (e.description || "").trim().toLowerCase() === `${label} ${word}`.toLowerCase())
+    .reduce((a, e) => a + (Number(e.amount) || 0), 0);
+
+  const regPaid = paidFor("registration");
+  const bookPaid = paidFor("books");
+  const tuitionPaidAmt = paidFor("tuition");
+  const tuitionRemaining = Math.max(0, Math.round((tuitionPortion - tuitionPaidAmt) * 100) / 100);
+  const halfAmt = Math.round((tuitionPortion / 2) * 100) / 100;
+  const fourAmt = Math.round((tuitionPortion / 4) * 100) / 100;
+  const sevenAmt = Math.round((tuitionPortion / 7) * 100) / 100;
+  // Only offer half/four/seven as distinct options while they'd actually leave a
+  // balance afterward — once remaining is that small, "pay full" is the same
+  // thing, so there's no point cluttering the buttons.
+  const showHalf = tuitionRemaining > halfAmt + 0.005;
+  const showFour = tuitionRemaining > fourAmt + 0.005;
+  const showSeven = tuitionRemaining > sevenAmt + 0.005;
+  const fullyPaid = total > 0 && regPaid >= regFee - 0.005 && bookPaid >= bookFee - 0.005 && tuitionRemaining <= 0.005;
+
+  async function pay(bucket, plan, customAmt) {
+    try { const url = await db.startTuitionCheckout(prog, bucket, plan, customAmt ?? null); window.location.href = url; }
+    catch (e) { window.alert(e.message); }
+  }
+  function payCustom(bucket, label, suggested) {
+    const input = window.prompt(`Enter the amount you'd like to pay toward ${label}:`, suggested ? String(suggested) : "");
+    if (input === null) return;
+    const amt = Math.round(Number(input) * 100) / 100;
+    if (isNaN(amt) || amt < 0.5) { window.alert("Please enter an amount of at least $0.50."); return; }
+    pay(bucket, "custom", amt);
+  }
+
+  function bucketRow(title, due, owed, paidAmt, bucket) {
+    const done = owed > 0 && paidAmt >= owed - 0.005;
+    const showAmt = Math.max(0, Math.round((owed - paidAmt) * 100) / 100);
+    return (
+      <div className="flex items-center justify-between" style={{ padding: "12px 0", borderTop: `1px solid ${C.line}`, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="pl-body" style={{ fontWeight: 600, fontSize: 15, color: C.ink }}>{title}{due ? <span className="pl-body" style={{ fontSize: 12, color: C.gold, marginLeft: 8 }}>{due}</span> : null}</div>
+          <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+            {money(owed)}{paidAmt > 0 ? ` • ${money(paidAmt)} paid` : ""}{owed > 0 ? ` • ${money(Math.max(0, owed - paidAmt))} left` : ""}
+          </div>
+        </div>
+        {owed <= 0 ? (
+          <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>—</span>
+        ) : done ? (
+          <span className="pl-body" style={{ fontSize: 14, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={16} /> Paid</span>
+        ) : TUITION_PAY_ENABLED ? (
+          <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+            <Btn small icon={Receipt} onClick={() => pay(bucket)}>Pay {money(showAmt)}</Btn>
+            <Btn small kind="ghost" onClick={() => payCustom(bucket, title, showAmt)}>Other amount</Btn>
+          </div>
+        ) : (
+          <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Contact the office</span>
+        )}
+      </div>
+    );
+  }
+
+  function tuitionRow() {
+    const done = tuitionPortion > 0 && tuitionRemaining <= 0.005;
+    return (
+      <div style={{ padding: "12px 0", borderTop: `1px solid ${C.line}` }}>
+        <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+          <div>
+            <div className="pl-body" style={{ fontWeight: 600, fontSize: 15, color: C.ink }}>Tuition</div>
+            <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+              {money(tuitionPortion)}{tuitionPaidAmt > 0 ? ` • ${money(tuitionPaidAmt)} paid` : ""}{tuitionPortion > 0 ? ` • ${money(tuitionRemaining)} left` : ""}
+            </div>
+          </div>
+          {tuitionPortion <= 0 ? (
+            <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>—</span>
+          ) : done ? (
+            <span className="pl-body" style={{ fontSize: 14, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={16} /> Paid</span>
+          ) : !TUITION_PAY_ENABLED ? (
+            <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Contact the office</span>
+          ) : null}
+        </div>
+        {tuitionPortion > 0 && !done && TUITION_PAY_ENABLED && (
+          <div className="flex items-center gap-2" style={{ flexWrap: "wrap", marginTop: 8 }}>
+            <Btn small icon={Receipt} onClick={() => pay("tuition", "full")}>Pay full {money(tuitionRemaining)}</Btn>
+            {showHalf && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "half")}>Pay half {money(Math.min(halfAmt, tuitionRemaining))}</Btn>}
+            {showFour && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "four")}>Pay 1 of 4 {money(Math.min(fourAmt, tuitionRemaining))}</Btn>}
+            {showSeven && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "seven")}>Pay 1 of 7 {money(Math.min(sevenAmt, tuitionRemaining))}</Btn>}
+            <Btn small kind="ghost" onClick={() => payCustom("tuition", "tuition", tuitionRemaining)}>Other amount</Btn>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Tuition" sub="Your payment plan, charges, payments, and balance." />
+
+      {prog && total > 0 && (
+        <Card style={{ marginBottom: 20 }}>
+          <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 2 }}>{label} Program — {money(total)} total</div>
+          {bucketRow("Registration", "", regFee, regPaid, "registration")}
+          {bucketRow("Books", "Due September", bookFee, bookPaid, "books")}
+          {tuitionRow()}
+          {fullyPaid && <div className="pl-body" style={{ marginTop: 12, color: C.green, fontWeight: 600, fontSize: 14 }}>Your account is paid in full — thank you.</div>}
+        </Card>
+      )}
+
+      <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
+        <Stat icon={Receipt} label="Total charged" value={money(charged)} />
+        <Stat icon={Check} label="Total paid" value={money(paid)} tone={C.green} />
+        <Stat icon={Receipt} label="Balance due" value={money(balance)} tone={balance > 0 ? C.rose : C.green} />
+      </div>
+      <Card>
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "0 0 10px" }}>Statement</h3>
+        {es.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No charges or payments on record yet.</span> :
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+              <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5 }}>
+                <th style={{ padding: "6px 8px" }}>Date</th><th style={{ padding: "6px 8px" }}>Description</th>
+                <th style={{ padding: "6px 8px", textAlign: "right" }}>Charge</th><th style={{ padding: "6px 8px", textAlign: "right" }}>Payment</th>
+              </tr></thead>
+              <tbody>
+                {es.map((e) => {
+                  const v = ledgerRowView(e);
+                  return (
+                  <tr key={e.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                    <td style={{ padding: "8px" }}>{fdate(e.date)}</td>
+                    <td style={{ padding: "8px", color: v.isRefund ? C.rose : undefined }}>{v.label}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: v.isRefund ? C.rose : C.ink }}>{v.charge}</td>
+                    <td style={{ padding: "8px", textAlign: "right", color: C.green }}>{v.payment}</td>
+                  </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>}
+        {balance > 0 && <p className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 12 }}>Please contact the school office to make a payment on your balance.</p>}
+      </Card>
+    </>
+  );
+}
+
+/* ---------- GRADE REPORT (instructor) ---------- */
+function Gradebook({ students, subs, tests, hwSubs, homework, courses }) {
+  const [progFilter, setProgFilter] = useState("all");
+  const filteredCourses = (courses || []).filter((c) => progFilter === "all" || (c.program || "all") === progFilter);
+  const withCode = filteredCourses.slice().sort((a, b) => (a.code || a.title || "").localeCompare(b.code || b.title || ""));
+  const [courseId, setCourseId] = useState("");
+  // If the current course isn't in the filtered list, clear the selection.
+  useEffect(() => {
+    if (courseId && !filteredCourses.some((c) => c.id === courseId)) setCourseId("");
+  }, [progFilter]); // eslint-disable-line
+  const course = courses.find((c) => c.id === courseId);
+
+  const cols = course ? [
+    ...tests.filter((t) => t.course_id === courseId).map((t) => ({ id: t.id, kind: "test", title: t.title, max: sumPoints(t.questions), obj: t })),
+    ...homework.filter((h) => h.course_id === courseId).map((h) => ({ id: h.id, kind: "hw", title: h.title, max: sumPoints(h.questions) || Number(h.points) || 0, obj: h })),
+  ] : [];
+  const roster = course ? (students || []).filter((s) => course.program === "all" || s.program === course.program).slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")) : [];
+
+  function getSub(stuId, col) {
+    return col.kind === "test"
+      ? subs.find((x) => x.student_id === stuId && x.test_id === col.id)
+      : hwSubs.find((x) => x.student_id === stuId && x.homework_id === col.id);
+  }
+  const subMax = (sub, col) => sub?.max_score ?? sub?.max_points ?? col.max;
+  function overall(stuId) {
+    let earned = 0, possible = 0;
+    cols.forEach((col) => { const s = getSub(stuId, col); if (s && s.status === "graded") { earned += Number(s.score) || 0; possible += subMax(s, col) || 0; } });
+    return possible ? Math.round((earned / possible) * 100) : null;
+  }
+  const gradeColor = (p) => p == null ? C.muted : p >= 80 ? C.green : p >= 60 ? C.gold : C.rose;
+
+  function exportCsv() {
+    const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+    const header = ["Student", ...cols.map((c) => c.title), "Overall %"];
+    const lines = roster.map((stu) => {
+      const cells = cols.map((col) => { const s = getSub(stu.id, col); if (!s) return ""; if (s.status !== "graded") return "submitted"; const m = subMax(s, col); return m ? Math.round((s.score / m) * 100) + "%" : s.score; });
+      const ov = overall(stu.id);
+      return [stu.full_name, ...cells, ov == null ? "" : ov + "%"];
+    });
+    const csv = [header, ...lines].map((r) => r.map(esc).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `${(course.code || course.title || "course")}-gradebook.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const th = { padding: "9px 12px", textAlign: "left", fontSize: 12.5, fontWeight: 700, color: C.ink, borderBottom: `2px solid ${C.line || "#E2E5EC"}`, whiteSpace: "nowrap", background: C.paper || "#F7F4EC" };
+  const td = { padding: "8px 12px", fontSize: 13.5, borderBottom: `1px solid ${C.line || "#EEF0F4"}`, whiteSpace: "nowrap" };
+
+  return (
+    <>
+      <PageHead title="Gradebook" sub="Every grade for a course on one screen." action={course && cols.length > 0 ? <Btn icon={ExternalLink} onClick={exportCsv}>Export CSV</Btn> : null} />
+      <Card style={{ marginBottom: 18, maxWidth: 520 }}>
+        <Field label="Program">
+          <select style={inputStyle} value={progFilter} onChange={(e) => setProgFilter(e.target.value)}>
+            <option value="all">All programs</option>
+            {PROGRAMS.filter((p) => p.key !== "all").map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Course">
+          <select style={inputStyle} value={courseId} onChange={(e) => setCourseId(e.target.value)}>
+            <option value="">— Choose a course —</option>
+            {withCode.map((c) => <option key={c.id} value={c.id}>{c.code ? `${c.code} — ` : ""}{c.title}</option>)}
+          </select>
+        </Field>
+        <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{withCode.length} course{withCode.length === 1 ? "" : "s"}{progFilter !== "all" ? ` in ${programLabel(progFilter)}` : ""}</div>
+      </Card>
+
+      {!course ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>Choose a course to see its gradebook.</span></Card>
+      ) : cols.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No tests or homework are tagged to this course yet.</span></Card>
+      ) : roster.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No students are enrolled in this program yet.</span></Card>
+      ) : (
+        <Card style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 520 }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, position: "sticky", left: 0, zIndex: 1 }}>Student</th>
+                  {cols.map((c) => <th key={c.kind + c.id} style={th}>{c.title}<div style={{ fontWeight: 400, fontSize: 11, color: C.muted }}>{c.kind === "test" ? "Test" : "Homework"} · {c.max} pts</div></th>)}
+                  <th style={{ ...th, textAlign: "center" }}>Overall</th>
+                </tr>
+              </thead>
+              <tbody>
+                {roster.map((stu) => {
+                  const ov = overall(stu.id);
+                  return (
+                    <tr key={stu.id}>
+                      <td style={{ ...td, fontWeight: 600, color: C.ink, position: "sticky", left: 0, background: "#fff" }}>{stu.full_name}</td>
+                      {cols.map((col) => {
+                        const s = getSub(stu.id, col);
+                        let content, color = C.ink;
+                        if (!s) { content = "—"; color = C.muted; }
+                        else if (s.status !== "graded") { content = "•"; color = C.gold; }
+                        else { const m = subMax(s, col); const p = m ? Math.round((s.score / m) * 100) : null; content = p == null ? s.score : p + "%"; color = gradeColor(p); }
+                        return <td key={col.kind + col.id} style={{ ...td, color, cursor: s ? "pointer" : "default", fontWeight: s && s.status === "graded" ? 600 : 400 }} onClick={s ? () => openSubmission(s, col.obj, stu.full_name) : undefined} title={s ? "View / print submission" : ""}>{content}</td>;
+                      })}
+                      <td style={{ ...td, textAlign: "center", fontWeight: 700, color: gradeColor(ov) }}>{ov == null ? "—" : ov + "%"}</td>
+                    </tr>
+                  );
+                })}
+                <tr>
+                  <td style={{ ...td, fontWeight: 700, color: C.muted, position: "sticky", left: 0, background: "#fff" }}>Class average</td>
+                  {cols.map((col) => {
+                    let e = 0, p = 0;
+                    roster.forEach((stu) => { const s = getSub(stu.id, col); if (s && s.status === "graded") { const m = subMax(s, col); e += Number(s.score) || 0; p += m || 0; } });
+                    const avg = p ? Math.round((e / p) * 100) : null;
+                    return <td key={"avg" + col.id} style={{ ...td, fontWeight: 700, color: gradeColor(avg) }}>{avg == null ? "—" : avg + "%"}</td>;
+                  })}
+                  <td style={td} />
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 12 }}>
+        Tap any grade to view or print that submission. <span style={{ color: C.gold }}>•</span> = submitted, awaiting grading. — = not submitted.
+      </p>
+    </>
+  );
+}
+
+function GradeReport({ students, subs, tests, hwSubs, homework, courses }) {
+  return (
+    <>
+      <PageHead title="Reports" sub="Each student's grades, average, and GPA. Print a transcript for anyone." />
+      {students.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card> :
+        <Card>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+              <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
+                <th style={{ padding: "6px 8px" }}>Student</th>
+                <th style={{ padding: "6px 8px", textAlign: "center" }}>Graded</th>
+                <th style={{ padding: "6px 8px", textAlign: "center" }}>Average</th>
+                <th style={{ padding: "6px 8px", textAlign: "center" }}>Letter</th>
+                <th style={{ padding: "6px 8px", textAlign: "center" }}>GPA</th>
+                <th></th>
+              </tr></thead>
+              <tbody>
+                {students.map((s) => {
+                  const items = gradedItems(s.id, subs, tests, hwSubs, homework, courses);
+                  const sum = summarize(items);
+                  return (
+                    <tr key={s.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                      <td style={{ padding: "10px 8px", fontWeight: 600, color: C.ink }}>{s.full_name}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "center" }}>{sum.count || "—"}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "center" }}>{sum.avgPct !== null ? Math.round(sum.avgPct) + "%" : "—"}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, color: C.gold }}>{sum.letter}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "center", fontWeight: 700, color: C.ink }}>{sum.gpa !== null ? sum.gpa.toFixed(2) : "—"}</td>
+                      <td style={{ padding: "10px 8px", textAlign: "right" }}>
+                        {sum.count ? <Btn small icon={ExternalLink} onClick={() => openTranscript(s.full_name, items, sum)}>Transcript</Btn> : <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>No grades</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>}
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 12 }}>GPA uses a standard 4.0 scale, averaged across all graded tests and homework.</p>
+    </>
+  );
+}
+
+function openTranscript(studentName, items, summary) {
+  const safe = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  const dateStr = new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  const groups = {};
+  items.forEach((it) => { (groups[it.course] = groups[it.course] || []).push(it); });
+  const body = Object.keys(groups).map((course) => {
+    const rs = groups[course].map((it) => `<tr><td>${safe(it.title)}</td><td>${safe(it.kind)}</td><td class="r">${it.score}/${it.max}</td><td class="r">${Math.round(it.pct)}%</td><td class="r b">${gradeInfo(it.pct).letter}</td></tr>`).join("");
+    return `<tr class="course"><td colspan="5">${safe(course)}</td></tr>${rs}`;
+  }).join("");
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Transcript — ${safe(studentName)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    @page { size: portrait; margin: 0.6in; }
+    * { box-sizing: border-box; }
+    body { font-family:'Source Serif 4',Georgia,serif; color:#15213d; margin:0; padding:28px; }
+    .head { border-bottom:3px solid #bd9a44; padding-bottom:12px; margin-bottom:18px; }
+    .kick { letter-spacing:.28em; text-transform:uppercase; font-size:11px; color:#9a7b2e; font-weight:600; }
+    .school { font-family:'Fraunces',serif; font-size:26px; font-weight:600; margin:2px 0 0; }
+    .doc { font-family:'Fraunces',serif; font-size:15px; color:#5b6478; margin-top:2px; }
+    .meta { display:flex; justify-content:space-between; font-size:14px; margin:14px 0 18px; }
+    .meta b { font-family:'Fraunces',serif; }
+    table { width:100%; border-collapse:collapse; font-size:13.5px; }
+    th { text-align:left; color:#7a7264; font-size:11px; text-transform:uppercase; letter-spacing:.05em; border-bottom:1px solid #d9c184; padding:6px 8px; }
+    td { padding:7px 8px; border-bottom:1px solid #eee3cc; }
+    td.r, th.r { text-align:right; } td.b { font-weight:700; }
+    tr.course td { background:#f6f1e7; font-weight:700; font-family:'Fraunces',serif; color:#15213d; border-bottom:1px solid #d9c184; }
+    .sum { margin-top:22px; display:flex; gap:34px; align-items:flex-end; border-top:2px solid #15213d; padding-top:14px; }
+    .sum .n { font-family:'Fraunces',serif; font-size:30px; font-weight:600; }
+    .sum .l { font-size:12px; color:#7a7264; text-transform:uppercase; letter-spacing:.06em; }
+    .print { position:fixed; top:14px; right:14px; background:#15213d; color:#f6f1e7; border:none; padding:9px 16px; border-radius:8px; font-family:'Source Serif 4',serif; font-size:13px; cursor:pointer; }
+    @media print { .print { display:none; } body { padding:0; } }
+  </style></head><body>
+    <button class="print" onclick="window.print()">Print / Save as PDF</button>
+    <div class="head"><div class="kick">${safe(BRAND.name)}</div><div class="school">Academic Transcript</div><div class="doc">Grade Report</div></div>
+    <div class="meta"><div>Student: <b>${safe(studentName)}</b></div><div>Issued: <b>${dateStr}</b></div></div>
+    <table><thead><tr><th>Item</th><th>Type</th><th class="r">Score</th><th class="r">%</th><th class="r">Grade</th></tr></thead><tbody>${body}</tbody></table>
+    <div class="sum">
+      <div><div class="n">${summary.count}</div><div class="l">Graded items</div></div>
+      <div><div class="n">${Math.round(summary.avgPct)}%</div><div class="l">Average</div></div>
+      <div><div class="n">${gradeInfo(summary.avgPct).letter}</div><div class="l">Letter grade</div></div>
+      <div><div class="n">${summary.gpa.toFixed(2)}</div><div class="l">GPA (4.0 scale)</div></div>
+    </div>
+  </body></html>`;
+  const w = window.open("", "_blank");
+  if (w) { w.document.write(html); w.document.close(); } else window.alert("Please allow pop-ups to view the transcript.");
+}
+
+/* ============================================================ CE HOURS DASHBOARD (admin) */
+function CEHoursDashboard({ students, courses, subs, tests, certificates, refresh }) {
+  const [filterStudent, setFilterStudent] = useState("");
+  const [filterCourse, setFilterCourse] = useState("");
+  const ceCourses = courses.filter((c) => isCEType(c.ce_type));
+
+  function ceEarned(studentId) {
+    const rows = [];
+    for (const course of ceCourses) {
+      const courseTests = tests.filter((t) => t.course_id === course.id);
+      for (const test of courseTests) {
+        const sub = subs.find((s) => s.student_id === studentId && s.test_id === test.id && s.status === "graded");
+        if (!sub || !sub.max_score) continue;
+        const pct = Math.round((sub.score / sub.max_score) * 100);
+        const passing = Number(course.passing_score) || 75;
+        if (pct < passing) continue;
+        rows.push({ courseId: course.id, courseTitle: course.title, ceType: course.ce_type, ceHours: Number(course.ce_hours) || 0, approvalNumber: course.approval_number || "", completedDate: sub.graded_at || sub.submitted_at || "", score: pct });
+      }
+    }
+    return rows;
+  }
+
+  const allRows = students.filter((s) => !filterStudent || s.id === filterStudent).map((s) => ({ student: s, earned: ceEarned(s.id) }));
+  const filtered = allRows.map((r) => ({ ...r, earned: filterCourse ? r.earned.filter((e) => e.courseId === filterCourse) : r.earned })).filter((r) => r.earned.length > 0 || !filterStudent);
+
+  function exportCSV() {
+    const lines = [["Student", "Course", "Type", "CE Hours", "Approval #", "Score %", "Completed"].join(",")];
+    for (const { student, earned } of filtered) {
+      for (const e of earned) {
+        lines.push([`"${student.full_name}"`, `"${e.courseTitle}"`, e.ceType === "faith_ce" ? "Faith CE" : "CE", e.ceHours, `"${e.approvalNumber}"`, e.score + "%", fdate(e.completedDate)].join(","));
+      }
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "ce-hours.csv"; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <>
+      <PageHead title="CE Hours" sub="Continuing education hours earned by learner. Export for reporting." action={<Btn icon={ExternalLink} onClick={exportCSV}>Export CSV</Btn>} />
+      {ceCourses.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No CE courses yet. Create a course and set its type to CE or Faith-Based CE.</span></Card>
+      ) : (
+        <>
+          <Card style={{ marginBottom: 18 }}>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Filter by learner">
+                <select style={inputStyle} value={filterStudent} onChange={(e) => setFilterStudent(e.target.value)}>
+                  <option value="">All learners</option>
+                  {students.map((s) => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                </select>
+              </Field>
+              <Field label="Filter by course">
+                <select style={inputStyle} value={filterCourse} onChange={(e) => setFilterCourse(e.target.value)}>
+                  <option value="">All CE courses</option>
+                  {ceCourses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+                </select>
+              </Field>
+            </div>
+          </Card>
+          <div className="flex flex-col gap-3">
+            {filtered.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No CE hours recorded yet.</span></Card>}
+            {filtered.map(({ student, earned }) => {
+              const totalHours = earned.reduce((a, e) => a + e.ceHours, 0);
+              const ceOnly = earned.filter((e) => e.ceType === "ce").reduce((a, e) => a + e.ceHours, 0);
+              const faithOnly = earned.filter((e) => e.ceType === "faith_ce").reduce((a, e) => a + e.ceHours, 0);
+              return (
+                <Card key={student.id}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: earned.length ? 12 : 0 }}>
+                    <div className="flex items-center gap-3">
+                      <Initials name={student.full_name} size={38} />
+                      <div>
+                        <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5, color: C.ink }}>{student.full_name}</div>
+                        <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{totalHours.toFixed(1)} total hours{ceOnly > 0 ? ` · ${ceOnly.toFixed(1)} CE` : ""}{faithOnly > 0 ? ` · ${faithOnly.toFixed(1)} Faith CE` : ""}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="pl-display" style={{ fontSize: 22, fontWeight: 600, color: C.green }}>{totalHours.toFixed(1)}</span>
+                      <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>hrs</span>
+                    </div>
+                  </div>
+                  {earned.length > 0 && (
+                    <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 10 }}>
+                      {earned.map((e, i) => {
+                        const cert = certificates.find((cx) => cx.student_id === student.id && cx.course_id === e.courseId);
+                        return (
+                          <div key={i} className="flex items-center justify-between" style={{ padding: "7px 0", borderBottom: i < earned.length - 1 ? `1px solid ${C.line}` : "none" }}>
+                            <div style={{ flex: 1 }}>
+                              <div className="pl-body" style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{e.courseTitle}</div>
+                              <div className="pl-body" style={{ fontSize: 12, color: C.muted }}>{e.ceType === "faith_ce" ? "Faith CE" : "CE"} · {e.score}% · completed {fdate(e.completedDate)}{e.approvalNumber ? ` · ${e.approvalNumber}` : ""}</div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="pl-body" style={{ fontSize: 13, fontWeight: 700, color: C.green }}>{e.ceHours.toFixed(1)} hrs</span>
+                              {cert && <Btn small kind="ghost" icon={ExternalLink} onClick={() => openCECertificate(cert, student.full_name, courses.find((c) => c.id === e.courseId))}>Cert</Btn>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ============================================================ STUDENT CE HOURS */
+function StudentCEHours({ profile, courses, tests, subs, certificates }) {
+  const ceCourses = courses.filter((c) => isCEType(c.ce_type));
+  const earned = [];
+  for (const course of ceCourses) {
+    const courseTests = tests.filter((t) => t.course_id === course.id);
+    for (const test of courseTests) {
+      const sub = subs.find((s) => s.student_id === profile.id && s.test_id === test.id && s.status === "graded");
+      if (!sub || !sub.max_score) continue;
+      const pct = Math.round((sub.score / sub.max_score) * 100);
+      const passing = Number(course.passing_score) || 75;
+      if (pct < passing) continue;
+      earned.push({ courseId: course.id, courseTitle: course.title, ceType: course.ce_type, ceHours: Number(course.ce_hours) || 0, approvalNumber: course.approval_number || "", providerName: course.provider_name || BRAND.name, completedDate: sub.graded_at || sub.submitted_at || "", score: pct });
+    }
+  }
+  const totalHours = earned.reduce((a, e) => a + e.ceHours, 0);
+  const ceOnly = earned.filter((e) => e.ceType === "ce").reduce((a, e) => a + e.ceHours, 0);
+  const faithOnly = earned.filter((e) => e.ceType === "faith_ce").reduce((a, e) => a + e.ceHours, 0);
+
+  return (
+    <>
+      <PageHead title="CE Hours" sub="Your continuing education hours and CE certificates." />
+      <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
+        <Stat icon={Clock} label="Total CE hours" value={totalHours.toFixed(1)} tone={C.green} />
+        <Stat icon={Award} label="CE hours" value={ceOnly.toFixed(1)} />
+        <Stat icon={Award} label="Faith CE hours" value={faithOnly.toFixed(1)} tone={C.gold} />
+      </div>
+      {earned.length === 0 ? (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No CE hours earned yet. Complete a CE course post-test with a passing score to earn hours.</span></Card>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {earned.map((e, i) => {
+            const cert = certificates.find((cx) => cx.student_id === profile.id && cx.course_id === e.courseId);
+            const course = courses.find((c) => c.id === e.courseId);
+            return (
+              <Card key={i}>
+                <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center justify-center" style={{ width: 44, height: 44, borderRadius: 10, background: C.paper2, border: `1px solid ${C.goldSoft}` }}><Award size={20} color={C.gold} /></div>
+                    <div>
+                      <div className="pl-display" style={{ fontSize: 17, fontWeight: 600, color: C.ink }}>{e.courseTitle}</div>
+                      <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{e.ceType === "faith_ce" ? "Faith-Based CE" : "CE"} · {e.score}% · {fdate(e.completedDate)}</div>
+                      {e.approvalNumber && <div className="pl-body" style={{ fontSize: 12, color: C.gold, marginTop: 2 }}>{e.approvalNumber}</div>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div style={{ textAlign: "right" }}>
+                      <div className="pl-display" style={{ fontSize: 22, fontWeight: 600, color: C.green }}>{e.ceHours.toFixed(1)}</div>
+                      <div className="pl-body" style={{ fontSize: 11, color: C.muted }}>hours</div>
+                    </div>
+                    {cert && <Btn small icon={ExternalLink} onClick={() => openCECertificate(cert, profile.full_name, course)}>CE Cert</Btn>}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 14, lineHeight: 1.5 }}>CE certificates are issued automatically when you pass a post-test with the required score. Your provider is responsible for reporting hours to the appropriate licensing board.</p>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN — FORMS MANAGER
+   ═══════════════════════════════════════════════════════════════ */
+function FormsManager({ forms, formSubs, profiles, refresh }) {
+  const [mode, setMode] = useState("list"); // "list" | "build" | "subs"
+  const [draft, setDraft] = useState(null);
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [viewForm, setViewForm] = useState(null); // form whose subs we're viewing
+
+  const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
+
+  function startNew() {
+    setDraft({ title: "", description: "", type: "upload", file_path: null, program: "all", required: true, sort_order: 0, active: true });
+    setFile(null); setMode("build");
+  }
+  function startEdit(f) {
+    setDraft({ ...f }); setFile(null); setMode("build");
+  }
+
+  async function save() {
+    if (!draft.title.trim()) { window.alert("Give the form a title."); return; }
+    setBusy(true);
+    try { await db.saveForm({ ...draft, _file: file }); await refresh(); setMode("list"); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  async function remove(id) {
+    if (!window.confirm("Delete this form?")) return;
+    try { await db.deleteForm(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  async function markStatus(subId, status) {
+    try { await db.reviewFormSubmission(subId, status); await refresh(); }
+    catch (e) { window.alert(e.message); }
+  }
+
+  const STATUS_COLOR = { submitted: C.gold, reviewed: C.navy, accepted: C.green };
+
+  if (mode === "build" && draft) {
+    return (
+      <>
+        <PageHead title={draft.id ? "Edit Form" : "New Form"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
+        <Card style={{ maxWidth: 680 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></Field>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 70 }} value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></Field>
+          <Field label="Type">
+            <select style={inputStyle} value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })}>
+              <option value="upload">Upload only — student uploads completed form</option>
+              <option value="pdf">PDF + Upload — show PDF to fill, student uploads completed</option>
+            </select>
+          </Field>
+          {draft.type === "pdf" && (
+            <Field label="PDF form (for students to view/fill)">
+              <input type="file" accept=".pdf" onChange={(e) => setFile(e.target.files?.[0])} />
+              {draft.file_path && !file && <FileLink path={draft.file_path} label="Current PDF" />}
+            </Field>
+          )}
+          <Field label="Program">
+            <select style={inputStyle} value={draft.program} onChange={(e) => setDraft({ ...draft, program: e.target.value })}>
+              <option value="all">All programs</option>
+              {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </Field>
+          <div className="flex items-center gap-4" style={{ marginTop: 8 }}>
+            <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" checked={draft.required} onChange={(e) => setDraft({ ...draft, required: e.target.checked })} />
+              Required for enrollment
+            </label>
+            <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
+              Active (visible to students)
+            </label>
+          </div>
+          <div className="flex gap-2" style={{ marginTop: 14 }}>
+            <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save form"}</Btn>
+            <Btn kind="ghost" onClick={() => setMode("list")}>Cancel</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  if (mode === "subs" && viewForm) {
+    const subs = formSubs.filter((s) => s.form_id === viewForm.id);
+    return (
+      <>
+        <PageHead title={viewForm.title + " — Submissions"} sub={`${subs.length} received`} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => { setMode("list"); setViewForm(null); }}>Back</Btn>} />
+        {subs.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No submissions yet.</span></Card>}
+        {subs.map((s) => (
+          <Card key={s.id} style={{ marginBottom: 10 }}>
+            <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <div className="pl-body" style={{ fontWeight: 600, fontSize: 15 }}>{nameOf(s.student_id)}</div>
+                <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>Submitted {fdate(s.submitted_at)}</div>
+                {s.notes && <div className="pl-body" style={{ fontSize: 13, marginTop: 4, color: C.ink }}>{s.notes}</div>}
+              </div>
+              <div className="flex items-center gap-2">
+                {s.file_path && <FileLink path={s.file_path} label="Download" />}
+                <span className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: STATUS_COLOR[s.status] || C.muted, textTransform: "uppercase" }}>{s.status}</span>
+                {s.status !== "accepted" && <Btn small icon={ThumbsUp} onClick={() => markStatus(s.id, "accepted")}>Accept</Btn>}
+                {s.status === "submitted" && <Btn small kind="ghost" onClick={() => markStatus(s.id, "reviewed")}>Mark reviewed</Btn>}
+              </div>
+            </div>
+          </Card>
+        ))}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Forms" sub="Onboarding and registration forms for students." action={<Btn icon={Plus} onClick={startNew}>New form</Btn>} />
+      <div className="flex flex-col gap-3">
+        {forms.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No forms yet. Click New form to create one.</span></Card>}
+        {forms.map((f) => {
+          const count = formSubs.filter((s) => s.form_id === f.id).length;
+          const pending = formSubs.filter((s) => s.form_id === f.id && s.status === "submitted").length;
+          return (
+            <Card key={f.id}>
+              <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{f.title}</span>
+                    {!f.active && <span className="pl-body" style={{ fontSize: 11, color: C.muted, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>Inactive</span>}
+                    {f.required && <span className="pl-body" style={{ fontSize: 11, color: C.rose, background: "#fff1f0", borderRadius: 6, padding: "2px 8px" }}>Required</span>}
+                  </div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+                    {f.type === "pdf" ? "PDF + Upload" : "Upload"} · {f.program === "all" ? "All programs" : f.program} · {count} submitted{pending > 0 ? ` · ${pending} pending review` : ""}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Btn small kind="ghost" icon={Users} onClick={() => { setViewForm(f); setMode("subs"); }}>{count} {count === 1 ? "submission" : "submissions"}</Btn>
+                  <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(f)}>Edit</Btn>
+                  <button onClick={() => remove(f.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STUDENT — FORMS PAGE
+   ═══════════════════════════════════════════════════════════════ */
+function StudentForms({ forms, myFormSubs, profile, refresh }) {
+  const [uploading, setUploading] = useState(null); // form id being submitted
+  const [file, setFile] = useState(null);
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [pdfUrl, setPdfUrl] = useState(null); // signed URL for Adobe viewer
+  const [pdfName, setPdfName] = useState("");
+
+  const visibleForms = forms.filter((f) => f.active && (f.program === "all" || f.program === profile.program));
+  const submittedIds = new Set(myFormSubs.map((s) => s.form_id));
+
+  async function openPdf(f) {
+    try {
+      const url = await db.signedUrl(f.file_path);
+      setPdfUrl(url); setPdfName(f.title);
+    } catch (e) { window.alert(e.message); }
+  }
+
+  async function submit(form_id) {
+    if (!file && !notes.trim()) { window.alert("Please attach a file or add a note before submitting."); return; }
+    setBusy(true);
+    try { await db.submitForm({ form_id, file, notes }); await refresh(); setUploading(null); setFile(null); setNotes(""); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  const STATUS_LABEL = { submitted: "Under review", reviewed: "Reviewed", accepted: "Accepted ✓" };
+  const STATUS_COLOR = { submitted: C.gold, reviewed: C.navy, accepted: C.green };
+
+  // Adobe PDF Embed viewer component (uses API key from env if available)
+  function PdfViewer({ url, name }) {
+    const containerId = "adobe-pdf-viewer";
+    useEffect(() => {
+      if (!url) return;
+      const clientId = typeof import.meta !== "undefined" && import.meta.env?.VITE_ADOBE_CLIENT_ID;
+      if (clientId && window.AdobeDC) {
+        const view = new window.AdobeDC.View({ clientId, divId: containerId });
+        view.previewFile({ content: { location: { url } }, metaData: { fileName: name + ".pdf" } }, { embedMode: "IN_LINE", showDownloadPDF: true, showPrintPDF: true });
+      }
+    }, [url, name]);
+
+    const clientId = typeof import.meta !== "undefined" && import.meta.env?.VITE_ADOBE_CLIENT_ID;
+    return (
+      <div style={{ marginBottom: 24 }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 10 }}>
+          <span className="pl-body" style={{ fontWeight: 600, color: C.ink }}>{name}</span>
+          <Btn small kind="ghost" icon={X} onClick={() => { setPdfUrl(null); setPdfName(""); }}>Close</Btn>
+        </div>
+        {clientId && window.AdobeDC ? (
+          <div id={containerId} style={{ height: 600, border: `1px solid ${C.line}`, borderRadius: 8 }} />
+        ) : (
+          <div style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 8, padding: 24, textAlign: "center" }}>
+            <FileText size={32} style={{ color: C.muted, marginBottom: 8 }} />
+            <p className="pl-body" style={{ color: C.muted, marginBottom: 12 }}>Inline viewer requires an Adobe API key. Open the PDF to view and fill it, then upload your completed copy below.</p>
+            <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: C.gold, fontWeight: 600 }}>Open PDF in new tab</a>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Forms" sub="Required and onboarding forms for your program." />
+      {pdfUrl && <PdfViewer url={pdfUrl} name={pdfName} />}
+      <div className="flex flex-col gap-3">
+        {visibleForms.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No forms have been assigned to your program yet.</span></Card>}
+        {visibleForms.map((f) => {
+          const mySub = myFormSubs.find((s) => s.form_id === f.id);
+          const isOpen = uploading === f.id;
+          return (
+            <Card key={f.id}>
+              <div className="flex items-start justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div className="flex items-center gap-2">
+                    <ClipboardList size={16} style={{ color: C.gold }} />
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{f.title}</span>
+                    {f.required && <span className="pl-body" style={{ fontSize: 11, color: C.rose }}>Required</span>}
+                  </div>
+                  {f.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 4 }}>{f.description}</p>}
+                  {mySub && (
+                    <div className="pl-body" style={{ fontSize: 12.5, marginTop: 6, color: STATUS_COLOR[mySub.status] || C.muted, fontWeight: 600 }}>
+                      {STATUS_LABEL[mySub.status] || mySub.status} · Submitted {fdate(mySub.submitted_at)}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                  {f.type === "pdf" && f.file_path && (
+                    <Btn small kind="ghost" icon={FileText} onClick={() => openPdf(f)}>View / Fill PDF</Btn>
+                  )}
+                  {!mySub && (
+                    <Btn small icon={Upload} onClick={() => { setUploading(isOpen ? null : f.id); setFile(null); setNotes(""); }}>
+                      {isOpen ? "Cancel" : "Submit form"}
+                    </Btn>
+                  )}
+                  {mySub && mySub.status !== "accepted" && (
+                    <Btn small kind="ghost" icon={Upload} onClick={() => { setUploading(isOpen ? null : f.id); setFile(null); setNotes(""); }}>
+                      Resubmit
+                    </Btn>
+                  )}
+                </div>
+              </div>
+              {isOpen && (
+                <div style={{ marginTop: 14, borderTop: `1px solid ${C.line}`, paddingTop: 14 }}>
+                  <Field label="Upload completed form (PDF, DOCX, image)">
+                    <input type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onChange={(e) => setFile(e.target.files?.[0])} />
+                  </Field>
+                  <Field label="Notes (optional)">
+                    <textarea style={{ ...inputStyle, minHeight: 60 }} value={notes} placeholder="Any notes for the coordinator…" onChange={(e) => setNotes(e.target.value)} />
+                  </Field>
+                  <Btn icon={Send} kind="gold" onClick={() => submit(f.id)} disabled={busy}>{busy ? "Submitting…" : "Submit"}</Btn>
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN — SURVEY BUILDER
+   ═══════════════════════════════════════════════════════════════ */
+const SURVEY_CATEGORIES = [
+  { key: "lms",        label: "LMS System" },
+  { key: "class",      label: "Class Flow" },
+  { key: "experience", label: "Overall Experience" },
+  { key: "general",    label: "General" },
+];
+const QTYPE_SURVEY = { text: "Open text", rating: "Rating 1–5", choice: "Multiple choice", yesno: "Yes / No" };
+
+function SurveyBuilder({ surveys, surveyResps, profiles, refresh }) {
+  const [mode, setMode] = useState("list"); // "list" | "build" | "results"
+  const [draft, setDraft] = useState(null);
+  const [qs, setQs] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [viewSurvey, setViewSurvey] = useState(null);
+
+  const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
+
+  function startNew() {
+    setDraft({ title: "", description: "", category: "general", program: "all", active: true });
+    setQs([]); setMode("build");
+  }
+  function startEdit(s) {
+    setDraft({ ...s }); setQs(s.questions.map((q) => ({ ...q, options: [...(q.options || [])] }))); setMode("build");
+  }
+
+  function addQ(type) {
+    setQs([...qs, { id: "tmp" + Date.now(), type, prompt: "", options: type === "choice" ? ["", "", ""] : [] }]);
+  }
+  const upQ = (id, patch) => setQs(qs.map((q) => (q.id === id ? { ...q, ...patch } : q)));
+  const delQ = (id) => setQs(qs.filter((q) => q.id !== id));
+
+  async function save() {
+    if (!draft.title.trim()) { window.alert("Give the survey a title."); return; }
+    if (qs.length === 0) { window.alert("Add at least one question."); return; }
+    setBusy(true);
+    try { await db.saveSurvey(draft, qs); await refresh(); setMode("list"); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  async function remove(id) {
+    if (!window.confirm("Delete this survey and all responses?")) return;
+    try { await db.deleteSurvey(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  async function toggleActive(s) {
+    try { await db.saveSurvey({ ...s, active: !s.active }, s.questions); await refresh(); }
+    catch (e) { window.alert(e.message); }
+  }
+
+  if (mode === "build" && draft) {
+    return (
+      <>
+        <PageHead title={draft.id ? "Edit Survey" : "New Survey"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
+        <Card style={{ maxWidth: 720, marginBottom: 16 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} /></Field>
+          <Field label="Description (optional)"><textarea style={{ ...inputStyle, minHeight: 60 }} value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} /></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Category">
+              <select style={inputStyle} value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+                {SURVEY_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+            </Field>
+            <Field label="Program">
+              <select style={inputStyle} value={draft.program} onChange={(e) => setDraft({ ...draft, program: e.target.value })}>
+                <option value="all">All programs</option>
+                {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+              </select>
+            </Field>
+          </div>
+          <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+            <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
+            Active (visible to students)
+          </label>
+        </Card>
+
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>Questions</h3>
+        <div className="flex flex-col gap-3" style={{ marginBottom: 14 }}>
+          {qs.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No questions yet — add one below.</span></Card>}
+          {qs.map((q, i) => (
+            <Card key={q.id}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+                <span className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase" }}>Q{i + 1} · {QTYPE_SURVEY[q.type]}</span>
+                <button onClick={() => delQ(q.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={16} /></button>
+              </div>
+              <Field label="Question text">
+                <input style={inputStyle} value={q.prompt} onChange={(e) => upQ(q.id, { prompt: e.target.value })} placeholder="Enter your question…" />
+              </Field>
+              {q.type === "choice" && (
+                <div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginBottom: 6 }}>Options (one per line)</div>
+                  {q.options.map((opt, oi) => (
+                    <div key={oi} className="flex items-center gap-2" style={{ marginBottom: 6 }}>
+                      <input style={{ ...inputStyle, flex: 1 }} value={opt} placeholder={`Option ${oi + 1}`}
+                        onChange={(e) => { const o = [...q.options]; o[oi] = e.target.value; upQ(q.id, { options: o }); }} />
+                      <button onClick={() => { const o = q.options.filter((_, x) => x !== oi); upQ(q.id, { options: o }); }}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: C.muted }}><X size={14} /></button>
+                    </div>
+                  ))}
+                  <button className="pl-body" style={{ background: "none", border: "none", color: C.gold, cursor: "pointer", fontSize: 13 }}
+                    onClick={() => upQ(q.id, { options: [...q.options, ""] })}>+ Add option</button>
+                </div>
+              )}
+            </Card>
+          ))}
+        </div>
+        <Card style={{ marginBottom: 14 }}>
+          <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginBottom: 8 }}>Add question:</div>
+          <div className="flex gap-2" style={{ flexWrap: "wrap" }}>
+            {Object.entries(QTYPE_SURVEY).map(([type, label]) => (
+              <Btn key={type} small kind="ghost" icon={Plus} onClick={() => addQ(type)}>{label}</Btn>
+            ))}
+          </div>
+        </Card>
+        <div className="flex gap-2">
+          <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save survey"}</Btn>
+          <Btn kind="ghost" onClick={() => setMode("list")}>Cancel</Btn>
+        </div>
+      </>
+    );
+  }
+
+  if (mode === "results" && viewSurvey) {
+    const resps = surveyResps.filter((r) => r.survey_id === viewSurvey.id);
+    return (
+      <>
+        <PageHead title={viewSurvey.title + " — Results"} sub={`${resps.length} response${resps.length !== 1 ? "s" : ""}`} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => { setMode("list"); setViewSurvey(null); }}>Back</Btn>} />
+        {resps.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No responses yet.</span></Card>}
+
+        {/* Summary per question */}
+        {viewSurvey.questions.map((q, i) => {
+          const answers = resps.map((r) => r.answers?.[q.id]).filter(Boolean);
+          return (
+            <Card key={q.id} style={{ marginBottom: 14 }}>
+              <div className="pl-body" style={{ fontSize: 12, fontWeight: 700, color: C.gold, textTransform: "uppercase", marginBottom: 4 }}>Q{i + 1} · {QTYPE_SURVEY[q.type]}</div>
+              <p className="pl-body" style={{ fontWeight: 600, marginBottom: 10 }}>{q.prompt}</p>
+              {q.type === "rating" && (
+                <div>
+                  <div className="pl-body" style={{ fontSize: 22, fontWeight: 700, color: C.green }}>
+                    {answers.length ? (answers.reduce((a, v) => a + Number(v), 0) / answers.length).toFixed(1) : "—"} <span style={{ fontSize: 14, color: C.muted }}>avg / 5</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <div key={n} style={{ textAlign: "center" }}>
+                        <div className="pl-body" style={{ fontSize: 18, fontWeight: 700 }}>{answers.filter((a) => Number(a) === n).length}</div>
+                        <div className="pl-body" style={{ fontSize: 11, color: C.muted }}>{n}★</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(q.type === "choice" || q.type === "yesno") && (
+                <div className="flex flex-col gap-2">
+                  {(q.type === "yesno" ? ["Yes", "No"] : q.options).map((opt) => {
+                    const count = answers.filter((a) => a === opt).length;
+                    const pct = answers.length ? Math.round((count / answers.length) * 100) : 0;
+                    return (
+                      <div key={opt}>
+                        <div className="flex items-center justify-between" style={{ marginBottom: 2 }}>
+                          <span className="pl-body" style={{ fontSize: 13.5 }}>{opt}</span>
+                          <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{count} ({pct}%)</span>
+                        </div>
+                        <div style={{ height: 6, background: C.line, borderRadius: 3 }}>
+                          <div style={{ height: 6, background: C.gold, borderRadius: 3, width: pct + "%" }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {q.type === "text" && (
+                <div className="flex flex-col gap-2">
+                  {answers.map((a, j) => (
+                    <div key={j} style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 12px" }}>
+                      <p className="pl-body" style={{ fontSize: 13.5, margin: 0 }}>{a}</p>
+                    </div>
+                  ))}
+                  {answers.length === 0 && <span className="pl-body" style={{ color: C.muted }}>No text responses yet.</span>}
+                </div>
+              )}
+            </Card>
+          );
+        })}
+
+        {/* Individual responses */}
+        <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, margin: "20px 0 10px" }}>Individual responses</h3>
+        {resps.map((r) => (
+          <Card key={r.id} style={{ marginBottom: 10 }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+              <span className="pl-body" style={{ fontWeight: 600 }}>{nameOf(r.student_id)}</span>
+              <span className="pl-body" style={{ fontSize: 12, color: C.muted }}>{fdate(r.submitted_at)}</span>
+            </div>
+            {viewSurvey.questions.map((q) => (
+              <div key={q.id} style={{ marginBottom: 6 }}>
+                <div className="pl-body" style={{ fontSize: 12, color: C.muted }}>{q.prompt}</div>
+                <div className="pl-body" style={{ fontSize: 13.5 }}>{r.answers?.[q.id] ?? <i style={{ color: C.muted }}>No answer</i>}</div>
+              </div>
+            ))}
+          </Card>
+        ))}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Surveys" sub="Build feedback surveys and review student responses." action={<Btn icon={Plus} onClick={startNew}>New survey</Btn>} />
+      <div className="flex flex-col gap-3">
+        {surveys.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No surveys yet. Click New survey to build one.</span></Card>}
+        {surveys.map((s) => {
+          const count = surveyResps.filter((r) => r.survey_id === s.id).length;
+          const cat = SURVEY_CATEGORIES.find((c) => c.key === s.category);
+          return (
+            <Card key={s.id}>
+              <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{s.title}</span>
+                    {!s.active && <span className="pl-body" style={{ fontSize: 11, color: C.muted, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>Inactive</span>}
+                  </div>
+                  <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+                    {cat?.label || s.category} · {s.questions?.length || 0} questions · {count} {count === 1 ? "response" : "responses"}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Btn small kind="ghost" icon={BarChart2} onClick={() => { setViewSurvey(s); setMode("results"); }}>Results</Btn>
+                  <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(s)}>Edit</Btn>
+                  <button title={s.active ? "Deactivate" : "Activate"} onClick={() => toggleActive(s)}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: s.active ? C.green : C.muted }}>
+                    {s.active ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
+                  </button>
+                  <button onClick={() => remove(s.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STUDENT — SURVEYS PAGE
+   ═══════════════════════════════════════════════════════════════ */
+function StudentSurveys({ surveys, mySurveyResps, profile, refresh }) {
+  const [taking, setTaking] = useState(null); // survey being filled
+  const [answers, setAnswers] = useState({});
+  const [busy, setBusy] = useState(false);
+
+  const completedIds = new Set(mySurveyResps.map((r) => r.survey_id));
+  const visible = surveys.filter((s) => s.active && (s.program === "all" || s.program === profile.program));
+  const available = visible.filter((s) => !completedIds.has(s.id));
+  const completed = visible.filter((s) => completedIds.has(s.id));
+
+  async function submit() {
+    for (const q of taking.questions) {
+      if (!answers[q.id] || String(answers[q.id]).trim() === "") {
+        window.alert("Please answer all questions before submitting."); return;
+      }
+    }
+    setBusy(true);
+    try { await db.submitSurveyResponse(taking.id, answers); await refresh(); setTaking(null); setAnswers({}); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  if (taking) {
+    return (
+      <>
+        <PageHead title={taking.title} sub={taking.description || "Please answer all questions and submit."} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => { setTaking(null); setAnswers({}); }}>Back</Btn>} />
+        {taking.questions.map((q, i) => (
+          <Card key={q.id} style={{ marginBottom: 12 }}>
+            <div className="pl-body" style={{ fontWeight: 600, fontSize: 15, marginBottom: 10 }}>
+              {i + 1}. {q.prompt}
+            </div>
+            {q.type === "text" && (
+              <textarea style={{ ...inputStyle, minHeight: 90 }} value={answers[q.id] || ""} placeholder="Your answer…" onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })} />
+            )}
+            {q.type === "rating" && (
+              <div className="flex gap-3">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button key={n} onClick={() => setAnswers({ ...answers, [q.id]: String(n) })}
+                    style={{ width: 44, height: 44, borderRadius: 10, border: `2px solid ${answers[q.id] === String(n) ? C.gold : C.line}`, background: answers[q.id] === String(n) ? C.gold : "transparent", color: answers[q.id] === String(n) ? "#fff" : C.ink, cursor: "pointer", fontWeight: 700, fontSize: 18 }}>
+                    {n}
+                  </button>
+                ))}
+                <span className="pl-body" style={{ fontSize: 12, color: C.muted, alignSelf: "center" }}>1 = Poor · 5 = Excellent</span>
+              </div>
+            )}
+            {q.type === "yesno" && (
+              <div className="flex gap-3">
+                {["Yes", "No"].map((opt) => (
+                  <button key={opt} onClick={() => setAnswers({ ...answers, [q.id]: opt })}
+                    style={{ padding: "8px 24px", borderRadius: 8, border: `2px solid ${answers[q.id] === opt ? C.gold : C.line}`, background: answers[q.id] === opt ? C.gold : "transparent", color: answers[q.id] === opt ? "#fff" : C.ink, cursor: "pointer", fontWeight: 600, fontSize: 15 }}>
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            )}
+            {q.type === "choice" && (
+              <div className="flex flex-col gap-2">
+                {(q.options || []).map((opt) => (
+                  <button key={opt} onClick={() => setAnswers({ ...answers, [q.id]: opt })}
+                    style={{ textAlign: "left", padding: "10px 14px", borderRadius: 8, border: `2px solid ${answers[q.id] === opt ? C.gold : C.line}`, background: answers[q.id] === opt ? "#fffbf2" : "transparent", cursor: "pointer" }}>
+                    <span className="pl-body" style={{ fontSize: 14, color: answers[q.id] === opt ? C.gold : C.ink, fontWeight: answers[q.id] === opt ? 600 : 400 }}>{opt}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </Card>
+        ))}
+        <div className="flex gap-2">
+          <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : "Submit survey"}</Btn>
+          <Btn kind="ghost" onClick={() => { setTaking(null); setAnswers({}); }}>Cancel</Btn>
+        </div>
+      </>
+    );
+  }
+
+  const cat = (key) => SURVEY_CATEGORIES.find((c) => c.key === key)?.label || key;
+
+  return (
+    <>
+      <PageHead title="Surveys" sub="Share your feedback to help improve the program." />
+      {available.length > 0 && (
+        <>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>Available</h3>
+          <div className="flex flex-col gap-3" style={{ marginBottom: 24 }}>
+            {available.map((s) => (
+              <Card key={s.id}>
+                <div className="flex items-start justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <MessageSquare size={16} style={{ color: C.gold }} />
+                      <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{s.title}</span>
+                    </div>
+                    <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>{cat(s.category)} · {s.questions?.length || 0} questions</div>
+                    {s.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 4 }}>{s.description}</p>}
+                  </div>
+                  <Btn icon={ChevronRight} onClick={() => { setTaking(s); setAnswers({}); }}>Take survey</Btn>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+      {available.length === 0 && completed.length === 0 && (
+        <Card><span className="pl-body" style={{ color: C.muted }}>No surveys available right now. Check back later.</span></Card>
+      )}
+      {completed.length > 0 && (
+        <>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>Completed</h3>
+          <div className="flex flex-col gap-3">
+            {completed.map((s) => {
+              const myResp = mySurveyResps.find((r) => r.survey_id === s.id);
+              return (
+                <Card key={s.id} style={{ opacity: 0.75 }}>
+                  <div className="flex items-center gap-2">
+                    <ThumbsUp size={16} style={{ color: C.green }} />
+                    <span className="pl-body" style={{ fontWeight: 600, fontSize: 15 }}>{s.title}</span>
+                    <span className="pl-body" style={{ fontSize: 12.5, color: C.green }}>Completed {myResp ? fdate(myResp.submitted_at) : ""}</span>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN — RESOURCES MANAGER (instructions & policy manuals)
+   ═══════════════════════════════════════════════════════════════ */
+const RESOURCE_CATEGORIES = [
+  { key: "instructions", label: "Instructions & Guides" },
+  { key: "policy",       label: "Policy Manuals" },
+  { key: "handbook",     label: "Handbooks" },
+  { key: "other",        label: "Other" },
+];
+
+function ResourcesManager({ resources, refresh }) {
+  const [draft, setDraft] = useState(null);
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  function startNew() {
+    setDraft({ title: "", description: "", category: "instructions", file_path: null, link_url: "", program: "all", sort_order: 0, active: true });
+    setFile(null);
+  }
+  function startEdit(r) { setDraft({ ...r }); setFile(null); }
+
+  async function save() {
+    if (!draft.title.trim()) { window.alert("Give the resource a title."); return; }
+    if (!file && !draft.file_path && !draft.link_url) { window.alert("Attach a file or add a link."); return; }
+    setBusy(true);
+    try { await db.saveResource({ ...draft, _file: file }); await refresh(); setDraft(null); setFile(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this resource?")) return;
+    try { await db.deleteResource(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+
+  if (draft) {
+    return (
+      <>
+        <PageHead title={draft.id ? "Edit Resource" : "New Resource"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setDraft(null)}>Back</Btn>} />
+        <Card style={{ maxWidth: 680 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Student Handbook 2026" /></Field>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 70 }} value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What is this document about?" /></Field>
+          <Field label="Category">
+            <select style={inputStyle} value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+              {RESOURCE_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </Field>
+          <Field label="Upload a document (PDF, DOCX)">
+            <input type="file" accept=".pdf,.doc,.docx" onChange={(e) => setFile(e.target.files?.[0])} />
+            {draft.file_path && !file && <FileLink path={draft.file_path} label="Current file" />}
+          </Field>
+          <Field label="…or link to an external document (optional)">
+            <input style={inputStyle} value={draft.link_url || ""} onChange={(e) => setDraft({ ...draft, link_url: e.target.value })} placeholder="https://…" />
+          </Field>
+          <Field label="Program">
+            <select style={inputStyle} value={draft.program} onChange={(e) => setDraft({ ...draft, program: e.target.value })}>
+              <option value="all">All programs</option>
+              {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </Field>
+          <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+            <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
+            Active (visible to students)
+          </label>
+          <div className="flex gap-2" style={{ marginTop: 14 }}>
+            <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save resource"}</Btn>
+            <Btn kind="ghost" onClick={() => setDraft(null)}>Cancel</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  const byCat = RESOURCE_CATEGORIES.map((c) => ({ ...c, items: resources.filter((r) => r.category === c.key) })).filter((c) => c.items.length);
+
+  return (
+    <>
+      <PageHead title="Resources" sub="Instruction guides and policy manuals for students." action={<Btn icon={Plus} onClick={startNew}>New resource</Btn>} />
+      {resources.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No resources yet. Click New resource to post an instruction guide or policy manual.</span></Card>}
+      {byCat.map((cat) => (
+        <div key={cat.key} style={{ marginBottom: 22 }}>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>{cat.label}</h3>
+          <div className="flex flex-col gap-3">
+            {cat.items.map((r) => (
+              <Card key={r.id}>
+                <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{r.title}</span>
+                      {!r.active && <span className="pl-body" style={{ fontSize: 11, color: C.muted, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>Inactive</span>}
+                    </div>
+                    {r.description && <p className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{r.description}</p>}
+                    <div className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{r.program === "all" ? "All programs" : programLabel(r.program)}</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {r.file_path && <FileLink path={r.file_path} label="View" />}
+                    {r.link_url && <Btn small kind="ghost" icon={ExternalLink} onClick={() => window.open(r.link_url, "_blank")}>Open link</Btn>}
+                    <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(r)}>Edit</Btn>
+                    <button onClick={() => remove(r.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   STUDENT — RESOURCES PAGE (read / download only)
+   ═══════════════════════════════════════════════════════════════ */
+function StudentResources({ resources, profile }) {
+  const visible = resources.filter((r) => r.active && (r.program === "all" || r.program === profile.program));
+  const byCat = RESOURCE_CATEGORIES.map((c) => ({ ...c, items: visible.filter((r) => r.category === c.key) })).filter((c) => c.items.length);
+
+  return (
+    <>
+      <PageHead title="Resources" sub="Instruction guides, handbooks, and policy manuals. View or download anytime." />
+      {visible.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No resources have been posted yet. Check back soon.</span></Card>}
+      {byCat.map((cat) => (
+        <div key={cat.key} style={{ marginBottom: 22 }}>
+          <h3 className="pl-display" style={{ fontSize: 17, color: C.ink, marginBottom: 10 }}>{cat.label}</h3>
+          <div className="flex flex-col gap-3">
+            {cat.items.map((r) => (
+              <Card key={r.id}>
+                <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+                  <div className="flex items-start gap-3" style={{ flex: 1 }}>
+                    <div className="inline-flex items-center justify-center" style={{ width: 38, height: 38, borderRadius: 10, background: C.paper2, color: C.gold, flexShrink: 0 }}><BookOpen size={18} /></div>
+                    <div>
+                      <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{r.title}</span>
+                      {r.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 2, lineHeight: 1.5 }}>{r.description}</p>}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {r.file_path && <FileLink path={r.file_path} label="View / Download" />}
+                    {r.link_url && <Btn small kind="ghost" icon={ExternalLink} onClick={() => window.open(r.link_url, "_blank")}>Open</Btn>}
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   ADMIN — ANNOUNCEMENTS MANAGER
+   ═══════════════════════════════════════════════════════════════ */
+function AnnouncementsManager({ announcements, refresh }) {
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  function startNew() { setDraft({ title: "", body: "", program: "all", active: true }); }
+  function startEdit(a) { setDraft({ ...a }); }
+
+  async function save() {
+    if (!draft.title.trim() || !draft.body.trim()) { window.alert("Add a title and message."); return; }
+    setBusy(true);
+    try { await db.saveAnnouncement(draft); await refresh(); setDraft(null); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function remove(id) {
+    if (!window.confirm("Delete this announcement?")) return;
+    try { await db.deleteAnnouncement(id); await refresh(); } catch (e) { window.alert(e.message); }
+  }
+  async function toggle(a) {
+    try { await db.saveAnnouncement({ ...a, active: !a.active }); await refresh(); }
+    catch (e) { window.alert(e.message); }
+  }
+
+  if (draft) {
+    return (
+      <>
+        <PageHead title={draft.id ? "Edit Announcement" : "New Announcement"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setDraft(null)}>Back</Btn>} />
+        <Card style={{ maxWidth: 640 }}>
+          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Class canceled this Thursday" /></Field>
+          <Field label="Message"><textarea style={{ ...inputStyle, minHeight: 120 }} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} placeholder="Write your announcement…" /></Field>
+          <Field label="Who sees this?">
+            <select style={inputStyle} value={draft.program} onChange={(e) => setDraft({ ...draft, program: e.target.value })}>
+              <option value="all">All students</option>
+              {STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label} students only</option>)}
+            </select>
+          </Field>
+          <label className="pl-body" style={{ fontSize: 13.5, display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+            <input type="checkbox" checked={draft.active} onChange={(e) => setDraft({ ...draft, active: e.target.checked })} />
+            Active (showing on dashboards now)
+          </label>
+          <div className="flex gap-2" style={{ marginTop: 14 }}>
+            <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Post announcement"}</Btn>
+            <Btn kind="ghost" onClick={() => setDraft(null)}>Cancel</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PageHead title="Announcements" sub="Posted to the top of student dashboards." action={<Btn icon={Plus} onClick={startNew}>New announcement</Btn>} />
+      <div className="flex flex-col gap-3">
+        {announcements.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No announcements yet. Click New announcement to post one to student dashboards.</span></Card>}
+        {announcements.map((a) => (
+          <Card key={a.id} style={{ borderLeft: a.active ? `4px solid ${C.gold}` : `4px solid ${C.line}` }}>
+            <div className="flex items-start justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
+              <div style={{ flex: 1 }}>
+                <div className="flex items-center gap-2">
+                  <span className="pl-display" style={{ fontSize: 16, fontWeight: 700, color: C.ink }}>{a.title}</span>
+                  {!a.active && <span className="pl-body" style={{ fontSize: 11, color: C.muted, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>Hidden</span>}
+                  <span className="pl-body" style={{ fontSize: 11, color: C.gold, fontWeight: 600 }}>{a.program === "all" ? "All students" : programLabel(a.program)}</span>
+                </div>
+                <p className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 4, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{a.body}</p>
+                <div className="pl-body" style={{ fontSize: 11.5, color: C.muted, marginTop: 4 }}>{fdate(a.created_at)}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button title={a.active ? "Hide" : "Show"} onClick={() => toggle(a)} style={{ background: "none", border: "none", cursor: "pointer", color: a.active ? C.green : C.muted }}>
+                  {a.active ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
+                </button>
+                <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(a)}>Edit</Btn>
+                <button onClick={() => remove(a.id)} style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </>
+  );
 }
