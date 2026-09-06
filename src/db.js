@@ -169,12 +169,14 @@ export async function listSubmissions() {
   return data;
 }
 
-export async function createSubmission({ test_id, answers, max_score }) {
+export async function createSubmission({ test_id, answers }) {
   const { data: { user } } = await supabase.auth.getUser();
-  const { error } = await supabase.from("pl_submissions").insert({
-    test_id, student_id: user.id, answers, max_score,
-  });
+  // clear any prior attempt to avoid a duplicate, then submit through the
+  // server-side grader (reads the answer key securely, sets score + status).
+  await supabase.from("pl_submissions").delete().eq("test_id", test_id).eq("student_id", user.id);
+  const { data, error } = await supabase.rpc("pl_submit_test", { p_test_id: test_id, p_answers: answers || {} });
   if (error) throw error;
+  return data;
 }
 
 export async function gradeSubmission(id, { manual, score, max_score, feedback }) {
@@ -391,23 +393,15 @@ export async function submitHomework({ homework_id, answers, response, file, max
   const { data: { user } } = await supabase.auth.getUser();
   let file_path = null;
   if (file) file_path = await uploadFile("homework-submissions", file);
-
-  // If a submission already exists (e.g. it was returned for redo), update it
-  // instead of inserting a duplicate — this resubmits it for grading.
-  const { data: existing } = await supabase.from("pl_homework_submissions")
-    .select("id").eq("homework_id", homework_id).eq("student_id", user.id).maybeSingle();
-
-  if (existing?.id) {
-    const patch = { answers: answers || {}, response: response || "", max_points, status: "submitted" };
-    if (file_path) patch.file_path = file_path;
-    const { error } = await supabase.from("pl_homework_submissions").update(patch).eq("id", existing.id);
-    if (error) throw error;
-  } else {
-    const { error } = await supabase.from("pl_homework_submissions").insert({
-      homework_id, student_id: user.id, answers: answers || {}, response: response || "", file_path, max_points, status: "submitted",
-    });
-    if (error) throw error;
-  }
+  // remove any prior submission (e.g. returned-for-redo) to avoid a duplicate,
+  // then submit through the server-side grader (reads the answer key securely,
+  // computes the score, and marks it graded when all questions are objective).
+  await supabase.from("pl_homework_submissions").delete().eq("homework_id", homework_id).eq("student_id", user.id);
+  const { data, error } = await supabase.rpc("pl_submit_homework", {
+    p_homework_id: homework_id, p_answers: answers || {}, p_response: response || null, p_file: file_path,
+  });
+  if (error) throw error;
+  return data;
 }
 
 export async function gradeHomework(id, { manual, score, max_points, feedback }) {
