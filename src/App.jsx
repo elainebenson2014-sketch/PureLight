@@ -3612,13 +3612,15 @@ function openSubmission(sub, assessment, studentName, hideCorrect) {
     if (q.type === "mc") {
       answer = safe(q.options?.[Number(ans)] ?? "—");
       correct = hideCorrect ? "" : safe(q.options?.[Number(q.correct_answer)] ?? "");
-      const ok = String(ans) === String(q.correct_answer);
-      badge = hideCorrect ? `<span class="b">${q.points} pts</span>` : `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
+      const sOk = sub.results?.[q.id];
+      const ok = hideCorrect ? sOk : (String(ans) === String(q.correct_answer));
+      badge = (hideCorrect && sOk === undefined) ? `<span class="b">${q.points} pts</span>` : `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
     } else if (q.type === "tf") {
       answer = safe(ans ?? "—");
       correct = hideCorrect ? "" : safe(q.correct_answer);
-      const ok = ans === q.correct_answer;
-      badge = hideCorrect ? `<span class="b">${q.points} pts</span>` : `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
+      const sOk = sub.results?.[q.id];
+      const ok = hideCorrect ? sOk : (ans === q.correct_answer);
+      badge = (hideCorrect && sOk === undefined) ? `<span class="b">${q.points} pts</span>` : `<span class="b ${ok ? "ok" : "no"}">${ok ? "Correct" : "Incorrect"} \u00b7 ${ok ? q.points : 0}/${q.points}</span>`;
     } else {
       answer = safe(ans || "(no response)");
       const aw = sub.manual?.[q.id];
