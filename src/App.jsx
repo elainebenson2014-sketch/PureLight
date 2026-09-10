@@ -3826,6 +3826,20 @@ function CertificatesManager({ students, courses, certificates, refresh }) {
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({ student_id: "", course_id: "", title: "", note: "" });
+  const [editing, setEditing] = useState(null);
+  const [ef, setEf] = useState({ title: "", note: "", issued_on: "", serial: "" });
+  function startEdit(c) {
+    setEditing(c.id);
+    setEf({ title: c.title || "", note: c.note || "", issued_on: c.issued_on ? String(c.issued_on).slice(0, 10) : "", serial: c.serial || "" });
+  }
+  async function saveEdit() {
+    setBusy(true);
+    try {
+      await db.updateCertificate(editing, { title: ef.title.trim(), note: ef.note.trim(), issued_on: ef.issued_on || null, serial: ef.serial.trim() });
+      await refresh(); setEditing(null);
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
   const nameOf = (id) => students.find((s) => s.id === id)?.full_name || "Student";
 
   function pickCourse(cid) {
@@ -3885,9 +3899,22 @@ function CertificatesManager({ students, courses, certificates, refresh }) {
               </div>
               <div className="flex items-center gap-2">
                 <Btn small icon={ExternalLink} onClick={() => openCertificate(c, nameOf(c.student_id))}>Preview</Btn>
+                <Btn small kind="ghost" icon={PencilLine} onClick={() => (editing === c.id ? setEditing(null) : startEdit(c))}>Edit</Btn>
                 <button onClick={() => remove(c.id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={18} /></button>
               </div>
             </div>
+            {editing === c.id && (
+              <div style={{ marginTop: 14, borderTop: `1px solid ${C.line}`, paddingTop: 14 }}>
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Certificate title"><input style={inputStyle} value={ef.title} onChange={(e) => setEf({ ...ef, title: e.target.value })} /></Field>
+                  <Field label="Date awarded"><input type="date" style={inputStyle} value={ef.issued_on} onChange={(e) => setEf({ ...ef, issued_on: e.target.value })} /></Field>
+                  <Field label="Note (optional)"><input style={inputStyle} value={ef.note} onChange={(e) => setEf({ ...ef, note: e.target.value })} placeholder="e.g. with high honors" /></Field>
+                  <Field label="Serial"><input style={inputStyle} value={ef.serial} onChange={(e) => setEf({ ...ef, serial: e.target.value })} /></Field>
+                </div>
+                <div className="pl-body" style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>The recipient's name comes from their profile — edit it under People if it needs to change.</div>
+                <div className="flex gap-2"><Btn small icon={Check} onClick={saveEdit} disabled={busy}>{busy ? "Saving…" : "Save changes"}</Btn><Btn small kind="ghost" onClick={() => setEditing(null)}>Cancel</Btn></div>
+              </div>
+            )}
           </Card>
         ))}
       </div>
