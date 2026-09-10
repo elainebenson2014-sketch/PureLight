@@ -229,7 +229,7 @@ function groupByCourseModule(items, courses) {
     if (!byCourse.has(cid)) byCourse.set(cid, []);
     byCourse.get(cid).push(it);
   }
-  const order = [...courses, { id: "none", title: "General" }];
+  const order = [...[...courses].sort((a, b) => (a.code || "").localeCompare(b.code || "", undefined, { numeric: true })), { id: "none", title: "General" }];
   const out = [];
   for (const c of order) {
     const list = byCourse.get(c.id);
@@ -6393,4 +6393,3 @@ function AnnouncementsManager({ announcements, refresh }) {
     </>
   );
 }
-
