@@ -553,6 +553,11 @@ export async function listCertificates() {
   return data;
 }
 
+export async function updateCertificate(id, patch) {
+  const { error } = await supabase.from("pl_certificates").update(patch).eq("id", id);
+  if (error) throw error;
+}
+
 export async function issueCertificate({ student_id, title, course_id, program, note, ce_hours, approval_number, provider_name }) {
   const { data: { user } } = await supabase.auth.getUser();
   const sid = student_id || user.id;
