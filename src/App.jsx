@@ -3702,6 +3702,13 @@ function openSubmission(sub, assessment, studentName, hideCorrect) {
 /* ---------- CERTIFICATES ---------- */
 function openCertificate(cert, studentName) {
   const dateStr = new Date(cert.issued_on).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  const sigImg = ENV.VITE_SIGNATURE_URL || "";
+  const sigName = ENV.VITE_SIGNATURE_NAME || ENV.VITE_SCHOOL_HEAD || "";
+  const sigTitle = ENV.VITE_SIGNATURE_TITLE || "";
+  const sigTop = sigImg
+    ? `<img src="${sigImg}" alt="Signature" style="height:52px;max-width:200px;object-fit:contain" />`
+    : (sigName ? `<div style="font-family:'Segoe Script','Brush Script MT','Snell Roundhand',cursive;font-size:27px;color:#15213d;line-height:1">${safe(sigName)}</div>` : "");
+  const sigLabel = sigName ? safe(sigName) + (sigTitle ? ", " + safe(sigTitle) : "") : "Authorized signature";
   const safe = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${safe(cert.title)} — Certificate</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -3740,8 +3747,8 @@ function openCertificate(cert, studentName) {
         <div class="name">${safe(studentName)}</div>
         <div class="body">in recognition of the faithful and successful completion of <b>${safe(cert.title)}</b>${cert.note ? `, ${safe(cert.note)}` : ""}, awarded this ${dateStr}.</div>
         <div class="row">
-          <div><div class="sigline">Instructor signature</div></div>
-          <div><div class="sigline">Date — ${dateStr}</div></div>
+          <div><div style="height:54px;display:flex;align-items:flex-end;width:210px">${sigTop}</div><div class="sigline">${sigLabel}</div></div>
+          <div><div style="height:54px"></div><div class="sigline">Date — ${dateStr}</div></div>
         </div>
         <div class="serial">Serial ${safe(cert.serial)}</div>
       </div>
