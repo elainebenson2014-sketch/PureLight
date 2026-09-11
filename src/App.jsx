@@ -3761,7 +3761,7 @@ function openCertificate(cert, studentName) {
         <div class="body">in recognition of the faithful and successful completion of <b>${safe(cert.title)}</b>${cert.note ? `, ${safe(cert.note)}` : ""}, awarded this ${dateStr}.</div>
         <div class="row">
           <div class="sigcol"><div class="sigbox">${sigTop}</div><div class="sigline">${sigLabel}</div></div>
-          <div class="sigcol"><div class="sigbox"></div><div class="sigline">Date — ${dateStr}</div></div>
+          <div class="sigcol"><div class="sigbox" style="font-size:16px;color:${C.ink}">${dateStr}</div><div class="sigline">Date</div></div>
         </div>
         <div class="serial">Serial ${safe(cert.serial)}</div>
       </div>
