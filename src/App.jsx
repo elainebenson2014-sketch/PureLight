@@ -1464,6 +1464,13 @@ function StudentsManager({ profiles, meId, courses, assignments, canSetRole, ref
   async function changeRole(id, role) {
     try { await db.setRole(id, role); await refresh(); } catch (e) { window.alert(e.message); }
   }
+  async function editName(s) {
+    const v = window.prompt("Edit name (this fixes capitalization or typos):", s.full_name || "");
+    if (v == null) return;
+    const name = v.trim();
+    if (!name || name === s.full_name) return;
+    try { await db.updateProfileName(s.id, name); await refresh(); } catch (e) { window.alert(e.message); }
+  }
   async function toggleCourse(instructorId, courseId, isOn) {
     try {
       if (isOn) await db.unassignCourse(instructorId, courseId);
@@ -1504,7 +1511,7 @@ function StudentsManager({ profiles, meId, courses, assignments, canSetRole, ref
               <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
                 <Initials name={s.full_name} size={40} />
                 <div style={{ flex: 1, minWidth: 150 }}>
-                  <div className="pl-body" style={{ fontWeight: 600, fontSize: 15 }}>{s.full_name || "(no name)"}{s.id === meId ? " · you" : ""}</div>
+                  <div className="pl-body" style={{ fontWeight: 600, fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}>{s.full_name || "(no name)"}{s.id === meId ? " · you" : ""}{canSetRole && <button onClick={() => editName(s)} title="Edit name" className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, padding: 0, display: "inline-flex" }}><PencilLine size={14} /></button>}</div>
                   <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>{s.email}</div>
                 </div>
                 {canSetRole ? (
