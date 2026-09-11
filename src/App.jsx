@@ -3701,15 +3701,16 @@ function openSubmission(sub, assessment, studentName, hideCorrect) {
 
 /* ---------- CERTIFICATES ---------- */
 function openCertificate(cert, studentName) {
+  const safe = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
   const dateStr = new Date(cert.issued_on).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  const emblem = ENV.VITE_SEAL_URL || BRAND.logoUrl || SCHOOL_LOGO || "";
   const sigImg = ENV.VITE_SIGNATURE_URL || "";
   const sigName = ENV.VITE_SIGNATURE_NAME || ENV.VITE_SCHOOL_HEAD || "";
   const sigTitle = ENV.VITE_SIGNATURE_TITLE || "";
   const sigTop = sigImg
-    ? `<img src="${sigImg}" alt="Signature" style="height:52px;max-width:200px;object-fit:contain" />`
-    : (sigName ? `<div style="font-family:'Segoe Script','Brush Script MT','Snell Roundhand',cursive;font-size:27px;color:#15213d;line-height:1">${safe(sigName)}</div>` : "");
-  const sigLabel = sigName ? safe(sigName) + (sigTitle ? ", " + safe(sigTitle) : "") : "Authorized signature";
-  const safe = (s) => String(s || "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+    ? `<img src="${sigImg}" alt="Signature" style="height:50px;max-width:210px;object-fit:contain" />`
+    : (sigName ? `<div class="sigscript">${safe(sigName)}</div>` : "");
+  const sigLabel = sigName ? safe(sigName) + (sigTitle ? " · " + safe(sigTitle) : "") : "Authorized signature";
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${safe(cert.title)} — Certificate</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3717,38 +3718,50 @@ function openCertificate(cert, studentName) {
   <style>
     @page { size: landscape; margin: 0; }
     * { box-sizing: border-box; }
-    body { margin:0; font-family:'Source Serif 4',Georgia,serif; color:#15213d; background:#e9e3d4; display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; }
-    .cert { width:1000px; max-width:96vw; aspect-ratio:1.414/1; background:#f6f1e7; position:relative; padding:60px 70px; box-shadow:0 24px 70px rgba(0,0,0,.20); }
-    .frame { position:absolute; inset:20px; border:2px solid #bd9a44; pointer-events:none; }
-    .frame:before { content:''; position:absolute; inset:7px; border:1px solid #d9c184; }
+    body { margin:0; font-family:'Source Serif 4',Georgia,serif; color:${C.ink}; background:#ece7dd; display:flex; align-items:center; justify-content:center; min-height:100vh; padding:24px; }
+    .cert { width:1040px; max-width:96vw; aspect-ratio:1.414/1; background:#fffdf9; position:relative; padding:52px 66px; box-shadow:0 26px 80px rgba(0,0,0,.22); }
+    .b1 { position:absolute; inset:16px; border:3px solid ${C.gold}; pointer-events:none; }
+    .b2 { position:absolute; inset:26px; border:1px solid ${C.goldSoft}; pointer-events:none; }
+    .corner { position:absolute; width:15px; height:15px; background:${C.gold}; transform:rotate(45deg); }
+    .corner.tl{ top:9px; left:9px } .corner.tr{ top:9px; right:9px } .corner.bl{ bottom:9px; left:9px } .corner.br{ bottom:9px; right:9px }
     .inner { position:relative; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
-    .kicker { letter-spacing:.34em; text-transform:uppercase; font-size:12.5px; color:#bd9a44; font-weight:600; }
-    .school { font-family:'Fraunces',serif; font-size:32px; font-weight:600; margin:8px 0 0; letter-spacing:.01em; }
-    .rule { width:64px; height:2px; background:#bd9a44; margin:18px 0 22px; }
-    .pres { font-size:15px; color:#5b6478; font-style:italic; }
-    .name { font-family:'Fraunces',serif; font-size:44px; font-weight:600; margin:10px 0 16px; padding:0 28px 10px; border-bottom:2px solid #bd9a44; }
-    .body { font-size:16.5px; max-width:640px; line-height:1.65; color:#2a3147; }
-    .body b { color:#15213d; }
-    .row { display:flex; gap:90px; margin-top:46px; }
-    .sigline { width:210px; border-top:1.5px solid #15213d; padding-top:7px; font-size:12.5px; color:#5b6478; letter-spacing:.04em; }
-    .serial { position:absolute; bottom:2px; right:4px; font-size:10.5px; color:#9aa2b3; letter-spacing:.06em; }
-    .print { position:fixed; top:16px; right:16px; background:#15213d; color:#f6f1e7; border:none; padding:10px 18px; border-radius:8px; font-family:'Source Serif 4',serif; font-size:14px; cursor:pointer; box-shadow:0 6px 18px rgba(0,0,0,.2); }
+    .emblem { height:76px; width:76px; object-fit:contain; border-radius:50%; background:#fff; padding:4px; margin-bottom:6px; }
+    .kicker { letter-spacing:.4em; text-transform:uppercase; font-size:11.5px; color:${C.gold}; font-weight:700; }
+    .school { font-family:'Fraunces',serif; font-size:29px; font-weight:600; margin:6px 0 0; color:${C.ink}; }
+    .orn { display:flex; align-items:center; gap:12px; margin:14px 0 16px; }
+    .orn:before,.orn:after { content:''; height:1px; width:78px; background:${C.gold}; opacity:.55; }
+    .orn .dot { width:8px; height:8px; background:${C.gold}; transform:rotate(45deg); }
+    .pres { font-size:14.5px; color:#6a6f7c; font-style:italic; }
+    .name { font-family:'Fraunces',serif; font-size:46px; font-weight:600; color:${C.ink}; margin:8px 0 4px; }
+    .namerule { width:360px; max-width:62%; height:1.5px; background:${C.gold}; opacity:.7; margin-bottom:18px; }
+    .body { font-size:16px; max-width:660px; line-height:1.6; color:#3a3f4c; }
+    .body b { color:${C.ink}; }
+    .row { display:flex; gap:120px; margin-top:40px; align-items:flex-end; }
+    .sigcol { text-align:center; }
+    .sigbox { height:52px; display:flex; align-items:flex-end; justify-content:center; }
+    .sigscript { font-family:'Segoe Script','Snell Roundhand','Brush Script MT',cursive; font-size:26px; color:${C.ink}; line-height:1; }
+    .sigline { width:222px; border-top:1.5px solid ${C.ink}; padding-top:6px; font-size:12px; color:#6a6f7c; letter-spacing:.03em; margin-top:3px; }
+    .serial { position:absolute; bottom:0; right:2px; font-size:10px; color:#a7adba; letter-spacing:.06em; }
+    .print { position:fixed; top:16px; right:16px; background:${C.ink}; color:#fff; border:none; padding:10px 18px; border-radius:8px; font-family:'Source Serif 4',serif; font-size:14px; cursor:pointer; box-shadow:0 6px 18px rgba(0,0,0,.2); }
     @media print { .print { display:none; } body { background:#fff; padding:0; } .cert { box-shadow:none; } }
   </style></head>
   <body>
     <button class="print" onclick="window.print()">Print / Save as PDF</button>
-    <div class="cert"><div class="frame"></div>
+    <div class="cert">
+      <div class="b1"></div><div class="b2"></div>
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
       <div class="inner">
-        ${BRAND.logoUrl ? `<img src="${BRAND.logoUrl}" alt="" style="height:66px;width:auto;margin-bottom:12px;border-radius:50%;object-fit:cover;" />` : ""}
+        ${emblem ? `<img class="emblem" src="${emblem}" alt="" />` : ""}
         <div class="kicker">Certificate of Completion</div>
         <div class="school">${safe(BRAND.name)}</div>
-        <div class="rule"></div>
+        <div class="orn"><span class="dot"></span></div>
         <div class="pres">This certificate is proudly presented to</div>
         <div class="name">${safe(studentName)}</div>
+        <div class="namerule"></div>
         <div class="body">in recognition of the faithful and successful completion of <b>${safe(cert.title)}</b>${cert.note ? `, ${safe(cert.note)}` : ""}, awarded this ${dateStr}.</div>
         <div class="row">
-          <div><div style="height:54px;display:flex;align-items:flex-end;width:210px">${sigTop}</div><div class="sigline">${sigLabel}</div></div>
-          <div><div style="height:54px"></div><div class="sigline">Date — ${dateStr}</div></div>
+          <div class="sigcol"><div class="sigbox">${sigTop}</div><div class="sigline">${sigLabel}</div></div>
+          <div class="sigcol"><div class="sigbox"></div><div class="sigline">Date — ${dateStr}</div></div>
         </div>
         <div class="serial">Serial ${safe(cert.serial)}</div>
       </div>
