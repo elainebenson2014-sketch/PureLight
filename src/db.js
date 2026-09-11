@@ -616,6 +616,11 @@ export async function setRole(id, role) {
   if (error) throw error;
 }
 
+export async function updateProfileName(id, full_name) {
+  const { error } = await supabase.from("pl_profiles").update({ full_name }).eq("id", id);
+  if (error) throw error;
+}
+
 /* ---------------- INSTRUCTOR <-> COURSE ASSIGNMENTS ---------------- */
 export async function listInstructorCourses() {
   const { data, error } = await supabase.from("pl_instructor_courses").select("*");
