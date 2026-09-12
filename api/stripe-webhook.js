@@ -150,7 +150,17 @@ export default async function handler(req, res) {
 async function sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail }) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return;
-  const from = process.env.EMAIL_FROM || "NCTS PureLight <onboarding@resend.dev>";
+  const from = process.env.EMAIL_FROM || "Payments <onboarding@resend.dev>";
+
+  // White-label receipt branding — pulled from the same env vars the app uses,
+  // so each school's receipt shows ITS name, colors, and contact (not NCTS).
+  const SCHOOL_NAME = process.env.VITE_SCHOOL_NAME || process.env.SCHOOL_NAME || "Your School";
+  const BRAND_INK   = process.env.VITE_BRAND_INK  || "#1B3A6B";
+  const BRAND_GOLD  = process.env.VITE_BRAND_GOLD || "#C5922E";
+  const BRAND_PAPER = process.env.VITE_BRAND_PAPER || "#F5F0E8";
+  const SITE_WEB    = process.env.VITE_SCHOOL_WEB   || process.env.SCHOOL_WEB   || "";
+  const SITE_EMAIL  = process.env.VITE_SCHOOL_EMAIL || process.env.SCHOOL_EMAIL || "";
+  const SITE_PHONE  = process.env.VITE_SCHOOL_PHONE || process.env.SCHOOL_PHONE || "";
 
   // Look up the student's name, account email, and program.
   let name = "Student", acctEmail = null, program = null;
@@ -169,8 +179,7 @@ async function sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail }) {
   const recipients = [...new Set([acctEmail, sessionEmail].filter(Boolean).map((e) => e.trim()))];
   if (recipients.length === 0) return;
 
-  const isCert = md.course_id || program === "certificate";
-  const school = isCert ? "The Healed Place" : "NCTS Pure Light School of Ministry";
+  const school = SCHOOL_NAME;
   const item = md.title ? `Certificate class: ${md.title}` : (md.description || "Tuition payment");
   const money = (n) => "$" + (Number(n) || 0).toFixed(2);
   const esc = (t) => String(t ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
@@ -178,24 +187,24 @@ async function sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail }) {
 
   const html = `<!doctype html><html><body style="margin:0;padding:24px;background:#F5F0E8;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;">
   <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;">
-    <div style="background:#1B3A6B;padding:18px 24px;text-align:center;">
-      <div style="color:#C5922E;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:2px;">${esc(school).toUpperCase()}</div>
+    <div style="background:${BRAND_INK};padding:18px 24px;text-align:center;">
+      <div style="color:${BRAND_GOLD};font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:2px;">${esc(school).toUpperCase()}</div>
     </div>
     <div style="padding:24px;">
-      <h1 style="font-size:20px;margin:0 0 4px;color:#1B3A6B;">Payment Receipt</h1>
+      <h1 style="font-size:20px;margin:0 0 4px;color:${BRAND_INK};">Payment Receipt</h1>
       <p style="font-size:14px;color:#666;margin:0 0 18px;">Thank you, ${esc(name)}. We've received your payment.</p>
       <table style="width:100%;border-collapse:collapse;font-size:14px;">
-        <tr><td style="padding:8px 0;color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;width:120px;">Amount paid</td><td style="padding:8px 0;font-size:18px;font-weight:bold;">${money(amount)}</td></tr>
-        <tr><td style="padding:8px 0;color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;">For</td><td style="padding:8px 0;">${esc(item)}</td></tr>
-        <tr><td style="padding:8px 0;color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;">Date</td><td style="padding:8px 0;">${esc(when)}</td></tr>
-        <tr><td style="padding:8px 0;color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;">Method</td><td style="padding:8px 0;">Card (online)</td></tr>
+        <tr><td style="padding:8px 0;color:${BRAND_INK};font-family:Arial,sans-serif;font-weight:bold;width:120px;">Amount paid</td><td style="padding:8px 0;font-size:18px;font-weight:bold;">${money(amount)}</td></tr>
+        <tr><td style="padding:8px 0;color:${BRAND_INK};font-family:Arial,sans-serif;font-weight:bold;">For</td><td style="padding:8px 0;">${esc(item)}</td></tr>
+        <tr><td style="padding:8px 0;color:${BRAND_INK};font-family:Arial,sans-serif;font-weight:bold;">Date</td><td style="padding:8px 0;">${esc(when)}</td></tr>
+        <tr><td style="padding:8px 0;color:${BRAND_INK};font-family:Arial,sans-serif;font-weight:bold;">Method</td><td style="padding:8px 0;">Card (online)</td></tr>
       </table>
-      <div style="margin-top:20px;background:#F5F0E8;border-left:4px solid #C5922E;padding:12px 16px;font-size:13px;line-height:1.6;">
-        You can view your full account and any remaining balance anytime in your student portal. If you have questions, reply to this email or call 888-966-3384.
+      <div style="margin-top:20px;background:${BRAND_PAPER};border-left:4px solid ${BRAND_GOLD};padding:12px 16px;font-size:13px;line-height:1.6;">
+        You can view your full account and any remaining balance anytime in your student portal. If you have questions, reply to this email${SITE_PHONE ? ` or call ${esc(SITE_PHONE)}` : ""}.
       </div>
     </div>
     <div style="border-top:1px solid #eee;padding:12px 24px;text-align:center;color:#666;font-size:11px;font-family:Arial,sans-serif;">
-      www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384
+      ${[SITE_WEB, SITE_EMAIL, SITE_PHONE].filter(Boolean).map(esc).join(" &bull; ") || esc(SCHOOL_NAME)}
     </div>
   </div>
   </body></html>`;
