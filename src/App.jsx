@@ -81,7 +81,7 @@ function gradedItems(studentId, subs, tests, hwSubs, homework, courses) {
   const cTitle = (cid) => courses.find((c) => c.id === cid)?.title || "General";
   const items = [];
   (subs || []).filter((s) => s.student_id === studentId && s.status === "graded" && s.max_score)
-    .forEach((s) => { const t = (tests || []).find((x) => x.id === s.test_id); items.push({ kind: "Test", title: t?.title || "Test", course: cTitle(t?.course_id), score: s.score, max: s.max_score, pct: (s.score / s.max_score) * 100 }); });
+    .forEach((s) => { const t = (tests || []).find((x) => x.id === s.test_id); items.push({ kind: "Quiz", title: t?.title || "Quiz", course: cTitle(t?.course_id), score: s.score, max: s.max_score, pct: (s.score / s.max_score) * 100 }); });
   (hwSubs || []).filter((s) => s.student_id === studentId && s.status === "graded" && s.max_points)
     .forEach((s) => { const h = (homework || []).find((x) => x.id === s.homework_id); items.push({ kind: "Homework", title: h?.title || "Homework", course: cTitle(h?.course_id), score: s.score, max: s.max_points, pct: (s.score / s.max_points) * 100 }); });
   return items;
@@ -848,7 +848,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "library",     label: "Certificate Library", icon: Library,   show: FEATURES.library && teachesCert },
     { key: "dlibrary",    label: "Degree Library", icon: Library,        show: FEATURES.library && teachesDegree },
     { key: "syllabus",    label: "Syllabus",     icon: ScrollText,      show: FEATURES.syllabus },
-    { key: "tests",       label: "Tests",        icon: FileText,        show: FEATURES.tests },
+    { key: "tests",       label: "Quizzes",      icon: FileText,        show: FEATURES.tests },
     { key: "homework",    label: "Homework",     icon: NotebookPen,     show: FEATURES.homework },
     { key: "classes",     label: "Live Classes", icon: PlayCircle,      show: FEATURES.live_classes },
     { key: "attendance",  label: "Attendance",   icon: CalendarDays,    show: FEATURES.attendance && profile.role === "admin" },
@@ -919,14 +919,14 @@ function InstructorDash({ students, books, tests, subs, profiles, setActive }) {
   const pending = subs.filter((s) => s.status !== "graded");
   const activeStudents = students.filter((s) => (s.status || "active") === "active");
   const nameOf = (id) => profiles.find((p) => p.id === id)?.full_name || "Student";
-  const titleOf = (id) => tests.find((t) => t.id === id)?.title || "Test";
+  const titleOf = (id) => tests.find((t) => t.id === id)?.title || "Quiz";
   return (
     <>
       <PageHead title="Dashboard" sub="Welcome back. Here is the state of your school." />
       <div className="grid grid-cols-4 gap-4" style={{ marginBottom: 24 }}>
         <Stat icon={Users} label="Active students" value={activeStudents.length} />
         <Stat icon={BookOpen} label="Books in library" value={books.length} />
-        <Stat icon={FileText} label="Tests created" value={tests.length} />
+        <Stat icon={FileText} label="Quizzes created" value={tests.length} />
         <Stat icon={ClipboardCheck} label="Awaiting grading" value={pending.length} tone={C.gold} />
       </div>
       <div className="grid grid-cols-2 gap-4">
@@ -1216,10 +1216,10 @@ function TestsManager({ tests, books, courses, refresh }) {
   if (mode === "build" && draft) {
     return (
       <>
-        <PageHead title="Test Builder" sub="Mix question types. Multiple-choice and true/false grade automatically." action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
+        <PageHead title="Quiz Builder" sub="Mix question types. Multiple-choice and true/false grade automatically." action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setMode("list")}>Back</Btn>} />
         <Card style={{ marginBottom: 18 }}>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Test title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Midterm Examination" /></Field>
+            <Field label="Quiz title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Midterm Examination" /></Field>
             <Field label="Linked book">
               <select style={inputStyle} value={draft.book_id} onChange={(e) => setDraft({ ...draft, book_id: e.target.value })}>
                 <option value="">— None —</option>
@@ -1299,7 +1299,7 @@ function TestsManager({ tests, books, courses, refresh }) {
 
   return (
     <>
-      <PageHead title="Tests" sub="Build and manage assessments." action={<Btn icon={Plus} onClick={newTest}>Create test</Btn>} />
+      <PageHead title="Quizzes" sub="Build and manage assessments." action={<Btn icon={Plus} onClick={newTest}>Create quiz</Btn>} />
       <Card style={{ marginBottom: 14 }}>
         <div className="pl-body" style={{ fontWeight: 700, color: C.ink, marginBottom: 6 }}>Import tests from CSV</div>
         <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>
@@ -1891,7 +1891,7 @@ function StudentPortal({ profile, onLogout }) {
     { key: "library",     label: "Certificate Library", icon: Library,  show: FEATURES.library && myCertCourseIds.size > 0 },
     { key: "dlibrary",    label: "Degree Library", icon: Library,       show: FEATURES.library && isDegreeStudent },
     { key: "syllabus",    label: "Syllabus",    icon: ScrollText,      show: FEATURES.syllabus },
-    { key: "tests",       label: "My Tests",    icon: FileText,        show: FEATURES.tests },
+    { key: "tests",       label: "My Quizzes",    icon: FileText,        show: FEATURES.tests },
     { key: "homework",    label: "Homework",    icon: NotebookPen,     show: FEATURES.homework },
     { key: "grades",      label: "Grades",      icon: Award,           show: FEATURES.grades },
     { key: "progress",    label: "Progress",    icon: Medal,           show: FEATURES.degree_progress },
@@ -1971,14 +1971,14 @@ function StudentDash({ profile, books, available, mySubs, myHwSubs, homework, te
       )}
       <div className="grid grid-cols-4 gap-4" style={{ marginBottom: 24 }}>
         <Stat icon={BookOpen} label="Lessons available" value={books.length} />
-        <Stat icon={FileText} label="Tests to take" value={available.length} tone={C.gold} />
+        <Stat icon={FileText} label="Quizzes to take" value={available.length} tone={C.gold} />
         <Stat icon={Award} label="Average grade" value={avg !== null ? avg + "%" : "—"} tone={C.green} />
         <Stat icon={CalendarDays} label="Attendance" value={attPct !== null ? attPct + "%" : "—"} tone={C.ink} />
       </div>
       <div className="grid grid-cols-2 gap-4">
         <Card>
           <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
-            <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>Tests to complete</h3>
+            <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>Quizzes to complete</h3>
             <Btn small kind="ghost" onClick={() => setActive("tests")}>Go</Btn>
           </div>
           {available.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>You're all caught up.</span> :
@@ -2200,7 +2200,7 @@ function StudentSchedule({ sessions, homework, tests, courses, profile }) {
           {upcoming.map((i) => {
             if (i.kind === "class") return <SessionRow key={"c" + i.data.id} s={i.data} courses={courses} />;
             const c = (courses || []).find((x) => x.id === i.data.course_id);
-            const tag = i.kind === "hw" ? "Homework due" : "Test due";
+            const tag = i.kind === "hw" ? "Homework due" : "Quiz due";
             return (
               <Card key={i.kind + i.data.id}>
                 <div className="flex items-center justify-between gap-3">
@@ -2376,7 +2376,7 @@ function StudentTests({ available, books, courses, refresh }) {
 
   return (
     <>
-      <PageHead title="My Tests" sub="Assessments assigned to you." />
+      <PageHead title="My Quizzes" sub="Assessments assigned to you." />
       {available.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No tests available right now.</span></Card> :
         <Grouped items={available} courses={courses}>
           {(items) => (
@@ -2497,7 +2497,7 @@ function StudentGrades({ mySubs, tests, myHwSubs, homework, courses, profile }) 
               <Card key={s.id}>
                 <div className="flex items-center justify-between">
                   <div>
-                    <h3 className="pl-display" style={{ fontSize: 18.5, fontWeight: 600, color: C.ink, margin: 0 }}>{test?.title || "Test"}</h3>
+                    <h3 className="pl-display" style={{ fontSize: 18.5, fontWeight: 600, color: C.ink, margin: 0 }}>{test?.title || "Quiz"}</h3>
                     <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>Submitted {fdate(s.submitted_at)}</div>
                   </div>
                   {isGraded ? (
@@ -3581,7 +3581,7 @@ function AttendanceManager({ students, attendance, subs, hwSubs, certEnrollments
                 <tr style={{ textAlign: "left", color: C.muted, fontSize: 12.5, textTransform: "uppercase", letterSpacing: ".05em" }}>
                   <th style={{ padding: "6px 8px" }}>Student</th>
                   <th style={{ padding: "6px 8px" }}>Attendance</th>
-                  <th style={{ padding: "6px 8px" }}>Tests</th>
+                  <th style={{ padding: "6px 8px" }}>Quizzes</th>
                   <th style={{ padding: "6px 8px" }}>Homework</th>
                 </tr>
               </thead>
@@ -4023,7 +4023,7 @@ function CertClassesManager({ courses, students, profiles, tests, homework, subs
       <PageHead title="Certificate Classes" sub="Cohort classes (6 or 12 weeks) with their own homework and tests, ending in a certificate." action={<Btn icon={Plus} onClick={() => setEditing({ title: "", code: "", description: "", pillar: "theo", fee: 0, duration_weeks: 6, start_date: "" })}>New class</Btn>} />
       {editing && <ClassEditor draft={editing} onClose={() => setEditing(null)} refresh={refresh} />}
       <div className="flex flex-col gap-3">
-        {classes.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No certificate classes yet. Create one, then add its homework and tests from the Homework and Tests tabs (choose this class under “Course”).</span></Card>}
+        {classes.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No certificate classes yet. Create one, then add its homework and tests from the Homework and Quizzes tabs (choose this class under “Course”).</span></Card>}
         {classes.map((c) => {
           const roster = enrollments.filter((e) => e.course_id === c.id);
           const ct = tests.filter((t) => t.course_id === c.id).length;
@@ -4127,7 +4127,7 @@ function ClassEditor({ draft, onClose, refresh }) {
         <Field label="Start date (optional)"><input style={inputStyle} type="date" value={f.start_date} onChange={(e) => set("start_date", e.target.value)} /></Field>
       </div>
       <div className="flex gap-2" style={{ marginTop: 8 }}><Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : "Save class"}</Btn><Btn kind="ghost" onClick={onClose}>Cancel</Btn></div>
-      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>After saving, add this class's homework and tests from the Homework and Tests tabs — choose this class under “Course.”</p>
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>After saving, add this class's homework and tests from the Homework and Quizzes tabs — choose this class under “Course.”</p>
     </Card>
   );
 }
@@ -4163,7 +4163,7 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
 
   return (
     <>
-      <PageHead title="Certificate Classes" sub="Your enrolled certificate classes, billing, and the certificates you've earned. Tests and homework for these classes are in the main Tests and Homework tabs." />
+      <PageHead title="Certificate Classes" sub="Your enrolled certificate classes, billing, and the certificates you've earned. Quizzes and homework for these classes are in the main Quizzes and Homework tabs." />
       {myClasses.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>You're not enrolled in any certificate classes yet. Your instructor will add you to one.</span></Card>}
       <div className="flex flex-col gap-3" style={{ marginBottom: myClasses.length ? 24 : 0 }}>
         {myClasses.map((c) => {
@@ -5262,7 +5262,7 @@ function Gradebook({ students, subs, tests, hwSubs, homework, courses }) {
               <thead>
                 <tr>
                   <th style={{ ...th, position: "sticky", left: 0, zIndex: 1 }}>Student</th>
-                  {cols.map((c) => <th key={c.kind + c.id} style={th}>{c.title}<div style={{ fontWeight: 400, fontSize: 11, color: C.muted }}>{c.kind === "test" ? "Test" : "Homework"} · {c.max} pts</div></th>)}
+                  {cols.map((c) => <th key={c.kind + c.id} style={th}>{c.title}<div style={{ fontWeight: 400, fontSize: 11, color: C.muted }}>{c.kind === "test" ? "Quiz" : "Homework"} · {c.max} pts</div></th>)}
                   <th style={{ ...th, textAlign: "center" }}>Overall</th>
                 </tr>
               </thead>
