@@ -363,7 +363,8 @@ function Auth() {
 
   return (
     <div className="flex items-center justify-center" style={{ minHeight: "100vh", padding: 20,
-      background: `radial-gradient(1200px 600px at 50% -10%, ${C.ink2} 0%, ${C.ink} 55%, #0d1528 100%)` }}>
+      background: `radial-gradient(1200px 600px at 50% -10%, ${C.ink2} 0%, ${C.ink} 60%, ${C.ink} 100%)` }}>
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.18)", pointerEvents: "none" }} />
       <div className="pl-fade w-full" style={{ maxWidth: 430 }}>
         <div className="text-center" style={{ marginBottom: 24 }}>
           {BRAND.logoUrl ? (
