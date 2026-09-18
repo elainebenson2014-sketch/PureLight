@@ -814,22 +814,23 @@ function InstructorPortal({ profile, onLogout }) {
   const [surveys, setSurveys] = useState([]);
   const [surveyResps, setSurveyResps] = useState([]);
   const [resources, setResources] = useState([]);
+  const [schedule, setSchedule] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     const safe = (p) => p.then((v) => v).catch((e) => { console.error(e); return undefined; });
     try {
-      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen, tu, fr, fs, sv, sr, rs, an] = await Promise.all([
+      const [b, t, s, p, m, sy, hw, hs, co, at, ce, lg, ic, se, cen, tu, fr, fs, sv, sr, rs, an, sch] = await Promise.all([
         safe(db.listBooks()), safe(db.listTests()), safe(db.listSubmissions()), safe(db.listProfiles()), safe(db.listMessages()),
         safe(db.listSyllabi()), safe(db.listHomework()), safe(db.listHomeworkSubmissions()), safe(db.listCourses()), safe(db.listAttendance()), safe(db.listCertificates()), safe(db.listLedger()), safe(db.listInstructorCourses()), safe(db.listSessions()),
         safe(db.listCertEnrollments()), safe(db.listTuition()),
-        safe(db.listForms()), safe(db.listFormSubmissions()), safe(db.listSurveys()), safe(db.listSurveyResponses()), safe(db.listResources()), safe(db.listAnnouncements()),
+        safe(db.listForms()), safe(db.listFormSubmissions()), safe(db.listSurveys()), safe(db.listSurveyResponses()), safe(db.listResources()), safe(db.listAnnouncements()), safe(db.listSchedule()),
       ]);
       if (b) setBooks(b); if (t) setTests(t); if (s) setSubs(s); if (p) setProfiles(p); if (m) setMessages(m);
       if (sy) setSyllabi(sy); if (hw) setHomework(hw); if (hs) setHwSubs(hs); if (co) setCourses(co); if (at) setAttendance(at); if (ce) setCertificates(ce); if (lg) setLedger(lg); if (ic) setAssignments(ic); if (se) setSessions(se);
       if (cen) setCertEnrollments(cen); if (tu) setTuition(tu);
-      if (fr) setForms(fr); if (fs) setFormSubs(fs); if (sv) setSurveys(sv); if (sr) setSurveyResps(sr); if (rs) setResources(rs); if (an) setAnnouncements(an);
+      if (fr) setForms(fr); if (fs) setFormSubs(fs); if (sv) setSurveys(sv); if (sr) setSurveyResps(sr); if (rs) setResources(rs); if (an) setAnnouncements(an); if (sch) setSchedule(sch);
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -846,6 +847,7 @@ function InstructorPortal({ profile, onLogout }) {
   const fullNav = [
     { key: "dash",        label: "Dashboard",   icon: LayoutDashboard, show: true },
     { key: "courses",     label: "Courses",      icon: GraduationCap,   show: true },
+    { key: "schedule",    label: "Schedule",     icon: CalendarDays,    show: true },
     { key: "library",     label: "Certificate Library", icon: Library,   show: FEATURES.library && teachesCert },
     { key: "dlibrary",    label: "Degree Library", icon: Library,        show: FEATURES.library && teachesDegree },
     { key: "syllabus",    label: "Syllabus",     icon: ScrollText,      show: FEATURES.syllabus },
@@ -886,8 +888,9 @@ function InstructorPortal({ profile, onLogout }) {
     <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ grading: pending, homework: pendingHw }}>
       {loading ? <Spinner /> : (
         <>
-          {active === "dash" && <InstructorDash {...{ students, books, tests, subs, profiles, setActive }} />}
+          {active === "dash" && <><NextClassBanner schedule={schedule} profile={profile} /><InstructorDash {...{ students, books, tests, subs, profiles, setActive }} /></>}
           {active === "courses" && <CoursesManager courses={courses.filter((c) => !c.is_certificate)} refresh={refresh} />}
+          {active === "schedule" && <TeachingSchedule schedule={schedule} profile={profile} />}
           {active === "library" && teachesCert && <LibraryManager books={books.filter((b) => b.program === "certificate" || b.program === "all")} courses={courses} refresh={refresh} profile={profile} title="Certificate Library" />}
           {active === "dlibrary" && teachesDegree && <LibraryManager books={books.filter((b) => b.program !== "certificate")} courses={courses} refresh={refresh} profile={profile} title="Degree Library" />}
           {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
@@ -3327,6 +3330,72 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, profile, re
 }
 
 /* ---------- COURSES (instructor) ---------- */
+
+function fmtDay(d) {
+  try { return new Date(d + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" }); }
+  catch { return d; }
+}
+function mineOf(schedule, profile) {
+  const name = (profile.full_name || "").toLowerCase();
+  return (schedule || []).filter((s) => s.teacher_id === profile.id || (name && (s.teacher_name || "").toLowerCase() === name));
+}
+function NextClassBanner({ schedule, profile }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const mine = mineOf(schedule, profile).filter((s) => s.session_date >= today).sort((a, b) => a.session_date.localeCompare(b.session_date));
+  if (!mine.length) return null;
+  const n = mine[0];
+  return (
+    <Card style={{ marginBottom: 16, borderLeft: `4px solid ${C.gold}`, background: C.paper2 }}>
+      <div className="pl-body" style={{ fontSize: 12, fontWeight: 800, color: C.gold, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 4 }}>Your next class</div>
+      <div className="pl-display" style={{ fontSize: 17, fontWeight: 700, color: C.ink }}>{n.topic}</div>
+      <div className="pl-body" style={{ fontSize: 13.5, color: C.muted, marginTop: 2 }}>{fmtDay(n.session_date)} · {n.program} · {n.strand}</div>
+    </Card>
+  );
+}
+function TeachingSchedule({ schedule, profile }) {
+  const isAdmin = profile.role === "admin";
+  const [showAll, setShowAll] = useState(isAdmin);
+  const today = new Date().toISOString().slice(0, 10);
+  const mine = mineOf(schedule, profile);
+  const rows = (showAll ? (schedule || []) : mine).slice().sort((a, b) => a.session_date.localeCompare(b.session_date) || (a.program || "").localeCompare(b.program || ""));
+  const upcoming = rows.filter((s) => s.session_date >= today);
+  const past = rows.filter((s) => s.session_date < today);
+  const byDate = (list) => {
+    const m = new Map();
+    list.forEach((s) => { if (!m.has(s.session_date)) m.set(s.session_date, []); m.get(s.session_date).push(s); });
+    return [...m.entries()];
+  };
+  const rowCard = (s) => (
+    <div key={s.id} className="flex items-center justify-between" style={{ padding: "8px 0", borderBottom: `1px solid ${C.line}` }}>
+      <div>
+        <div className="pl-body" style={{ fontWeight: 600, color: C.ink }}>{s.topic}</div>
+        <div className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{s.program} · {s.strand}{showAll ? ` · ${s.teacher_name}` : ""}</div>
+      </div>
+    </div>
+  );
+  return (
+    <div>
+      <PageHead title="Teaching Schedule" sub={isAdmin ? "Class rotation for all instructors." : "Your assigned classes."}
+        action={isAdmin ? <Btn small kind="ghost" onClick={() => setShowAll(!showAll)}>{showAll ? "Show only mine" : "Show everyone"}</Btn> : null} />
+      {rows.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No classes scheduled{showAll ? "" : " for you"} yet.</span></Card>}
+      {upcoming.length > 0 && <div className="pl-body" style={{ fontSize: 13, fontWeight: 800, color: C.ink, textTransform: "uppercase", letterSpacing: ".06em", margin: "6px 0 8px" }}>Upcoming</div>}
+      {byDate(upcoming).map(([d, list]) => (
+        <Card key={d} style={{ marginBottom: 12 }}>
+          <div className="pl-display" style={{ fontSize: 15, fontWeight: 700, color: C.ink2, marginBottom: 4 }}>{fmtDay(d)}</div>
+          {list.map(rowCard)}
+        </Card>
+      ))}
+      {past.length > 0 && <div className="pl-body" style={{ fontSize: 13, fontWeight: 800, color: C.muted, textTransform: "uppercase", letterSpacing: ".06em", margin: "18px 0 8px" }}>Past</div>}
+      {byDate(past).map(([d, list]) => (
+        <Card key={d} style={{ marginBottom: 12, opacity: .7 }}>
+          <div className="pl-display" style={{ fontSize: 15, fontWeight: 700, color: C.ink2, marginBottom: 4 }}>{fmtDay(d)}</div>
+          {list.map(rowCard)}
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 function CoursesManager({ courses, refresh }) {
   const blankForm = {
     code: "", title: "", credit_hours: "", description: "", program: "all",
