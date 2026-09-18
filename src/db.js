@@ -930,3 +930,26 @@ export async function deleteAnnouncement(id) {
   const { error } = await supabase.from("pl_announcements").delete().eq("id", id);
   if (error) throw error;
 }
+
+/* ---------------- TEACHING SCHEDULE ---------------- */
+export async function listSchedule() {
+  const { data, error } = await supabase
+    .from("pl_schedule")
+    .select("*")
+    .order("session_date", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function mySchedule() {
+  const { data: { user } } = await supabase.auth.getUser();
+  // find this instructor's name so we can match rows seeded by name too
+  const { data: prof } = await supabase.from("pl_profiles").select("full_name").eq("id", user.id).maybeSingle();
+  const name = prof?.full_name || "";
+  const { data, error } = await supabase
+    .from("pl_schedule")
+    .select("*")
+    .order("session_date", { ascending: true });
+  if (error) throw error;
+  return (data || []).filter((s) => s.teacher_id === user.id || (name && (s.teacher_name || "").toLowerCase() === name.toLowerCase()));
+}
