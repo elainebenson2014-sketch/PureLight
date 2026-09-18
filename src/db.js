@@ -953,3 +953,22 @@ export async function mySchedule() {
   if (error) throw error;
   return (data || []).filter((s) => s.teacher_id === user.id || (name && (s.teacher_name || "").toLowerCase() === name.toLowerCase()));
 }
+
+export async function replaceSchedule(rows) {
+  // rows: [{ session_date, program, strand, teacher_name, topic }]
+  const { data: profs } = await supabase.from("pl_profiles").select("id, full_name");
+  const byName = new Map((profs || []).map((p) => [(p.full_name || "").toLowerCase().trim(), p.id]));
+  const toInsert = rows.map((r) => ({
+    session_date: r.session_date,
+    program: r.program || "all",
+    strand: r.strand || "",
+    teacher_name: r.teacher_name || "",
+    teacher_id: byName.get((r.teacher_name || "").toLowerCase().trim()) || null,
+    topic: r.topic || "",
+  }));
+  await supabase.from("pl_schedule").delete().gte("session_date", "1900-01-01");
+  const { error } = await supabase.from("pl_schedule").insert(toInsert);
+  if (error) throw error;
+  const unmatched = [...new Set(toInsert.filter((r) => !r.teacher_id && r.teacher_name).map((r) => r.teacher_name))];
+  return { inserted: toInsert.length, unmatched };
+}
