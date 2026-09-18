@@ -890,7 +890,7 @@ function InstructorPortal({ profile, onLogout }) {
         <>
           {active === "dash" && <><NextClassBanner schedule={schedule} profile={profile} /><InstructorDash {...{ students, books, tests, subs, profiles, setActive }} /></>}
           {active === "courses" && <CoursesManager courses={courses.filter((c) => !c.is_certificate)} refresh={refresh} />}
-          {active === "schedule" && <TeachingSchedule schedule={schedule} profile={profile} />}
+          {active === "schedule" && <TeachingSchedule schedule={schedule} profile={profile} refresh={refresh} />}
           {active === "library" && teachesCert && <LibraryManager books={books.filter((b) => b.program === "certificate" || b.program === "all")} courses={courses} refresh={refresh} profile={profile} title="Certificate Library" />}
           {active === "dlibrary" && teachesDegree && <LibraryManager books={books.filter((b) => b.program !== "certificate")} courses={courses} refresh={refresh} profile={profile} title="Degree Library" />}
           {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
@@ -3352,9 +3352,30 @@ function NextClassBanner({ schedule, profile }) {
     </Card>
   );
 }
-function TeachingSchedule({ schedule, profile }) {
+function TeachingSchedule({ schedule, profile, refresh }) {
   const isAdmin = profile.role === "admin";
   const [showAll, setShowAll] = useState(isAdmin);
+  const [csvNote, setCsvNote] = useState("");
+  async function importCsv(file) {
+    if (!file) return; setCsvNote("Reading file\u2026");
+    try {
+      const rows = parseCSV(await file.text());
+      if (rows.length < 2) { setCsvNote("That file has no rows under the header."); return; }
+      const h = rows[0].map((x) => x.trim().toLowerCase());
+      const col = (n) => h.indexOf(n);
+      const iD = col("session_date"), iP = col("program"), iS = col("strand"), iT = col("teacher_name"), iTo = col("topic");
+      if (iD < 0 || iTo < 0) { setCsvNote("CSV needs at least session_date and topic columns."); return; }
+      const data = [];
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r]; if (!row || !(row[iD] || "").trim()) continue;
+        data.push({ session_date: (row[iD] || "").trim(), program: iP >= 0 ? (row[iP] || "").trim() : "all", strand: iS >= 0 ? (row[iS] || "").trim() : "", teacher_name: iT >= 0 ? (row[iT] || "").trim() : "", topic: (row[iTo] || "").trim() });
+      }
+      setCsvNote(`Loading ${data.length} sessions\u2026`);
+      const res = await db.replaceSchedule(data);
+      await refresh();
+      setCsvNote(`Loaded ${res.inserted} sessions.${res.unmatched.length ? ` Names not matched to a profile (no reminder until fixed): ${res.unmatched.join(", ")}.` : " All teachers matched."}`);
+    } catch (e) { setCsvNote("Couldn't import: " + e.message); }
+  }
   const today = new Date().toISOString().slice(0, 10);
   const mine = mineOf(schedule, profile);
   const rows = (showAll ? (schedule || []) : mine).slice().sort((a, b) => a.session_date.localeCompare(b.session_date) || (a.program || "").localeCompare(b.program || ""));
@@ -3377,6 +3398,14 @@ function TeachingSchedule({ schedule, profile }) {
     <div>
       <PageHead title="Teaching Schedule" sub={isAdmin ? "Class rotation for all instructors." : "Your assigned classes."}
         action={isAdmin ? <Btn small kind="ghost" onClick={() => setShowAll(!showAll)}>{showAll ? "Show only mine" : "Show everyone"}</Btn> : null} />
+      {isAdmin && (
+        <Card style={{ marginBottom: 14 }}>
+          <div className="pl-body" style={{ fontWeight: 700, color: C.ink, marginBottom: 6 }}>Import / update schedule from CSV</div>
+          <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginBottom: 10 }}>Columns: <b>session_date</b> (YYYY-MM-DD), <b>program</b>, <b>strand</b>, <b>teacher_name</b>, <b>topic</b>. Uploading replaces the whole schedule. Teacher names are matched to instructor profiles automatically.</div>
+          <input type="file" accept=".csv" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; importCsv(f); }} />
+          {csvNote && <div className="pl-body" style={{ fontSize: 13, color: C.ink, marginTop: 8 }}>{csvNote}</div>}
+        </Card>
+      )}
       {rows.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No classes scheduled{showAll ? "" : " for you"} yet.</span></Card>}
       {upcoming.length > 0 && <div className="pl-body" style={{ fontSize: 13, fontWeight: 800, color: C.ink, textTransform: "uppercase", letterSpacing: ".06em", margin: "6px 0 8px" }}>Upcoming</div>}
       {byDate(upcoming).map(([d, list]) => (
