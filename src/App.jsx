@@ -3159,15 +3159,24 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, profile, re
     return null;
   }
 
-  function start(h) {
+  async function start(h) {
     const draft = loadDraft(h.id);
     // If this assignment was returned for correction, load the student's
     // previous submission so they only fix the flagged issue — not redo it all.
     const prior = (myHwSubs || []).find((s) => s.homework_id === h.id && s.status === "returned");
     setDoing(h);
+    // instant: show local draft or the returned submission right away
     setAnswers(draft?.answers || prior?.answers || {});
     setResponse(draft?.response || prior?.response || "");
     setFile(null); // files can't be restored; student re-attaches if needed
+    // then pull the SERVER draft (cross-device) and use it if it exists
+    try {
+      const server = await db.loadHwDraft(h.id);
+      if (server && (Object.keys(server.answers || {}).length || (server.response || "").trim())) {
+        setAnswers(server.answers || {});
+        setResponse(server.response || "");
+      }
+    } catch (e) { /* offline / no draft — local copy still shows */ }
   }
 
   // Auto-save the draft whenever answers or response change (while an assignment is open)
@@ -3175,10 +3184,14 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, profile, re
     if (!doing) return;
     try {
       window.localStorage.setItem(draftKey(doing.id), JSON.stringify({ answers, response, savedAt: Date.now() }));
-      setSavedNote(true);
-      const t = setTimeout(() => setSavedNote(false), 1500);
-      return () => clearTimeout(t);
     } catch (e) { /* storage may be full/blocked; submitting still works */ }
+    // debounced save to the server so work survives the page closing and syncs across devices
+    const t = setTimeout(() => {
+      db.saveHwDraft(doing.id, answers, response)
+        .then(() => { setSavedNote(true); setTimeout(() => setSavedNote(false), 1500); })
+        .catch(() => { /* offline — local copy still holds it */ });
+    }, 1200);
+    return () => clearTimeout(t);
   }, [answers, response, doing]);
 
   function clearDraft(id) {
@@ -3191,6 +3204,7 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, profile, re
     try {
       await db.submitHomework({ homework_id: doing.id, answers, response, file, max_points: maxPts });
       clearDraft(doing.id);
+      try { await db.deleteHwDraft(doing.id); } catch (e) { /* ignore */ }
       await refresh();
       setDoing(null); setAnswers({}); setResponse(""); setFile(null);
     }
@@ -3199,8 +3213,9 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, profile, re
   }
 
   function saveAndExit() {
-    // Draft is already auto-saved; just confirm and leave.
+    // Save the draft locally AND to the server, then leave.
     try { window.localStorage.setItem(draftKey(doing.id), JSON.stringify({ answers, response, savedAt: Date.now() })); } catch (e) { /* ignore */ }
+    db.saveHwDraft(doing.id, answers, response).catch(() => { /* offline — local copy holds it */ });
     setDoing(null); setAnswers({}); setResponse(""); setFile(null);
   }
 
@@ -3220,7 +3235,7 @@ function StudentHomework({ availableHw, myHwSubs, homework, courses, profile, re
         <Card style={{ marginBottom: 12, background: "#fffaf0", border: `1px solid ${C.gold}` }}>
           <div className="pl-body" style={{ fontSize: 13, color: C.ink }}>
             <Sparkles size={13} style={{ color: C.gold, verticalAlign: "middle", marginRight: 4 }} />
-            Your answers save automatically as you type. You can leave and come back anytime — just click <b>Start</b> on this assignment again to pick up where you left off. Your work is saved on this device.
+            Your answers save automatically to your account as you type. You can leave and come back on any device — just click <b>Start</b> on this assignment again to pick up where you left off. Your work is not lost if the page closes.
           </div>
         </Card>
         <Card style={{ marginBottom: 12 }}>
