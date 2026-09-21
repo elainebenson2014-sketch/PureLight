@@ -277,7 +277,16 @@ export default function App() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: sub } = supabase.auth.onAuthStateChange((e, s) => { setSession(s); if (e === "PASSWORD_RECOVERY") setRecovery(true); });
-    return () => sub.subscription.unsubscribe();
+    // Keep the login alive when the student switches away (e.g. to Word) and comes back,
+    // so a long homework session doesn't quietly expire and close their work.
+    const keepAlive = () => { if (!document.hidden) supabase.auth.getSession().catch(() => {}); };
+    document.addEventListener("visibilitychange", keepAlive);
+    window.addEventListener("focus", keepAlive);
+    return () => {
+      sub.subscription.unsubscribe();
+      document.removeEventListener("visibilitychange", keepAlive);
+      window.removeEventListener("focus", keepAlive);
+    };
   }, []);
 
   useEffect(() => {
