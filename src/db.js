@@ -972,3 +972,25 @@ export async function replaceSchedule(rows) {
   const unmatched = [...new Set(toInsert.filter((r) => !r.teacher_id && r.teacher_name).map((r) => r.teacher_name))];
   return { inserted: toInsert.length, unmatched };
 }
+
+/* ---------------- HOMEWORK DRAFTS (server-side, cross-device) ---------------- */
+export async function saveHwDraft(homework_id, answers, response) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_homework_drafts").upsert(
+    { homework_id, student_id: user.id, answers: answers || {}, response: response || "", updated_at: new Date().toISOString() },
+    { onConflict: "homework_id,student_id" }
+  );
+  if (error) throw error;
+}
+export async function loadHwDraft(homework_id) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { data } = await supabase.from("pl_homework_drafts")
+    .select("answers, response, updated_at")
+    .eq("homework_id", homework_id).eq("student_id", user.id).maybeSingle();
+  return data || null;
+}
+export async function deleteHwDraft(homework_id) {
+  const { data: { user } } = await supabase.auth.getUser();
+  await supabase.from("pl_homework_drafts").delete()
+    .eq("homework_id", homework_id).eq("student_id", user.id);
+}
