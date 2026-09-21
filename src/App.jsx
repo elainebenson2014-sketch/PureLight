@@ -3563,12 +3563,18 @@ const todayStr = () => {
 function AttendanceManager({ students, attendance, subs, hwSubs, certEnrollments, refresh }) {
   const [date, setDate] = useState(todayStr());
   const [savingId, setSavingId] = useState(null);
+  const [progFilter, setProgFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("active");
+  const shown = (students || []).filter((s) =>
+    (progFilter === "all" || (s.program || "") === progFilter) &&
+    (statusFilter === "all" || (s.status || "active") === statusFilter)
+  );
   const isCertStudent = (id) => (certEnrollments || []).some((e) => e.student_id === id);
 
   function attendanceReport() {
     const now = new Date();
     const when = now.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
-    const degree = students.filter((s) => !isCertStudent(s.id)).slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
+    const degree = shown.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
     const dates = [...new Set((attendance || []).map((a) => a.date).filter(Boolean))];
     const totalSessions = dates.length;
     const rows = degree.map((s) => {
@@ -3636,17 +3642,39 @@ function AttendanceManager({ students, attendance, subs, hwSubs, certEnrollments
     <>
       <PageHead title="Attendance & Progress" sub="Mark attendance by date and track each student's progress." action={<Btn small kind="gold" icon={FileText} onClick={attendanceReport}>Management report</Btn>} />
 
+      <Card style={{ marginBottom: 16 }}>
+        <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+          <div>
+            <div className="pl-body" style={{ fontSize: 11.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Program</div>
+            <select style={{ ...inputStyle, width: "auto" }} value={progFilter} onChange={(e) => setProgFilter(e.target.value)}>
+              {PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="pl-body" style={{ fontSize: 11.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Status</div>
+            <select style={{ ...inputStyle, width: "auto" }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+              <option value="all">All</option>
+            </select>
+          </div>
+          <div style={{ alignSelf: "flex-end" }}>
+            <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{shown.length} student{shown.length === 1 ? "" : "s"} shown</span>
+          </div>
+        </div>
+      </Card>
+
       <Card style={{ marginBottom: 20 }}>
         <div className="flex items-center justify-between" style={{ marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
           <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: 0 }}>Take attendance</h3>
           <div className="flex items-center gap-2">
-            <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{dayMarked}/{students.length} marked</span>
+            <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{shown.filter((s) => statusOf(s.id)).length}/{shown.length} marked</span>
             <input type="date" style={{ ...inputStyle, width: "auto" }} value={date} onChange={(e) => setDate(e.target.value)} />
           </div>
         </div>
-        {students.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No students yet.</span> :
+        {shown.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No students match these filters.</span> :
           <div className="flex flex-col gap-2">
-            {students.map((s) => {
+            {shown.map((s) => {
               const cur = statusOf(s.id);
               return (
                 <div key={s.id} className="flex items-center justify-between" style={{ padding: "8px 0", borderBottom: `1px solid ${C.line}`, flexWrap: "wrap", gap: 8 }}>
@@ -3673,7 +3701,7 @@ function AttendanceManager({ students, attendance, subs, hwSubs, certEnrollments
 
       <Card>
         <h3 className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: "0 0 14px" }}>Student progress</h3>
-        {students.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No students yet.</span> :
+        {shown.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>No students match these filters.</span> :
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
               <thead>
@@ -3685,7 +3713,7 @@ function AttendanceManager({ students, attendance, subs, hwSubs, certEnrollments
                 </tr>
               </thead>
               <tbody>
-                {students.map((s) => {
+                {shown.map((s) => {
                   const p = progress(s.id);
                   return (
                     <tr key={s.id} style={{ borderTop: `1px solid ${C.line}` }}>
