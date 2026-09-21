@@ -5434,10 +5434,37 @@ function Gradebook({ students, subs, tests, hwSubs, homework, courses }) {
 }
 
 function GradeReport({ students, subs, tests, hwSubs, homework, courses }) {
+  const [progFilter, setProgFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("active");
+  const shown = (students || []).filter((s) =>
+    (progFilter === "all" || (s.program || "") === progFilter) &&
+    (statusFilter === "all" || (s.status || "active") === statusFilter)
+  );
   return (
     <>
       <PageHead title="Reports" sub="Each student's grades, average, and GPA. Print a transcript for anyone." />
-      {students.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No students yet.</span></Card> :
+      <Card style={{ marginBottom: 16 }}>
+        <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+          <div>
+            <div className="pl-body" style={{ fontSize: 11.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Program</div>
+            <select style={{ ...inputStyle, width: "auto" }} value={progFilter} onChange={(e) => setProgFilter(e.target.value)}>
+              {PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="pl-body" style={{ fontSize: 11.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Status</div>
+            <select style={{ ...inputStyle, width: "auto" }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+              <option value="all">All</option>
+            </select>
+          </div>
+          <div style={{ alignSelf: "flex-end" }}>
+            <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{shown.length} student{shown.length === 1 ? "" : "s"} shown</span>
+          </div>
+        </div>
+      </Card>
+      {shown.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No students match these filters.</span></Card> :
         <Card>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
@@ -5450,7 +5477,7 @@ function GradeReport({ students, subs, tests, hwSubs, homework, courses }) {
                 <th></th>
               </tr></thead>
               <tbody>
-                {students.map((s) => {
+                {shown.map((s) => {
                   const items = gradedItems(s.id, subs, tests, hwSubs, homework, courses);
                   const sum = summarize(items);
                   return (
