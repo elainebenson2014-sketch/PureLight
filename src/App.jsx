@@ -164,7 +164,7 @@ const TRANSCRIPT_LAYOUT = {
     { sem: "Spring Semester", term: ["spring"], codes: ["ABS-107", "ABS-108", "ABS-109", "ABS-110", "ABS-111", "ATS-116"] },
   ],
   bachelor: [
-    { sem: "Fall Semester", term: ["fall"], codes: ["BBS-201", "BBS-202", "BBS-203", "BBS-204", "BBS-205", "BBS-206", "BBS-207", "BBS-208", "BBS-209", "BBS-210", "BBS-211", "BTS-215", "BTS-216", "BTS-217"] },
+    { sem: "Fall Semester", term: ["fall"], codes: ["BBS-201", "BBS-202", "BBS-203", "BBS-204", "BBS-205", "BBS-206", "BBS-207", "BBS-208", "BBS-209", "BBS-210", "BBS-211", "BTS-01", "BTS-02", "BTS-03", "BTS-04", "BTS-05", "BTS-06", "BTS-07", "BTS-08", "BTS-09", "BTS-10", "BTS-11", "BTS-12", "BTS-13", "BTS-14", "BTS-15"] },
     { sem: "Spring Semester", term: ["spring"], codes: ["BBS-212", "BBS-213", "BBS-214", "BBS-215", "BBS-216", "BBS-217", "BBS-218", "BTS-218"] },
   ],
   master: [
