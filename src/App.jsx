@@ -690,7 +690,7 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
         const g = rowGrade(c, effCRow);
         const main = `<tr><td>${c.code || ""}</td><td>${(c.title || "").replace(/</g, "&lt;")}</td><td class="c">${c.credit_hours ?? ""}</td><td class="c">${g != null ? g : ""}</td><td class="c">${gradeLetter(g)}</td></tr>`;
         if (c._components && c._components.length) {
-          const subs = c._components.map((k) => { const e = effCRow(k); return `<tr class="sub"><td>${k.code || ""}</td><td class="chap">${(k.title || "").replace(/</g, "&lt;")}</td><td class="c"></td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`; }).join("");
+          const subs = c._components.map((k) => { const e = effCRow(k); const knum = (String(k.code || "").match(/(\d+)\s*$/) || [])[1]; const sc = `${c.code || ""}-${knum ? knum.padStart(2, "0") : (k.code || "")}`; return `<tr class="sub"><td>${sc}</td><td class="chap">${(k.title || "").replace(/</g, "&lt;")}</td><td class="c"></td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`; }).join("");
           return main + subs;
         }
         return main;
@@ -842,16 +842,17 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
                                 <td style={{ padding: "6px 8px", textAlign: "center", color: C.muted }}>{bg != null ? `${bg} (avg)` : "—"}</td>
                                 <td style={{ padding: "6px 8px", textAlign: "center", fontWeight: 700, color: blt === "F" ? C.rose : blt ? C.green : C.muted }}>{blt || "—"}</td>
                               </tr>
-                              {c._components.map((k) => {
+                              {c._components.map((k, ki) => {
                                 const kauto = autoScoreRow(k);
                                 const kStored = cids(k).find((id) => { const v = manual[id]; return v !== undefined && v !== "" && v != null; });
                                 const km = kStored != null ? manual[kStored] : undefined;
                                 const kHas = km !== undefined && km !== "" && km != null;
                                 const keff = effCourseRow(k);
                                 const klt = gradeLetter(keff);
+                                const kcode = (() => { const knum = (String(k.code || "").match(/(\d+)\s*$/) || [])[1]; return `${c.code || ""}-${knum ? knum.padStart(2, "0") : (k.code || "")}`; })();
                                 return (
                                   <tr key={k.id} style={{ borderTop: `1px solid ${C.line}` }}>
-                                    <td style={{ padding: "6px 8px 6px 22px", color: C.muted, fontSize: 12 }}>{k.code || ""}</td>
+                                    <td style={{ padding: "6px 8px 6px 22px", color: C.muted, fontSize: 12 }}>{kcode}</td>
                                     <td style={{ padding: "6px 8px 6px 22px", color: C.ink, fontSize: 12.5 }}>{k.title}</td>
                                     <td style={{ padding: "6px 8px", textAlign: "center", color: C.muted }}>—</td>
                                     <td style={{ padding: "4px 8px", textAlign: "center" }}>
