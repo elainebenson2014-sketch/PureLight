@@ -489,7 +489,22 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
   const student = students.find((s) => s.id === studentId);
   const norm = (c) => String(c || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
 
-  const progCourses = (courses || []).filter((c) => c.program === program && !c.is_certificate);
+  // Collapse duplicate catalog rows that share a course code into ONE line, so a
+  // course is never listed — or its credit hours counted — more than once. Keep
+  // the richest credit-hour value, and remember every underlying id so a grade
+  // recorded against any duplicate still shows up.
+  const rawProgCourses = (courses || []).filter((c) => c.program === program && !c.is_certificate);
+  const _byCode = new Map();
+  rawProgCourses.forEach((c) => {
+    const k = norm(c.code) || `__id_${c.id}`;
+    if (!_byCode.has(k)) _byCode.set(k, []);
+    _byCode.get(k).push(c);
+  });
+  const progCourses = [..._byCode.values()].map((group) => {
+    const primary = group.reduce((a, b) => ((Number(b.credit_hours) || 0) > (Number(a.credit_hours) || 0) ? b : a), group[0]);
+    const hrs = group.reduce((m, g) => Math.max(m, Number(g.credit_hours) || 0), 0);
+    return { ...primary, credit_hours: hrs || primary.credit_hours, _ids: group.map((g) => g.id) };
+  });
   const layout = TRANSCRIPT_LAYOUT[program];
   let semesters;
   if (layout) {
@@ -553,9 +568,19 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
   function effCourse(courseId) { const m = manual[courseId]; if (m !== undefined && m !== "" && m != null && !isNaN(Number(m))) return Number(m); return autoScore(courseId); }
   function effExam(sem, si, type) { const m = manual[`EXAM-${type}-${si}`]; if (m !== undefined && m !== "" && m != null && !isNaN(Number(m))) return Number(m); return examAuto(sem, type); }
 
+  // A merged course line may stand in for several underlying ids; resolve a grade
+  // across all of them. And "Other Courses" (catch-all for anything outside the
+  // defined semester layout) only lists courses the student actually has a grade
+  // in — so unused catalog rows never pad the record or its credit total.
+  const cids = (c) => (c && c._ids && c._ids.length ? c._ids : [c && c.id]);
+  function effCourseRow(c) { for (const id of cids(c)) { const e = effCourse(id); if (e != null) return e; } return null; }
+  function autoScoreRow(c) { for (const id of cids(c)) { const a = autoScore(id); if (a != null) return a; } return null; }
+  const isOther = (sem) => sem && sem.sem === "Other Courses";
+  const shownCourses = (sem, gradeOf) => (isOther(sem) ? sem.courses.filter((c) => gradeOf(c) != null) : sem.courses);
+
   function semStats(sem, si) {
     let hours = 0; const sc = [];
-    sem.courses.forEach((c) => { hours += Number(c.credit_hours) || 0; const e = effCourse(c.id); if (e != null) sc.push(e); });
+    shownCourses(sem, effCourseRow).forEach((c) => { hours += Number(c.credit_hours) || 0; const e = effCourseRow(c); if (e != null) sc.push(e); });
     if (sem.exams) { const em = effExam(sem, si, "mid"); if (em != null) sc.push(em); const ef = effExam(sem, si, "final"); if (ef != null) sc.push(ef); }
     return { hours, avg: sc.length ? sc.reduce((a, b) => a + b, 0) / sc.length : null };
   }
@@ -619,12 +644,15 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
     const progLabel = TRANSCRIPT_PROGRAMS.find((p) => p.key === program)?.label || "";
     const num = (v) => (v !== undefined && v !== "" && v != null && !isNaN(Number(v)));
     const effC = (id) => (num(mmap[id]) ? Number(mmap[id]) : autoScoreFor(stu.id, id));
+    const effCRow = (c) => { for (const id of cids(c)) { const e = effC(id); if (e != null) return e; } return null; };
     const effE = (sem, si, type) => { const k = `EXAM-${type}-${si}`; return num(mmap[k]) ? Number(mmap[k]) : examAutoFor(stu.id, sem, type); };
-    const stat = (sem, si) => { let hours = 0; const sc = []; sem.courses.forEach((c) => { hours += Number(c.credit_hours) || 0; const e = effC(c.id); if (e != null) sc.push(e); }); if (sem.exams) { const em = effE(sem, si, "mid"); if (em != null) sc.push(em); const ef = effE(sem, si, "final"); if (ef != null) sc.push(ef); } return { hours, avg: sc.length ? sc.reduce((a, b) => a + b, 0) / sc.length : null }; };
+    const stat = (sem, si) => { let hours = 0; const sc = []; shownCourses(sem, effCRow).forEach((c) => { hours += Number(c.credit_hours) || 0; const e = effCRow(c); if (e != null) sc.push(e); }); if (sem.exams) { const em = effE(sem, si, "mid"); if (em != null) sc.push(em); const ef = effE(sem, si, "final"); if (ef != null) sc.push(ef); } return { hours, avg: sc.length ? sc.reduce((a, b) => a + b, 0) / sc.length : null }; };
     const examRow = (label, e) => `<tr><td></td><td>${label}</td><td class="c"></td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`;
     const semBlock = semesters.map((sem, si) => {
+      const shown = shownCourses(sem, effCRow);
+      if (isOther(sem) && !shown.length) return "";
       const st = stat(sem, si);
-      const rows = sem.courses.map((c) => { const e = effC(c.id); return `<tr><td>${c.code || ""}</td><td>${(c.title || "").replace(/</g, "&lt;")}</td><td class="c">${c.credit_hours ?? ""}</td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`; }).join("");
+      const rows = shown.map((c) => { const e = effCRow(c); return `<tr><td>${c.code || ""}</td><td>${(c.title || "").replace(/</g, "&lt;")}</td><td class="c">${c.credit_hours ?? ""}</td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`; }).join("");
       const exams = sem.exams ? examRow("Mid-Term Exam", effE(sem, si, "mid")) + examRow("Final Exam", effE(sem, si, "final")) : "";
       return `<div class="semt">${sem.sem}</div><table><thead><tr><th>Code</th><th>Course</th><th class="c">Cr. Hrs</th><th class="c">Grade</th><th class="c">Alpha</th></tr></thead><tbody>${rows}${exams}<tr class="tot"><td></td><td>Semester Totals</td><td class="c">${st.hours}</td><td class="c">${st.avg != null ? st.avg.toFixed(2) : ""}</td><td class="c">${gradeLetter(st.avg)}</td></tr></tbody></table>`;
     }).join("");
@@ -743,6 +771,8 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
         <>
           {semesters.map((sem, si) => {
             const st = semStats(sem, si);
+            const shown = shownCourses(sem, effCourseRow);
+            if (isOther(sem) && !shown.length) return null;
             return (
               <Card key={si} style={{ marginBottom: 16 }}>
                 <h3 className="pl-display" style={{ fontSize: 16, color: C.ink, margin: "0 0 10px" }}>{sem.sem}</h3>
@@ -756,11 +786,12 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
                       <th style={{ padding: "5px 8px", textAlign: "center", width: 60 }}>Grade</th>
                     </tr></thead>
                     <tbody>
-                      {sem.courses.map((c) => {
-                        const auto = autoScore(c.id);
-                        const m = manual[c.id];
+                      {shown.map((c) => {
+                        const auto = autoScoreRow(c);
+                        const storedId = cids(c).find((id) => { const v = manual[id]; return v !== undefined && v !== "" && v != null; });
+                        const m = storedId != null ? manual[storedId] : undefined;
                         const hasManual = m !== undefined && m !== "" && m != null;
-                        const eff = effCourse(c.id);
+                        const eff = effCourseRow(c);
                         const lt = gradeLetter(eff);
                         return (
                           <tr key={c.id} style={{ borderTop: `1px solid ${C.line}` }}>
