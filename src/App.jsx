@@ -164,7 +164,7 @@ const TRANSCRIPT_LAYOUT = {
     { sem: "Spring Semester", term: ["spring"], codes: ["ABS-107", "ABS-108", "ABS-109", "ABS-110", "ABS-111", "ATS-116"] },
   ],
   bachelor: [
-    { sem: "Fall Semester", term: ["fall"], codes: ["BBS-201", "BBS-202", "BBS-203", "BBS-204", "BBS-205", "BBS-206", "BBS-207", "BBS-208", "BBS-209", "BBS-210", "BBS-211", "BTS-01", "BTS-02", "BTS-03", "BTS-04", "BTS-05", "BTS-06", "BTS-07", "BTS-08", "BTS-09", "BTS-10", "BTS-11", "BTS-12", "BTS-13", "BTS-14", "BTS-15"] },
+    { sem: "Fall Semester", term: ["fall"], codes: ["BBS-201", "BBS-202", "BBS-203", "BBS-204", "BBS-205", "BBS-206", "BBS-207", "BBS-208", "BBS-209", "BBS-210", "BBS-211", "BTS-215", "BTS-217", "BTS-216"] },
     { sem: "Spring Semester", term: ["spring"], codes: ["BBS-212", "BBS-213", "BBS-214", "BBS-215", "BBS-216", "BBS-217", "BBS-218", "BTS-218"] },
   ],
   master: [
@@ -175,6 +175,18 @@ const TRANSCRIPT_LAYOUT = {
     { sem: "Fall Semester", term: ["fall"], codes: ["MBS-416", "MBS-417", "MBS-418", "MBS-419", "MBS-420", "MBS-421", "MTS-432", "MTS-434"] },
     { sem: "Spring Semester", term: ["spring"], codes: ["MBS-422", "MBS-423", "MBS-424", "MBS-425", "MTS-433", "MTS-435", "MTS-436"] },
   ],
+};
+
+// Some transcript courses are graded by chapter: the block course carries the
+// credit hours, and its component chapters carry the homework grades. On the
+// transcript the block prints as a credit-bearing line with its chapters (and
+// their grades) nested beneath it. Codes are matched normalized (dashes ignored).
+const TRANSCRIPT_GROUPS = {
+  bachelor: {
+    "BTS-215": ["BTS-01", "BTS-02", "BTS-03", "BTS-04", "BTS-05", "BTS-06"],
+    "BTS-217": ["BTS-07", "BTS-08", "BTS-09"],
+    "BTS-216": ["BTS-10", "BTS-11", "BTS-12", "BTS-13", "BTS-14", "BTS-15"],
+  },
 };
 
 const CE_TYPES = [
@@ -506,12 +518,21 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
     return { ...primary, credit_hours: hrs || primary.credit_hours, _ids: group.map((g) => g.id) };
   });
   const layout = TRANSCRIPT_LAYOUT[program];
+  const groups = TRANSCRIPT_GROUPS[program] || null;
+  const normGroups = groups ? new Map(Object.entries(groups).map(([k, v]) => [norm(k), v])) : null;
+  const findByCode = (cd) => progCourses.find((c) => norm(c.code) === norm(cd));
   let semesters;
   if (layout) {
     const used = new Set();
     semesters = layout.map((b) => {
-      const list = b.codes.map((cd) => progCourses.find((c) => norm(c.code) === norm(cd))).filter(Boolean);
+      const list = b.codes.map((cd) => findByCode(cd)).filter(Boolean);
       list.forEach((c) => used.add(c.id));
+      // Attach any chapter components so they render (and get their ids claimed,
+      // so they never resurface as loose "Other Courses" rows).
+      if (normGroups) list.forEach((c) => {
+        const comp = normGroups.get(norm(c.code));
+        if (comp) { c._components = comp.map((cd) => findByCode(cd)).filter(Boolean); c._components.forEach((k) => used.add(k.id)); }
+      });
       return { sem: b.sem, term: b.term || [], not: b.not || [], courses: list, exams: true };
     });
     const other = progCourses.filter((c) => !used.has(c.id));
@@ -576,11 +597,21 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
   function effCourseRow(c) { for (const id of cids(c)) { const e = effCourse(id); if (e != null) return e; } return null; }
   function autoScoreRow(c) { for (const id of cids(c)) { const a = autoScore(id); if (a != null) return a; } return null; }
   const isOther = (sem) => sem && sem.sem === "Other Courses";
-  const shownCourses = (sem, gradeOf) => (isOther(sem) ? sem.courses.filter((c) => gradeOf(c) != null) : sem.courses);
+  const hasCredit = (c) => (Number(c.credit_hours) || 0) > 0;
+  const shownCourses = (sem, gradeOf) => (isOther(sem) ? sem.courses.filter((c) => hasCredit(c) && gradeOf(c) != null) : sem.courses);
+
+  // A block course is graded by its chapter components; its grade is the average
+  // of the component grades (a grade entered directly on the block overrides).
+  function blockAvg(c, gradeOf) {
+    const vals = (c._components || []).map((k) => gradeOf(k)).filter((v) => v != null);
+    if (!vals.length) return null;
+    return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100;
+  }
+  const rowGrade = (c, gradeOf) => { const direct = gradeOf(c); if (direct != null) return direct; if (c._components && c._components.length) return blockAvg(c, gradeOf); return null; };
 
   function semStats(sem, si) {
     let hours = 0; const sc = [];
-    shownCourses(sem, effCourseRow).forEach((c) => { hours += Number(c.credit_hours) || 0; const e = effCourseRow(c); if (e != null) sc.push(e); });
+    shownCourses(sem, (x) => rowGrade(x, effCourseRow)).forEach((c) => { hours += Number(c.credit_hours) || 0; const e = rowGrade(c, effCourseRow); if (e != null) sc.push(e); });
     if (sem.exams) { const em = effExam(sem, si, "mid"); if (em != null) sc.push(em); const ef = effExam(sem, si, "final"); if (ef != null) sc.push(ef); }
     return { hours, avg: sc.length ? sc.reduce((a, b) => a + b, 0) / sc.length : null };
   }
@@ -592,7 +623,10 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
     try {
       const rows = [];
       semesters.forEach((sem, si) => {
-        sem.courses.forEach((c) => rows.push({ line_key: c.id, score: manual[c.id] ?? "" }));
+        sem.courses.forEach((c) => {
+          rows.push({ line_key: c.id, score: manual[c.id] ?? "" });
+          (c._components || []).forEach((k) => rows.push({ line_key: k.id, score: manual[k.id] ?? "" }));
+        });
         if (sem.exams) {
           rows.push({ line_key: `EXAM-mid-${si}`, score: manual[`EXAM-mid-${si}`] ?? "" });
           rows.push({ line_key: `EXAM-final-${si}`, score: manual[`EXAM-final-${si}`] ?? "" });
@@ -646,13 +680,21 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
     const effC = (id) => (num(mmap[id]) ? Number(mmap[id]) : autoScoreFor(stu.id, id));
     const effCRow = (c) => { for (const id of cids(c)) { const e = effC(id); if (e != null) return e; } return null; };
     const effE = (sem, si, type) => { const k = `EXAM-${type}-${si}`; return num(mmap[k]) ? Number(mmap[k]) : examAutoFor(stu.id, sem, type); };
-    const stat = (sem, si) => { let hours = 0; const sc = []; shownCourses(sem, effCRow).forEach((c) => { hours += Number(c.credit_hours) || 0; const e = effCRow(c); if (e != null) sc.push(e); }); if (sem.exams) { const em = effE(sem, si, "mid"); if (em != null) sc.push(em); const ef = effE(sem, si, "final"); if (ef != null) sc.push(ef); } return { hours, avg: sc.length ? sc.reduce((a, b) => a + b, 0) / sc.length : null }; };
+    const stat = (sem, si) => { let hours = 0; const sc = []; shownCourses(sem, (x) => rowGrade(x, effCRow)).forEach((c) => { hours += Number(c.credit_hours) || 0; const e = rowGrade(c, effCRow); if (e != null) sc.push(e); }); if (sem.exams) { const em = effE(sem, si, "mid"); if (em != null) sc.push(em); const ef = effE(sem, si, "final"); if (ef != null) sc.push(ef); } return { hours, avg: sc.length ? sc.reduce((a, b) => a + b, 0) / sc.length : null }; };
     const examRow = (label, e) => `<tr><td></td><td>${label}</td><td class="c"></td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`;
     const semBlock = semesters.map((sem, si) => {
       const shown = shownCourses(sem, effCRow);
       if (isOther(sem) && !shown.length) return "";
       const st = stat(sem, si);
-      const rows = shown.map((c) => { const e = effCRow(c); return `<tr><td>${c.code || ""}</td><td>${(c.title || "").replace(/</g, "&lt;")}</td><td class="c">${c.credit_hours ?? ""}</td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`; }).join("");
+      const rows = shown.map((c) => {
+        const g = rowGrade(c, effCRow);
+        const main = `<tr><td>${c.code || ""}</td><td>${(c.title || "").replace(/</g, "&lt;")}</td><td class="c">${c.credit_hours ?? ""}</td><td class="c">${g != null ? g : ""}</td><td class="c">${gradeLetter(g)}</td></tr>`;
+        if (c._components && c._components.length) {
+          const subs = c._components.map((k) => { const e = effCRow(k); return `<tr class="sub"><td>${k.code || ""}</td><td class="chap">${(k.title || "").replace(/</g, "&lt;")}</td><td class="c"></td><td class="c">${e != null ? e : ""}</td><td class="c">${gradeLetter(e)}</td></tr>`; }).join("");
+          return main + subs;
+        }
+        return main;
+      }).join("");
       const exams = sem.exams ? examRow("Mid-Term Exam", effE(sem, si, "mid")) + examRow("Final Exam", effE(sem, si, "final")) : "";
       return `<div class="semt">${sem.sem}</div><table><thead><tr><th>Code</th><th>Course</th><th class="c">Cr. Hrs</th><th class="c">Grade</th><th class="c">Alpha</th></tr></thead><tbody>${rows}${exams}<tr class="tot"><td></td><td>Semester Totals</td><td class="c">${st.hours}</td><td class="c">${st.avg != null ? st.avg.toFixed(2) : ""}</td><td class="c">${gradeLetter(st.avg)}</td></tr></tbody></table>`;
     }).join("");
@@ -676,6 +718,7 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
       .semt{font-weight:bold;margin:16px 0 4px;background:#f0ece2;padding:4px 8px}table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:4px}
       th,td{border:1px solid #cfcabb;padding:4px 6px;text-align:left}th{background:#faf8f2}td.c,th.c{text-align:center}
       tr.tot td{font-weight:bold;background:#f6f3ea}
+      tr.sub td{background:#fbfaf6;font-size:11.5px;color:#333}td.chap{padding-left:22px}
       .foot{margin-top:18px;text-align:center;font-size:11px;color:#555;border-top:1px solid #ccc;padding-top:8px}@media print{.rec{padding:0}}</style></head>
       <body onload="window.print()">${inner}</body></html>`;
   }
@@ -787,6 +830,40 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
                     </tr></thead>
                     <tbody>
                       {shown.map((c) => {
+                        if (c._components && c._components.length) {
+                          const bg = rowGrade(c, effCourseRow);
+                          const blt = gradeLetter(bg);
+                          return (
+                            <React.Fragment key={c.id}>
+                              <tr style={{ borderTop: `1px solid ${C.line}`, background: C.paper2 }}>
+                                <td style={{ padding: "6px 8px", color: C.muted, fontSize: 12.5, fontWeight: 700 }}>{c.code || ""}</td>
+                                <td style={{ padding: "6px 8px", color: C.ink, fontWeight: 700 }}>{c.title}</td>
+                                <td style={{ padding: "6px 8px", textAlign: "center", color: C.muted, fontWeight: 700 }}>{c.credit_hours ?? "—"}</td>
+                                <td style={{ padding: "6px 8px", textAlign: "center", color: C.muted }}>{bg != null ? `${bg} (avg)` : "—"}</td>
+                                <td style={{ padding: "6px 8px", textAlign: "center", fontWeight: 700, color: blt === "F" ? C.rose : blt ? C.green : C.muted }}>{blt || "—"}</td>
+                              </tr>
+                              {c._components.map((k) => {
+                                const kauto = autoScoreRow(k);
+                                const kStored = cids(k).find((id) => { const v = manual[id]; return v !== undefined && v !== "" && v != null; });
+                                const km = kStored != null ? manual[kStored] : undefined;
+                                const kHas = km !== undefined && km !== "" && km != null;
+                                const keff = effCourseRow(k);
+                                const klt = gradeLetter(keff);
+                                return (
+                                  <tr key={k.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                                    <td style={{ padding: "6px 8px 6px 22px", color: C.muted, fontSize: 12 }}>{k.code || ""}</td>
+                                    <td style={{ padding: "6px 8px 6px 22px", color: C.ink, fontSize: 12.5 }}>{k.title}</td>
+                                    <td style={{ padding: "6px 8px", textAlign: "center", color: C.muted }}>—</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "center" }}>
+                                      <input value={kHas ? km : ""} onChange={(e) => setScore(k.id, e.target.value)} inputMode="decimal" placeholder={kauto != null ? `${kauto}` : "—"} style={{ ...inputStyle, width: 96, textAlign: "center", padding: "5px 6px" }} />
+                                    </td>
+                                    <td style={{ padding: "6px 8px", textAlign: "center", fontWeight: 700, color: klt === "F" ? C.rose : klt ? C.green : C.muted }}>{klt || "—"}</td>
+                                  </tr>
+                                );
+                              })}
+                            </React.Fragment>
+                          );
+                        }
                         const auto = autoScoreRow(c);
                         const storedId = cids(c).find((id) => { const v = manual[id]; return v !== undefined && v !== "" && v != null; });
                         const m = storedId != null ? manual[storedId] : undefined;
