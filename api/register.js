@@ -12,6 +12,9 @@
      email       email address
      origin      (optional) the site the button lives on, used for success/cancel URLs
 
+   GET /api/register  -> runs a self-check (does NOT create anything) so you can
+   confirm the Stripe key is wired correctly just by opening the URL in a browser.
+
    Vercel env vars: STRIPE_SECRET_KEY
 */
 
@@ -23,13 +26,52 @@ const REG_FEE = {
 
 function cors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+// Safe diagnostic: confirms the key is present, live, valid, and whose account
+// it is — WITHOUT ever revealing the secret. Open /api/register in a browser.
+async function selfCheck(res) {
+  const key = process.env.STRIPE_SECRET_KEY || "";
+  const out = {
+    diagnostic: true,
+    endpoint: "alive",
+    stripe_key_present: !!key,
+    stripe_key_mode: key.startsWith("sk_live_") ? "live"
+                   : key.startsWith("sk_test_") ? "test"
+                   : key ? "unknown-prefix" : "MISSING",
+  };
+  if (!key) {
+    out.result = "FAIL - STRIPE_SECRET_KEY is not set on this deployment. Add it in Vercel (Production) and redeploy.";
+    res.status(200).json(out);
+    return;
+  }
+  try {
+    const r = await fetch("https://api.stripe.com/v1/account", {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    const a = await r.json();
+    if (a.error) {
+      out.result = `FAIL - Stripe rejected the key: ${a.error.message}`;
+      out.stripe_error_type = a.error.type || null;
+    } else {
+      out.result = "OK - key is valid.";
+      out.stripe_account_id = a.id || null;
+      out.stripe_account_name = a.settings?.dashboard?.display_name
+                              || a.business_profile?.name || null;
+      out.charges_enabled = a.charges_enabled ?? null;
+    }
+  } catch (e) {
+    out.result = `FAIL - could not reach Stripe: ${String(e.message || e)}`;
+  }
+  res.status(200).json(out);
 }
 
 export default async function handler(req, res) {
   cors(res);
   if (req.method === "OPTIONS") { res.status(204).end(); return; }
+  if (req.method === "GET") { await selfCheck(res); return; }
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
 
   try {
@@ -43,6 +85,11 @@ export default async function handler(req, res) {
     const prog = String(program || "certificate").toLowerCase();
     const fee = REG_FEE[prog];
     if (!fee) { res.status(400).json({ error: "Unknown program." }); return; }
+
+    if (!process.env.STRIPE_SECRET_KEY) {
+      res.status(500).json({ error: "Payment is not configured yet (missing Stripe key)." });
+      return;
+    }
 
     const base = origin || `https://${req.headers.host}`;
     const cents = Math.round(fee * 100);
