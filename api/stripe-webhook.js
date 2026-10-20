@@ -162,8 +162,11 @@ async function provisionSignup({ supaUrl, serviceKey, md, amount, sessionId, ses
     await rest(`pl_cert_enrollments`, { method: "POST", headers: { Prefer: "return=minimal,resolution=ignore-duplicates" }, body: JSON.stringify({ student_id: userId, course_id: courseId }) }).catch(() => {});
   }
 
-  // 4) Record the registration fee in the ledger (idempotent on stripe_session_id).
-  const desc = program === "certificate" ? "Fully Known registration" : `${program} registration`;
+  // 4) Record the payment in the ledger (idempotent on stripe_session_id).
+  const paidFull = md.reg_paid_full === "1";
+  const desc = program === "certificate"
+    ? (paidFull ? "Fully Known — paid in full" : "Fully Known registration")
+    : `${program} registration`;
   const led = await rest(`pl_ledger`, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ student_id: userId, kind: "payment", description: desc, amount, method: "card", date: new Date().toISOString().slice(0, 10), stripe_session_id: sessionId, recorded_by: userId }) });
   if (!led.ok) { const t = await led.text(); if (!(led.status === 409 || t.includes("23505"))) console.error("signup ledger insert failed", led.status, t); }
 
@@ -172,13 +175,13 @@ async function provisionSignup({ supaUrl, serviceKey, md, amount, sessionId, ses
     const appUrl = process.env.APP_URL || "https://thehealedplace.org";
     const linkRes = await admin("generate_link", { method: "POST", body: JSON.stringify({ type: "recovery", email, options: { redirect_to: appUrl } }) }).then((r) => r.json());
     const link = linkRes?.action_link || linkRes?.properties?.action_link || appUrl;
-    await sendWelcome({ email, name, link, program, amount });
+    await sendWelcome({ email, name, link, program, amount, paidFull });
   } catch (e) { console.error("signup welcome email failed (non-fatal)", e); }
 
   return { userId, email };
 }
 
-async function sendWelcome({ email, name, link, program, amount }) {
+async function sendWelcome({ email, name, link, program, amount, paidFull }) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return;
   const from = process.env.EMAIL_FROM || "The Healed Place <onboarding@resend.dev>";
@@ -191,10 +194,10 @@ async function sendWelcome({ email, name, link, program, amount }) {
       <div style="background:#3a1d3d;padding:20px 24px;text-align:center;color:#e6d2a0;font-family:Arial,sans-serif;font-size:12px;letter-spacing:2px;font-weight:bold;">${esc(school).toUpperCase()}</div>
       <div style="padding:26px 24px;">
         <h1 style="font-size:22px;color:#3a1d3d;margin:0 0 6px;">Welcome, ${esc(name || "friend")} —</h1>
-        <p style="font-size:15px;color:#555;margin:0 0 16px;">Your registration is received (${money(amount)}) and your place is reserved. One more step: set your password to enter the learning portal.</p>
+        <p style="font-size:15px;color:#555;margin:0 0 16px;">Your ${paidFull ? "payment" : "registration"} is received (${money(amount)})${paidFull ? " — paid in full" : ""} and your place is reserved. One more step: set your password to enter the learning portal.</p>
         <p style="text-align:center;margin:24px 0;"><a href="${link}" style="background:#c8a24e;color:#2a1a08;text-decoration:none;font-weight:bold;padding:13px 30px;border-radius:999px;font-family:Arial,sans-serif;font-size:15px;display:inline-block;">Set your password &amp; enter</a></p>
         <p style="font-size:13px;color:#777;margin:0;">If the button doesn't work, copy this link into your browser:<br><span style="color:#5b3560;word-break:break-all;">${link}</span></p>
-        <p style="font-size:13px;color:#777;margin:18px 0 0;">Any remaining balance can be paid anytime inside your student portal. We're glad you're here.</p>
+        <p style="font-size:13px;color:#777;margin:18px 0 0;">${paidFull ? "You're paid in full — nothing else is due. We're glad you're here." : "Any remaining balance can be paid anytime inside your student portal. We're glad you're here."}</p>
       </div>
       <div style="border-top:1px solid #eee;padding:12px 24px;text-align:center;color:#999;font-size:11px;font-family:Arial,sans-serif;">The Healed Place · Fully Known · Seen. Known. Loved. Free.</div>
     </div></body></html>`;
