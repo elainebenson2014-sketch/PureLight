@@ -178,7 +178,45 @@ async function provisionSignup({ supaUrl, serviceKey, md, amount, sessionId, ses
     await sendWelcome({ email, name, link, program, amount, paidFull });
   } catch (e) { console.error("signup welcome email failed (non-fatal)", e); }
 
+  // 6) Alert the office that a new paid registration came in.
+  try { await sendOfficeAlert({ email, name, program, amount, paidFull, desc }); }
+  catch (e) { console.error("signup office alert failed (non-fatal)", e); }
+
   return { userId, email };
+}
+
+/* Office alert for a new paid registration. Recipients are fixed server-side:
+   ADMIN_ALERT_EMAIL (one or more addresses, comma-separated), or the default below. */
+async function sendOfficeAlert({ email, name, program, amount, paidFull, desc }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) return;
+  const rawTo = process.env.ADMIN_ALERT_EMAIL || "admin@nctspurelight.com, elainethomasbenson@yahoo.com";
+  const to = rawTo.split(",").map((s) => s.trim()).filter(Boolean);
+  if (!to.length) return;
+  const from = process.env.EMAIL_FROM || "The Healed Place <onboarding@resend.dev>";
+  const school = program === "certificate" ? "The Healed Place" : (process.env.VITE_SCHOOL_NAME || "NCTS");
+  const esc = (t) => String(t ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  const money = (n) => "$" + (Number(n) || 0).toFixed(2);
+  const when = new Date().toLocaleString("en-US", { timeZone: "America/Chicago", dateStyle: "full", timeStyle: "short" });
+  const row = (k, v) => `<tr><td style="padding:7px 0;color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;width:140px;">${k}</td><td style="padding:7px 0;">${v}</td></tr>`;
+
+  const html = `<!doctype html><html><body style="margin:0;padding:24px;background:#F5F0E8;font-family:Georgia,serif;color:#1a1a1a;">
+    <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;">
+      <div style="background:#1B3A6B;padding:18px 24px;text-align:center;color:#C5922E;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:2px;">${esc(school).toUpperCase()}</div>
+      <div style="padding:24px;">
+        <h1 style="font-size:19px;margin:0 0 4px;color:#1B3A6B;">New registration: ${money(amount)} paid</h1>
+        <p style="font-size:14px;color:#666;margin:0 0 18px;">A new student just paid online. Their account was created and they were emailed a set-password link.</p>
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+          ${row("Name", esc(name || "(no name given)"))}
+          ${row("Email", `<a href="mailto:${esc(email)}" style="color:#1B3A6B;">${esc(email)}</a>`)}
+          ${row("Paid", `${money(amount)}${paidFull ? " (paid in full)" : ""}`)}
+          ${row("For", esc(desc))}
+          ${row("When", esc(when))}
+        </table>
+      </div>
+    </div></body></html>`;
+
+  await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ from, to, subject: `New registration: ${name || email} (${money(amount)})`, html }) });
 }
 
 async function sendWelcome({ email, name, link, program, amount, paidFull }) {
