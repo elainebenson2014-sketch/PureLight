@@ -33,7 +33,7 @@ export default async function handler(req, res) {
   const html = `<!doctype html><html><body style="margin:0;padding:24px;background:#F5F0E8;font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;">
   <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;">
     <div style="background:#1B3A6B;padding:18px 24px;text-align:center;">
-      <div style="color:#C5922E;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:2px;">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
+      <div style="color:#C5922E;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:2px;">${clean(process.env.VITE_SCHOOL_NAME || "NCTS Pure Light School of Ministry").toUpperCase()}</div>
     </div>
     <div style="padding:24px;">
       <h1 style="font-size:19px;margin:0 0 4px;color:#1B3A6B;">New account created</h1>
