@@ -216,12 +216,24 @@ async function sendOfficeAlert({ email, name, program, amount, paidFull, desc })
       </div>
     </div></body></html>`;
 
-  await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ from, to, subject: `New registration: ${name || email} (${money(amount)})`, html }) });
+  await sendResend(apiKey, "office alert", { from, to, subject: `New registration: ${name || email} (${money(amount)})`, html });
+}
+
+/* Send through Resend and CHECK the result, so a failed email shows up in the
+   Vercel logs instead of disappearing silently. Throws on failure. */
+async function sendResend(apiKey, label, payload) {
+  const r = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const text = await r.text();
+  if (!r.ok) {
+    console.error(`stripe-webhook: ${label} FAILED (${r.status}) from=${payload.from} to=${(payload.to || []).join(",")}: ${text}`);
+    throw new Error(`${label} failed: ${r.status} ${text}`);
+  }
+  console.log(`stripe-webhook: ${label} sent to ${(payload.to || []).join(",")}: ${text}`);
 }
 
 async function sendWelcome({ email, name, link, program, amount, paidFull }) {
   const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return;
+  if (!apiKey) { console.error("stripe-webhook: RESEND_API_KEY not set, welcome email NOT sent to " + email); return; }
   const from = process.env.EMAIL_FROM || "The Healed Place <onboarding@resend.dev>";
   const school = program === "certificate" ? "The Healed Place" : (process.env.VITE_SCHOOL_NAME || "NCTS");
   const esc = (t) => String(t ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
@@ -240,7 +252,7 @@ async function sendWelcome({ email, name, link, program, amount, paidFull }) {
       <div style="border-top:1px solid #eee;padding:12px 24px;text-align:center;color:#999;font-size:11px;font-family:Arial,sans-serif;">The Healed Place · Fully Known · Seen. Known. Loved. Free.</div>
     </div></body></html>`;
 
-  await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ from, to: [email], subject: `Welcome to ${school} — set your password`, html }) });
+  await sendResend(apiKey, "welcome email", { from, to: [email], subject: `Welcome to ${school} — set your password`, html });
 }
 
 async function sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail }) {
@@ -279,5 +291,5 @@ async function sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail }) {
     </div>
   </div></body></html>`;
 
-  await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ from, to: recipients, subject: `Payment received — ${money(amount)}`, html }) });
+  await sendResend(apiKey, "receipt", { from, to: recipients, subject: `Payment received — ${money(amount)}`, html });
 }
