@@ -49,6 +49,47 @@ export default async function handler(req, res) {
     let metadata = { student_id };
     let successUrl = "";
 
+    const { product_id, quantity } = req.body || {};
+    if (product_id) {
+      // -------- Store purchase: price and shipping always read from the database --------
+      const prows = await sb(`pl_store_products?id=eq.${encodeURIComponent(product_id)}&active=eq.true&select=id,title,price,shipping_fee,kind`);
+      const p = Array.isArray(prows) ? prows[0] : null;
+      if (!p) { res.status(404).json({ error: "That item is no longer available." }); return; }
+      const qty = p.kind === "physical" ? Math.min(20, Math.max(1, parseInt(quantity, 10) || 1)) : 1;
+      const unit = Math.round((Number(p.price) || 0) * 100);
+      const ship = p.kind === "physical" ? Math.round((Number(p.shipping_fee) || 0) * 100) : 0;
+      if (unit < 50) { res.status(400).json({ error: "This item has no price set." }); return; }
+
+      const params = new URLSearchParams();
+      params.append("mode", "payment");
+      params.append("success_url", `${base}/?store_paid=1`);
+      params.append("cancel_url", `${base}/?pay_canceled=1`);
+      params.append("line_items[0][quantity]", String(qty));
+      params.append("line_items[0][price_data][currency]", "usd");
+      params.append("line_items[0][price_data][unit_amount]", String(unit));
+      params.append("line_items[0][price_data][product_data][name]", p.title || "Store item");
+      if (ship > 0) {
+        params.append("line_items[1][quantity]", "1");
+        params.append("line_items[1][price_data][currency]", "usd");
+        params.append("line_items[1][price_data][unit_amount]", String(ship));
+        params.append("line_items[1][price_data][product_data][name]", "Shipping");
+      }
+      if (p.kind === "physical") params.append("shipping_address_collection[allowed_countries][0]", "US");
+      const md = { store: "1", student_id, product_id: p.id, quantity: qty, kind: p.kind, title: p.title || "Store item" };
+      for (const [k, v] of Object.entries(md)) params.append(`metadata[${k}]`, String(v));
+      if (student_email) params.append("customer_email", student_email);
+
+      const sr = await fetch("https://api.stripe.com/v1/checkout/sessions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      });
+      const session = await sr.json();
+      if (session.error) { res.status(400).json({ error: session.error.message || "Stripe error" }); return; }
+      res.status(200).json({ url: session.url });
+      return;
+    }
+
     if (tuition_level) {
       // -------- Degree tuition: registration / books / tuition installment --------
       const trows = await sb(`pl_tuition?program=eq.${encodeURIComponent(tuition_level)}&select=amount,registration,books`);
