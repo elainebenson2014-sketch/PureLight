@@ -990,6 +990,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "announce",    label: "Announcements",icon: Sparkles,        show: true },
     { key: "messages",    label: "Messages",     icon: Mail,            show: FEATURES.messages },
     { key: "store",       label: "Store",        icon: ShoppingBag,     show: FEATURES.store && (profile.role === "admin" || profile.role === "assistant") },
+    { key: "paylog",      label: "Payment Log",  icon: ClipboardList,   show: FEATURES.billing && profile.role === "admin" },
   ].filter((n) => n.show);
   // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
   let nav = fullNav;
@@ -1034,6 +1035,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "announce" && <AnnouncementsManager announcements={announcements} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
           {active === "store" && FEATURES.store && (profile.role === "admin" || profile.role === "assistant") && <StoreManager courses={courses.filter((c) => c.is_certificate)} />}
+          {active === "paylog" && profile.role === "admin" && <PaymentLog />}
         </>
       )}
     </Shell>
@@ -6891,7 +6893,8 @@ function StoreManager({ courses }) {
                     {a && <div style={{ marginTop: 4 }}>Ship to: {[o.shipping.name, a.line1, a.line2, `${a.city || ""}, ${a.state || ""} ${a.postal_code || ""}`].filter(Boolean).join(", ")}</div>}
                   </div>
                   <div style={{ whiteSpace: "nowrap" }}>
-                    {o.kind !== "physical" ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{kindLabel(o.kind)} · delivered</span>
+                    {o.status === "refunded" || o.status === "disputed" ? <span className="pl-body" style={{ fontSize: 13, fontWeight: 700, color: o.status === "disputed" ? "#b42318" : C.muted }}>{o.status === "disputed" ? "DISPUTED (respond in Stripe)" : "Refunded"}</span>
+                      : o.kind !== "physical" ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{kindLabel(o.kind)} · delivered</span>
                       : o.status === "shipped" ? <Btn small kind="ghost" icon={RotateCcw} onClick={() => ship(o, false)}>Shipped ✓ (undo)</Btn>
                       : <Btn small icon={Truck} onClick={() => ship(o, true)}>Mark shipped</Btn>}
                   </div>
@@ -6968,13 +6971,69 @@ function StudentStore({ profile }) {
                   <div style={{ fontWeight: 700, color: C.ink }}>{o.title}{o.quantity > 1 ? ` × ${o.quantity}` : ""}</div>
                   <div style={{ color: C.muted }}>{money(o.amount)} · {new Date(o.created_at).toLocaleDateString()}</div>
                 </div>
-                {o.kind === "digital" && o.product?.file_path ? <Btn small icon={Download} onClick={() => download(o)}>Download</Btn>
+                {o.status === "refunded" ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Refunded</span>
+                  : o.status === "disputed" ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>On hold, contact the office</span>
+                  : o.kind === "digital" && o.product?.file_path ? <Btn small icon={Download} onClick={() => download(o)}>Download</Btn>
                   : o.kind === "course" ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Enrolled · see My Courses</span>
                   : <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{o.status === "shipped" ? "Shipped" : "Preparing to ship"}</span>}
               </div>
             ))}
           </Card>
         )
+      )}
+    </>
+  );
+}
+
+
+/* ================= PAYMENT LOG (admin) ================= */
+const EVENT_LABEL = {
+  "checkout.session.completed": "Payment",
+  "charge.refunded": "Refund",
+  "charge.dispute.created": "Dispute opened",
+  "charge.dispute.closed": "Dispute closed",
+  "reconcile.run": "Daily payment check",
+};
+function PaymentLog() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [only, setOnly] = useState("all");
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setRows(await db.listPaymentEvents()); } catch (e) { window.alert(e.message || "Could not load the payment log."); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const tone = { processed: "#1f7a3a", ignored: C.muted, failed: "#b42318", received: C.gold };
+  const label = { processed: "OK", ignored: "Skipped", failed: "Needs review", received: "Processing" };
+  const shown = rows.filter((r) => only === "all" || (only === "problems" ? r.status === "failed" : r.type === "reconcile.run"));
+  const problems = rows.filter((r) => r.status === "failed").length;
+  return (
+    <>
+      <PageHead title="Payment Log" sub="Every payment, refund and dispute Stripe reported, plus the daily payment check." action={<Btn kind="ghost" icon={RotateCcw} onClick={load}>Refresh</Btn>} />
+      <div className="flex gap-2" style={{ marginBottom: 18 }}>
+        <Btn small kind={only === "all" ? "primary" : "ghost"} onClick={() => setOnly("all")}>All ({rows.length})</Btn>
+        <Btn small kind={only === "problems" ? "primary" : "ghost"} onClick={() => setOnly("problems")}>Needs review ({problems})</Btn>
+        <Btn small kind={only === "checks" ? "primary" : "ghost"} onClick={() => setOnly("checks")}>Daily checks</Btn>
+      </div>
+      {loading ? <Spinner /> : shown.length === 0 ? <Card><div className="pl-body" style={{ color: C.muted }}>Nothing here yet. Entries appear as Stripe sends payment events.</div></Card> : (
+        <Card>
+          {shown.map((r) => (
+            <div key={r.id} className="flex items-start justify-between gap-4" style={{ padding: "11px 0", borderBottom: `1px solid ${C.line}` }}>
+              <div className="pl-body" style={{ fontSize: 14 }}>
+                <div style={{ fontWeight: 700, color: C.ink }}>{EVENT_LABEL[r.type] || r.type}{r.amount != null ? ` · ${money(r.amount)}` : ""}</div>
+                <div style={{ color: C.muted }}>{new Date(r.created_at).toLocaleString()}{r.note ? ` · ${r.note}` : ""}</div>
+                {r.error && <div style={{ color: "#b42318", marginTop: 3 }}>{r.error}</div>}
+                {r.type === "reconcile.run" && r.payload?.problems?.length > 0 && (
+                  <ul style={{ margin: "6px 0 0 18px", color: C.text }}>
+                    {r.payload.problems.map((p, i) => <li key={i}>{p.kind}: {p.what}{p.amount != null ? ` (${money(p.amount)})` : ""}{p.who ? `, ${p.who}` : ""}</li>)}
+                  </ul>
+                )}
+              </div>
+              <span className="pl-body" style={{ fontSize: 12, fontWeight: 800, color: tone[r.status] || C.muted, whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: 1 }}>{label[r.status] || r.status}</span>
+            </div>
+          ))}
+        </Card>
       )}
     </>
   );
