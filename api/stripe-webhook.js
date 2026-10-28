@@ -72,10 +72,11 @@ export default async function handler(req, res) {
 
   try {
     let out;
-    if (event.type === "checkout.session.completed") out = await handleCheckout({ supaUrl, serviceKey, s: event.data.object || {} });
-    else if (event.type === "charge.refunded") out = await handleRefund({ supaUrl, serviceKey, charge: event.data.object || {} });
-    else if (event.type === "charge.dispute.created") out = await handleDispute({ supaUrl, serviceKey, dispute: event.data.object || {}, opened: true });
-    else if (event.type === "charge.dispute.closed") out = await handleDispute({ supaUrl, serviceKey, dispute: event.data.object || {}, opened: false });
+    const hosts = schoolHosts(req);
+    if (event.type === "checkout.session.completed") out = await handleCheckout({ supaUrl, serviceKey, s: event.data.object || {}, hosts });
+    else if (event.type === "charge.refunded") out = await handleRefund({ supaUrl, serviceKey, charge: event.data.object || {}, hosts });
+    else if (event.type === "charge.dispute.created") out = await handleDispute({ supaUrl, serviceKey, dispute: event.data.object || {}, opened: true, hosts });
+    else if (event.type === "charge.dispute.closed") out = await handleDispute({ supaUrl, serviceKey, dispute: event.data.object || {}, opened: false, hosts });
     else out = { code: 200, body: { received: true, ignored: event.type }, status: "ignored" };
 
     await log.finish(out.status || (out.code < 300 ? "processed" : "failed"), out.note || null, out.error || null, out.meta || {});
@@ -85,6 +86,27 @@ export default async function handler(req, res) {
     await log.finish("failed", null, String(e.message || e), {});
     res.status(500).send(String(e.message || e)); // Stripe retries failed deliveries automatically
   }
+}
+
+/* ---------------- WHICH SCHOOL DOES A PAYMENT BELONG TO? ----------------
+   Several schools can share one Stripe account, and Stripe sends every event to
+   every webhook on that account. Each school only handles its own payments:
+     1) a payment for a student who exists in THIS school's database, or
+     2) a registration for a class that exists in THIS school's database, or
+     3) otherwise, a checkout that started on THIS school's web address.
+   Everything else is skipped (answered 200 so Stripe doesn't retry it here).
+   Optional env SCHOOL_HOSTS = extra web addresses for this school, comma-separated. */
+function hostOf(u) { try { return new URL(u).host.replace(/^www\./, "").toLowerCase(); } catch { return ""; } }
+function schoolHosts(req) {
+  const list = [req?.headers?.["x-forwarded-host"], req?.headers?.host, process.env.VERCEL_PROJECT_PRODUCTION_URL, process.env.APP_URL, ...(process.env.SCHOOL_HOSTS || "").split(",")];
+  return new Set(list.filter(Boolean).map((h) => hostOf(/^https?:/.test(h.trim()) ? h.trim() : `https://${h.trim()}`)).filter(Boolean));
+}
+async function belongsHere({ supaUrl, serviceKey, session, hosts }) {
+  const md = session?.metadata || {};
+  const get = (path) => fetch(`${supaUrl}/rest/v1/${path}`, { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } }).then((r) => (r.ok ? r.json() : [])).catch(() => []);
+  if (md.student_id) return (await get(`pl_profiles?id=eq.${encodeURIComponent(md.student_id)}&select=id`)).length > 0;
+  if (md.reg_course_id) return (await get(`pl_courses?id=eq.${encodeURIComponent(md.reg_course_id)}&select=id`)).length > 0;
+  return hosts.has(hostOf(session?.success_url || ""));
 }
 
 /* ---------------- PAYMENT EVENT LOG ----------------
@@ -121,7 +143,7 @@ function eventLog(supaUrl, serviceKey, event) {
 }
 
 /* ---------------- CHECKOUT COMPLETED ---------------- */
-async function handleCheckout({ supaUrl, serviceKey, s }) {
+async function handleCheckout({ supaUrl, serviceKey, s, hosts }) {
   const md = s.metadata || {};
   const amount = (s.amount_total || 0) / 100;
   const sessionId = s.id || null;
@@ -130,6 +152,9 @@ async function handleCheckout({ supaUrl, serviceKey, s }) {
 
   if (s.payment_status && s.payment_status !== "paid") {
     return { code: 200, body: { received: true, ignored: `payment_status=${s.payment_status}` }, status: "ignored", note: `payment_status=${s.payment_status}`, meta };
+  }
+  if (!(await belongsHere({ supaUrl, serviceKey, session: s, hosts }))) {
+    return { code: 200, body: { received: true, ignored: "another school" }, status: "ignored", note: "payment belongs to another school on this Stripe account", meta };
   }
 
   // PATH 1: pay-first registration
@@ -199,7 +224,7 @@ async function findSession(pi) {
   return (list.data || [])[0] || null;
 }
 
-async function handleRefund({ supaUrl, serviceKey, charge }) {
+async function handleRefund({ supaUrl, serviceKey, charge, hosts }) {
   const db = rest(supaUrl, serviceKey);
   const pi = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
   const meta = { payment_intent: pi || null, amount: (charge.amount_refunded || 0) / 100 };
@@ -244,13 +269,14 @@ async function handleRefund({ supaUrl, serviceKey, charge }) {
          ${order?.kind === "physical" && order.status !== "shipped" ? "<p>This item had not shipped yet. Don't ship it.</p>" : ""}`);
     } catch (e) { console.error("refund office note failed (non-fatal)", e); }
   }
+  if (!pay && !order) return { code: 200, body: { received: true, ignored: "another school" }, status: "ignored", note: "refund for a payment not in this school", meta };
   return { code: 200, body: { received: true, refunds_posted: posted }, note: `refund: ${posted} ledger row(s)${order && fullyRefunded ? ", order refunded" : ""}`, meta };
 }
 
 /* ---------------- DISPUTES (chargebacks) ----------------
    Opened: lock the store order and alert the office with the evidence deadline.
    Closed: won -> unlock; lost -> record the loss on the ledger and mark refunded. */
-async function handleDispute({ supaUrl, serviceKey, dispute, opened }) {
+async function handleDispute({ supaUrl, serviceKey, dispute, opened, hosts }) {
   const db = rest(supaUrl, serviceKey);
   const pi = typeof dispute.payment_intent === "string" ? dispute.payment_intent : dispute.payment_intent?.id;
   const amt = (dispute.amount || 0) / 100;
@@ -263,6 +289,9 @@ async function handleDispute({ supaUrl, serviceKey, dispute, opened }) {
   const pays = sid ? await db(`pl_ledger?stripe_session_id=eq.${sid}&kind=eq.payment&select=student_id,course_id,description`).then((r) => r.json()).catch(() => []) : [];
   const pay = Array.isArray(pays) ? pays[0] : null;
   const what = esc(order?.title || pay?.description || session?.metadata?.title || "a payment");
+  if (!order && !pay && !(session && (await belongsHere({ supaUrl, serviceKey, session, hosts })))) {
+    return { code: 200, body: { received: true, ignored: "another school" }, status: "ignored", note: "dispute belongs to another school or a non-LMS payment", meta };
+  }
 
   if (opened) {
     if (order && order.status !== "refunded") await db(`pl_store_orders?id=eq.${order.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "disputed" }) });
