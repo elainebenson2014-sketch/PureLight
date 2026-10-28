@@ -37,6 +37,7 @@ export const FEATURES = {
   messages:        (ENV.VITE_FEATURE_MESSAGES         ?? "true") !== "false",
   people:          (ENV.VITE_FEATURE_PEOPLE           ?? "true") !== "false",
   transcripts:     (ENV.VITE_FEATURE_TRANSCRIPTS      ?? "true") !== "false",
+  store:           (ENV.VITE_FEATURE_STORE            ?? "false") !== "false",
 };
 
 export const C = {
