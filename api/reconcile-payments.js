@@ -14,7 +14,10 @@
    Optional: RESEND_API_KEY, EMAIL_FROM, ADMIN_ALERT_EMAIL, VITE_SCHOOL_NAME
 */
 
-const DAYS = 3;
+const DAYS = 3;          // normal daily look-back
+const FIRST_RUN_DAYS = 45; // the very first run at a school looks further back
+
+function hostOf(u) { try { return new URL(u).host.replace(/^www\./, "").toLowerCase(); } catch { return ""; } }
 
 export default async function handler(req, res) {
   const cronSecret = process.env.CRON_SECRET;
@@ -49,7 +52,24 @@ export default async function handler(req, res) {
   };
 
   try {
-    const since = Math.floor(Date.now() / 1000) - DAYS * 86400;
+    const prior = await db(`pl_payment_events?type=eq.reconcile.run&select=id&limit=1`);
+    const days = prior.length ? DAYS : FIRST_RUN_DAYS;
+    const since = Math.floor(Date.now() / 1000) - days * 86400;
+    // Several schools may share one Stripe account: only check this school's payments.
+    const hosts = new Set([req.headers["x-forwarded-host"], req.headers.host, process.env.VERCEL_PROJECT_PRODUCTION_URL, process.env.APP_URL, ...(process.env.SCHOOL_HOSTS || "").split(",")]
+      .filter(Boolean).map((h) => hostOf(/^https?:/.test(h.trim()) ? h.trim() : `https://${h.trim()}`)).filter(Boolean));
+    const seen = new Map();
+    const mine = async (s) => {
+      const md = s.metadata || {};
+      const key = md.student_id ? `s:${md.student_id}` : md.reg_course_id ? `c:${md.reg_course_id}` : null;
+      if (key && seen.has(key)) return seen.get(key);
+      let ok;
+      if (md.student_id) ok = (await db(`pl_profiles?id=eq.${encodeURIComponent(md.student_id)}&select=id`)).length > 0;
+      else if (md.reg_course_id) ok = (await db(`pl_courses?id=eq.${encodeURIComponent(md.reg_course_id)}&select=id`)).length > 0;
+      else ok = hosts.has(hostOf(s.success_url || ""));
+      if (key) seen.set(key, ok);
+      return ok;
+    };
     const sinceIso = new Date(since * 1000).toISOString();
     // Skip the last 30 minutes: those may still be on their way through the webhook.
     const settle = Math.floor(Date.now() / 1000) - 1800;
@@ -74,6 +94,7 @@ export default async function handler(req, res) {
       const md = s.metadata || {};
       const isLms = md.signup === "1" || md.store === "1" || md.tuition_level || md.course_id;
       if (!isLms) continue; // not a payment from this LMS
+      if (!(await mine(s))) continue; // another school's payment on a shared Stripe account
       const found = md.store === "1" ? orderSessions.has(s.id) : ledgerSessions.has(s.id);
       if (!found) problems.push({ kind: "Payment not recorded in the LMS", amount: s.amount_total / 100, who: s.customer_details?.email || s.customer_email || "", what: md.title || md.description || md.reg_name || (md.signup === "1" ? "Registration" : "Payment"), ref: s.id });
     }
@@ -92,7 +113,7 @@ export default async function handler(req, res) {
     }
     for (const f of failed) problems.push({ kind: "Payment event failed to process", amount: null, who: "", what: `${f.type}: ${(f.error || "").slice(0, 160)}`, ref: f.stripe_event_id });
 
-    const summary = { checked_sessions: sessions.length, checked_refunds: refunds.length, problems: problems.length };
+    const summary = { days, checked_sessions: sessions.length, checked_refunds: refunds.length, problems: problems.length };
     await logRun(supaUrl, serviceKey, summary, problems);
     if (problems.length) await emailOffice(problems, summary);
     res.status(200).json({ ok: true, ...summary });
@@ -112,7 +133,7 @@ async function logRun(supaUrl, serviceKey, summary, problems, failed = false) {
       body: JSON.stringify({
         stripe_event_id: `reconcile-${new Date().toISOString().slice(0, 16)}`, type: "reconcile.run",
         status: failed ? "failed" : problems.length ? "failed" : "processed",
-        note: failed ? null : `${summary.checked_sessions} payments and ${summary.checked_refunds} refunds checked, ${problems.length} problem(s)`,
+        note: failed ? null : `Last ${summary.days} days: ${summary.checked_sessions} payments and ${summary.checked_refunds} refunds checked, ${problems.length} problem(s)`,
         error: failed ? summary.error : null, payload: { summary, problems }, processed_at: new Date().toISOString(),
       }),
     });
@@ -132,7 +153,7 @@ async function emailOffice(problems, summary) {
     <div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;">
       <div style="background:#1B3A6B;padding:18px 24px;text-align:center;color:#C5922E;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:2px;">${esc(school).toUpperCase()} · DAILY PAYMENT CHECK</div>
       <div style="padding:24px;font-size:14px;line-height:1.6;">
-        <p>Stripe and the LMS don't fully match for the last ${DAYS} days. Please review the item(s) below.</p>
+        <p>Stripe and the LMS don't fully match for the last ${summary.days || DAYS} days. Please review the item(s) below.</p>
         <table style="width:100%;border-collapse:collapse;font-size:13px;">${rows}</table>
         <p style="margin-top:18px;color:#555;">To fix a payment that isn't recorded: open it in Stripe (search the reference) and add it in the LMS under Billing, or ask for help.</p>
       </div></div></body></html>`;
