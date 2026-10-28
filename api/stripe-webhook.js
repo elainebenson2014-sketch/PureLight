@@ -98,15 +98,21 @@ export default async function handler(req, res) {
    Optional env SCHOOL_HOSTS = extra web addresses for this school, comma-separated. */
 function hostOf(u) { try { return new URL(u).host.replace(/^www\./, "").toLowerCase(); } catch { return ""; } }
 function schoolHosts(req) {
-  const list = [req?.headers?.["x-forwarded-host"], req?.headers?.host, process.env.VERCEL_PROJECT_PRODUCTION_URL, process.env.APP_URL, ...(process.env.SCHOOL_HOSTS || "").split(",")];
+  const list = [req?.headers?.["x-forwarded-host"], req?.headers?.host, process.env.VERCEL_PROJECT_PRODUCTION_URL, process.env.VERCEL_URL, process.env.APP_URL, ...(process.env.SCHOOL_HOSTS || "").split(",")];
   return new Set(list.filter(Boolean).map((h) => hostOf(/^https?:/.test(h.trim()) ? h.trim() : `https://${h.trim()}`)).filter(Boolean));
 }
 async function belongsHere({ supaUrl, serviceKey, session, hosts }) {
   const md = session?.metadata || {};
   const get = (path) => fetch(`${supaUrl}/rest/v1/${path}`, { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } }).then((r) => (r.ok ? r.json() : [])).catch(() => []);
+  // The web address the checkout started on decides first: schools copied from each
+  // other can share course IDs, so a matching course alone is not proof.
+  const h = hostOf(session?.success_url || "");
+  if (h && hosts.has(h)) return true;
+  if (h && !h.endsWith(".vercel.app")) return false; // started on another school's address
+  // No address, or a temporary vercel.app address: fall back to this school's records.
   if (md.student_id) return (await get(`pl_profiles?id=eq.${encodeURIComponent(md.student_id)}&select=id`)).length > 0;
   if (md.reg_course_id) return (await get(`pl_courses?id=eq.${encodeURIComponent(md.reg_course_id)}&select=id`)).length > 0;
-  return hosts.has(hostOf(session?.success_url || ""));
+  return false;
 }
 
 /* ---------------- PAYMENT EVENT LOG ----------------
