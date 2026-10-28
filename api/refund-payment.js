@@ -125,6 +125,9 @@ export default async function handler(req, res) {
     date: new Date().toISOString().slice(0, 10),
   };
   if (pay.course_id) reversal.course_id = pay.course_id;
+  // The Stripe webhook may record this same refund too; the unique stripe_refund_id
+  // makes sure it lands on the ledger only once, whichever arrives first.
+  if (stripeRefundId) reversal.stripe_refund_id = stripeRefundId;
 
   const insRes = await fetch(`${e.url}/rest/v1/pl_ledger`, {
     method: "POST",
@@ -138,6 +141,9 @@ export default async function handler(req, res) {
   });
   if (!insRes.ok) {
     const t = await insRes.text();
+    if (stripeRefundId && (insRes.status === 409 || t.includes("23505"))) {
+      return res.status(200).json({ ok: true, refunded: refundAmount, stripe_refund_id: stripeRefundId, card: isCard });
+    }
     // The Stripe refund may have succeeded even though the ledger write failed.
     return res.status(500).json({
       error: `Refund was issued in Stripe${stripeRefundId ? ` (${stripeRefundId})` : ""} but the ledger update failed: ${t}. Record a manual adjustment.`,
