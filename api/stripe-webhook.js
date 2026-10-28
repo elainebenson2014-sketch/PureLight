@@ -8,12 +8,19 @@
       landing page to real access — no account needed beforehand.
    2) Normal in-app payment (tuition / certificate class): records a payment in
       pl_ledger so the student's balance updates, same as before.
+   Also: store purchases, refunds (charge.refunded), and disputes
+   (charge.dispute.created / charge.dispute.closed). Every event is logged in pl_payment_events.
+
+   In Stripe → Developers → Webhooks, the endpoint must send these events:
+     checkout.session.completed, charge.refunded, charge.dispute.created, charge.dispute.closed
 
    Vercel env vars required:
      STRIPE_WEBHOOK_SECRET        (whsec_... from the webhook you create in Stripe)
      SUPABASE_URL
      SUPABASE_SERVICE_ROLE_KEY
+     STRIPE_SECRET_KEY            (to look up refunds and disputes)
    Optional:
+     ADMIN_ALERT_EMAIL            (office alert addresses, comma-separated)
      RESEND_API_KEY, EMAIL_FROM   (for receipt + welcome emails)
      APP_URL                      (the LMS URL used in the set-password link; default https://thehealedplace.org)
      VITE_SCHOOL_NAME             (school name shown in emails)
@@ -40,102 +47,266 @@ export default async function handler(req, res) {
   if (!secret) { console.error("stripe-webhook: STRIPE_WEBHOOK_SECRET is not set"); res.status(500).send("Webhook secret not configured"); return; }
   if (!supaUrl || !serviceKey) { console.error("stripe-webhook: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set"); res.status(500).send("Database credentials not configured"); return; }
 
+  let event;
   try {
     const sig = req.headers["stripe-signature"] || "";
     const buf = await rawBody(req);
-
     const parts = Object.fromEntries(sig.split(",").map((kv) => kv.split("=")));
     const signedPayload = `${parts.t}.${buf.toString("utf8")}`;
     const expected = crypto.createHmac("sha256", secret).update(signedPayload).digest("hex");
-
     let ok = false;
     try { ok = !!parts.v1 && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(parts.v1)); } catch { ok = false; }
-    if (!ok) { console.error("stripe-webhook: invalid signature"); res.status(400).send("Invalid signature"); return; }
+    // Reject stale signatures (older than 5 minutes) so a captured request can't be replayed later.
+    const age = Math.abs(Date.now() / 1000 - Number(parts.t || 0));
+    if (!ok || !(age < 300)) { console.error("stripe-webhook: invalid or stale signature"); res.status(400).send("Invalid signature"); return; }
+    event = JSON.parse(buf.toString("utf8"));
+  } catch (e) {
+    console.error("stripe-webhook: could not read event", e);
+    res.status(400).send("Bad request");
+    return;
+  }
 
-    const event = JSON.parse(buf.toString("utf8"));
+  const log = eventLog(supaUrl, serviceKey, event);
+  const first = await log.start();
+  if (first === "already_processed") { res.status(200).json({ received: true, duplicate_event: event.id }); return; }
 
-    if (event.type !== "checkout.session.completed") {
-      res.status(200).json({ received: true, ignored: event.type });
-      return;
-    }
+  try {
+    let out;
+    if (event.type === "checkout.session.completed") out = await handleCheckout({ supaUrl, serviceKey, s: event.data.object || {} });
+    else if (event.type === "charge.refunded") out = await handleRefund({ supaUrl, serviceKey, charge: event.data.object || {} });
+    else if (event.type === "charge.dispute.created") out = await handleDispute({ supaUrl, serviceKey, dispute: event.data.object || {}, opened: true });
+    else if (event.type === "charge.dispute.closed") out = await handleDispute({ supaUrl, serviceKey, dispute: event.data.object || {}, opened: false });
+    else out = { code: 200, body: { received: true, ignored: event.type }, status: "ignored" };
 
-    const s = event.data.object || {};
-    const md = s.metadata || {};
-    const amount = (s.amount_total || 0) / 100;
-    const sessionId = s.id || null;
-    const sessionEmail = s.customer_details?.email || s.customer_email || null;
-
-    if (s.payment_status && s.payment_status !== "paid") {
-      res.status(200).json({ received: true, ignored: `payment_status=${s.payment_status}` });
-      return;
-    }
-
-    // -------- PATH 1: PAY-FIRST REGISTRATION --------
-    if (md.signup === "1") {
-      try {
-        const result = await provisionSignup({ supaUrl, serviceKey, md, amount, sessionId, sessionEmail });
-        console.log("stripe-webhook: signup provisioned", { sessionId, result });
-        res.status(200).json({ received: true, signup: result });
-      } catch (e) {
-        console.error("stripe-webhook: signup provisioning failed", e);
-        res.status(500).send("Signup provisioning failed: " + (e.message || e));
-      }
-      return;
-    }
-
-    // -------- PATH 1b: STORE PURCHASE --------
-    if (md.store === "1") {
-      try {
-        const result = await recordStoreOrder({ supaUrl, serviceKey, s, md, amount, sessionId, sessionEmail });
-        console.log("stripe-webhook: store order", { sessionId, result });
-        res.status(200).json({ received: true, store: result });
-      } catch (e) {
-        console.error("stripe-webhook: store order failed", e);
-        res.status(500).send("Store order failed: " + (e.message || e));
-      }
-      return;
-    }
-
-    // -------- PATH 2: NORMAL IN-APP PAYMENT --------
-    let row = null;
-    if (md.tuition_level && md.student_id) {
-      row = { student_id: md.student_id, kind: "payment", description: md.description || `${md.tuition_level} tuition`, amount, method: "card", plan: md.plan || null, recorded_by: md.student_id };
-    } else if (md.course_id && md.student_id) {
-      row = { student_id: md.student_id, course_id: md.course_id, kind: "payment", description: md.title ? `Certificate class: ${md.title}` : "Certificate class payment", amount, method: "card", plan: md.plan || null, recorded_by: md.student_id };
-    }
-
-    if (!row) {
-      console.error("stripe-webhook: no usable metadata on session", sessionId, md);
-      res.status(200).json({ received: true, ignored: "missing metadata" });
-      return;
-    }
-
-    if (sessionId) row.stripe_session_id = sessionId;
-    row.date = new Date().toISOString().slice(0, 10);
-
-    const r = await fetch(`${supaUrl}/rest/v1/pl_ledger`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, Prefer: "return=minimal" },
-      body: JSON.stringify(row),
-    });
-
-    if (!r.ok) {
-      const text = await r.text();
-      if (r.status === 409 || text.includes("23505")) { res.status(200).json({ received: true, duplicate: sessionId }); return; }
-      console.error("stripe-webhook: ledger insert failed", r.status, text, row);
-      res.status(500).send(`Ledger insert failed: ${r.status} ${text}`);
-      return;
-    }
-
-    console.log("stripe-webhook: posted payment", { sessionId, student: md.student_id, amount });
-    try { await sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail }); }
-    catch (e) { console.error("stripe-webhook: receipt email failed (non-fatal)", e); }
-
-    res.status(200).json({ received: true, posted: amount });
+    await log.finish(out.status || (out.code < 300 ? "processed" : "failed"), out.note || null, out.error || null, out.meta || {});
+    res.status(out.code).json(out.body);
   } catch (e) {
     console.error("stripe-webhook: unhandled error", e);
-    res.status(500).send(String(e.message || e));
+    await log.finish("failed", null, String(e.message || e), {});
+    res.status(500).send(String(e.message || e)); // Stripe retries failed deliveries automatically
   }
+}
+
+/* ---------------- PAYMENT EVENT LOG ----------------
+   Every Stripe event is saved in pl_payment_events. A retried event that already
+   processed is skipped; a failed one is processed again on Stripe's retry. */
+function eventLog(supaUrl, serviceKey, event) {
+  const h = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" };
+  const url = `${supaUrl}/rest/v1/pl_payment_events`;
+  const id = encodeURIComponent(event.id || "");
+  const obj = event.data?.object || {};
+  return {
+    async start() {
+      try {
+        const r = await fetch(`${url}?stripe_event_id=eq.${id}&select=status`, { headers: h }).then((x) => x.json());
+        if (Array.isArray(r) && r[0]) return ["processed", "ignored"].includes(r[0].status) ? "already_processed" : "retry";
+        await fetch(url, { method: "POST", headers: { ...h, Prefer: "return=minimal,resolution=ignore-duplicates" }, body: JSON.stringify({
+          stripe_event_id: event.id, type: event.type || "unknown", status: "received",
+          session_id: obj.object === "checkout.session" ? obj.id : null,
+          payment_intent: typeof obj.payment_intent === "string" ? obj.payment_intent : null,
+          amount: obj.amount_total != null ? obj.amount_total / 100 : obj.amount != null ? obj.amount / 100 : null,
+          payload: event,
+        }) });
+      } catch (e) { console.error("event log start failed (non-fatal)", e); }
+      return "new";
+    },
+    async finish(status, note, error, meta) {
+      try {
+        await fetch(`${url}?stripe_event_id=eq.${id}`, { method: "PATCH", headers: { ...h, Prefer: "return=minimal" }, body: JSON.stringify({
+          status, note, error, processed_at: new Date().toISOString(), ...(meta || {}),
+        }) });
+      } catch (e) { console.error("event log finish failed (non-fatal)", e); }
+    },
+  };
+}
+
+/* ---------------- CHECKOUT COMPLETED ---------------- */
+async function handleCheckout({ supaUrl, serviceKey, s }) {
+  const md = s.metadata || {};
+  const amount = (s.amount_total || 0) / 100;
+  const sessionId = s.id || null;
+  const sessionEmail = s.customer_details?.email || s.customer_email || null;
+  const meta = { session_id: sessionId, payment_intent: typeof s.payment_intent === "string" ? s.payment_intent : null, amount };
+
+  if (s.payment_status && s.payment_status !== "paid") {
+    return { code: 200, body: { received: true, ignored: `payment_status=${s.payment_status}` }, status: "ignored", note: `payment_status=${s.payment_status}`, meta };
+  }
+
+  // PATH 1: pay-first registration
+  if (md.signup === "1") {
+    const result = await provisionSignup({ supaUrl, serviceKey, md, amount, sessionId, sessionEmail });
+    console.log("stripe-webhook: signup provisioned", { sessionId, result });
+    return { code: 200, body: { received: true, signup: result }, note: `signup ${typeof result === "string" ? result : result.email}`, meta };
+  }
+
+  // PATH 1b: store purchase
+  if (md.store === "1") {
+    const result = await recordStoreOrder({ supaUrl, serviceKey, s, md, amount, sessionId, sessionEmail });
+    console.log("stripe-webhook: store order", { sessionId, result });
+    return { code: 200, body: { received: true, store: result }, note: `store ${typeof result === "string" ? result : result.title}`, meta };
+  }
+
+  // PATH 2: normal in-app payment
+  let row = null;
+  if (md.tuition_level && md.student_id) {
+    row = { student_id: md.student_id, kind: "payment", description: md.description || `${md.tuition_level} tuition`, amount, method: "card", plan: md.plan || null, recorded_by: md.student_id };
+  } else if (md.course_id && md.student_id) {
+    row = { student_id: md.student_id, course_id: md.course_id, kind: "payment", description: md.title ? `Certificate class: ${md.title}` : "Certificate class payment", amount, method: "card", plan: md.plan || null, recorded_by: md.student_id };
+  }
+  if (!row) {
+    console.error("stripe-webhook: no usable metadata on session", sessionId, md);
+    return { code: 200, body: { received: true, ignored: "missing metadata" }, status: "ignored", note: "no LMS metadata on this payment", meta };
+  }
+
+  if (sessionId) row.stripe_session_id = sessionId;
+  row.date = new Date().toISOString().slice(0, 10);
+  const r = await fetch(`${supaUrl}/rest/v1/pl_ledger`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, Prefer: "return=minimal" },
+    body: JSON.stringify(row),
+  });
+  if (!r.ok) {
+    const text = await r.text();
+    if (r.status === 409 || text.includes("23505")) return { code: 200, body: { received: true, duplicate: sessionId }, note: "already recorded", meta };
+    console.error("stripe-webhook: ledger insert failed", r.status, text, row);
+    return { code: 500, body: { error: "Ledger insert failed" }, error: `ledger insert failed: ${r.status} ${text}`, meta };
+  }
+
+  console.log("stripe-webhook: posted payment", { sessionId, student: md.student_id, amount });
+  try { await sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail }); }
+  catch (e) { console.error("stripe-webhook: receipt email failed (non-fatal)", e); }
+  return { code: 200, body: { received: true, posted: amount }, note: `payment ${amount}`, meta };
+}
+
+/* ---------------- REFUNDS ----------------
+   Fires for refunds made anywhere: the LMS Refund button OR the Stripe dashboard.
+   Each refund is written to the ledger once (unique stripe_refund_id), and a fully
+   refunded store order is marked refunded, which locks its download. */
+async function stripeGet(path) {
+  const r = await fetch(`https://api.stripe.com/v1/${path}`, { headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` } });
+  const j = await r.json();
+  if (!r.ok) throw new Error(`Stripe ${path}: ${j.error?.message || r.status}`);
+  return j;
+}
+function rest(supaUrl, serviceKey) {
+  return (path, opts = {}) => fetch(`${supaUrl}/rest/v1/${path}`, {
+    ...opts, headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", ...(opts.headers || {}) },
+  });
+}
+async function findSession(pi) {
+  if (!pi) return null;
+  const list = await stripeGet(`checkout/sessions?payment_intent=${encodeURIComponent(pi)}&limit=1`);
+  return (list.data || [])[0] || null;
+}
+
+async function handleRefund({ supaUrl, serviceKey, charge }) {
+  const db = rest(supaUrl, serviceKey);
+  const pi = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
+  const meta = { payment_intent: pi || null, amount: (charge.amount_refunded || 0) / 100 };
+  if (!process.env.STRIPE_SECRET_KEY) return { code: 500, body: { error: "STRIPE_SECRET_KEY not set" }, error: "STRIPE_SECRET_KEY not set", meta };
+
+  const session = await findSession(pi);
+  if (!session) return { code: 200, body: { received: true, ignored: "refund not from an LMS checkout" }, status: "ignored", note: "no checkout session for this charge", meta };
+  meta.session_id = session.id;
+  const sid = encodeURIComponent(session.id);
+  const fullyRefunded = (charge.amount_refunded || 0) >= (charge.amount || 0);
+
+  const pays = await db(`pl_ledger?stripe_session_id=eq.${sid}&kind=eq.payment&select=student_id,course_id,description`).then((r) => r.json()).catch(() => []);
+  const pay = Array.isArray(pays) ? pays[0] : null;
+  const orders = await db(`pl_store_orders?stripe_session_id=eq.${sid}&select=id,title,kind,status,student_id`).then((r) => r.ok ? r.json() : []).catch(() => []);
+  const order = Array.isArray(orders) ? orders[0] : null;
+
+  const refunds = await stripeGet(`refunds?payment_intent=${encodeURIComponent(pi)}&limit=100`);
+  let posted = 0;
+  if (pay) {
+    for (const rf of refunds.data || []) {
+      if (rf.status !== "succeeded") continue;
+      const row = {
+        student_id: pay.student_id, kind: "payment", amount: -Math.abs(rf.amount / 100), method: "card-refund",
+        description: `Refund of ${pay.description || "payment"} (Stripe ${rf.id})`, date: new Date().toISOString().slice(0, 10), stripe_refund_id: rf.id,
+      };
+      if (pay.course_id) row.course_id = pay.course_id;
+      const r = await db(`pl_ledger`, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(row) });
+      if (r.ok) posted++;
+      else { const t = await r.text(); if (!(r.status === 409 || t.includes("23505"))) throw new Error(`refund ledger insert failed: ${r.status} ${t}`); }
+    }
+  }
+  if (order && fullyRefunded && order.status !== "refunded") {
+    await db(`pl_store_orders?id=eq.${order.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "refunded" }) });
+  }
+  if (posted || (order && fullyRefunded)) {
+    try {
+      await sendOfficeNote(`Refund recorded: ${money(charge.amount_refunded / 100)}`,
+        `<p>A refund of <b>${money(charge.amount_refunded / 100)}</b>${fullyRefunded ? " (full)" : " (partial)"} went through in Stripe and the LMS has been updated.</p>
+         <p><b>For:</b> ${esc(order?.title || pay?.description || "payment")}</p>
+         ${order?.kind === "digital" && fullyRefunded ? "<p>The download is now locked for this buyer.</p>" : ""}
+         ${(order?.kind === "course" || pay?.course_id) && fullyRefunded ? "<p>The student is still enrolled in the class. Remove the enrollment in Cert Classes if they should lose access.</p>" : ""}
+         ${order?.kind === "physical" && order.status !== "shipped" ? "<p>This item had not shipped yet. Don't ship it.</p>" : ""}`);
+    } catch (e) { console.error("refund office note failed (non-fatal)", e); }
+  }
+  return { code: 200, body: { received: true, refunds_posted: posted }, note: `refund: ${posted} ledger row(s)${order && fullyRefunded ? ", order refunded" : ""}`, meta };
+}
+
+/* ---------------- DISPUTES (chargebacks) ----------------
+   Opened: lock the store order and alert the office with the evidence deadline.
+   Closed: won -> unlock; lost -> record the loss on the ledger and mark refunded. */
+async function handleDispute({ supaUrl, serviceKey, dispute, opened }) {
+  const db = rest(supaUrl, serviceKey);
+  const pi = typeof dispute.payment_intent === "string" ? dispute.payment_intent : dispute.payment_intent?.id;
+  const amt = (dispute.amount || 0) / 100;
+  const meta = { payment_intent: pi || null, amount: amt };
+  const session = process.env.STRIPE_SECRET_KEY ? await findSession(pi).catch(() => null) : null;
+  if (session) meta.session_id = session.id;
+  const sid = session ? encodeURIComponent(session.id) : null;
+  const orders = sid ? await db(`pl_store_orders?stripe_session_id=eq.${sid}&select=id,title,status`).then((r) => r.ok ? r.json() : []).catch(() => []) : [];
+  const order = Array.isArray(orders) ? orders[0] : null;
+  const pays = sid ? await db(`pl_ledger?stripe_session_id=eq.${sid}&kind=eq.payment&select=student_id,course_id,description`).then((r) => r.json()).catch(() => []) : [];
+  const pay = Array.isArray(pays) ? pays[0] : null;
+  const what = esc(order?.title || pay?.description || session?.metadata?.title || "a payment");
+
+  if (opened) {
+    if (order && order.status !== "refunded") await db(`pl_store_orders?id=eq.${order.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "disputed" }) });
+    const due = dispute.evidence_details?.due_by ? new Date(dispute.evidence_details.due_by * 1000).toLocaleDateString("en-US", { dateStyle: "full" }) : "soon";
+    await sendOfficeNote(`URGENT: payment disputed (${money(amt)})`,
+      `<p>A customer's bank has disputed <b>${money(amt)}</b> for <b>${what}</b>. Reason given: <b>${esc(dispute.reason || "not given")}</b>.</p>
+       <p><b>Respond in Stripe by ${esc(due)}</b> (Payments → Disputes). Upload proof: the receipt, enrollment or download records, and any messages with the student. If you don't respond, the dispute is lost automatically.</p>
+       ${order ? "<p>The store order is locked while the dispute is open.</p>" : ""}`).catch((e) => console.error("dispute alert failed", e));
+    return { code: 200, body: { received: true, dispute: "opened" }, note: `dispute opened (${dispute.reason || "?"})`, meta };
+  }
+
+  const won = dispute.status === "won";
+  if (won) {
+    if (order && order.status === "disputed") await db(`pl_store_orders?id=eq.${order.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "paid" }) });
+  } else {
+    if (order) await db(`pl_store_orders?id=eq.${order.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "refunded" }) });
+    if (pay) {
+      const row = { student_id: pay.student_id, kind: "payment", amount: -Math.abs(amt), method: "card-refund", description: `Chargeback lost: ${pay.description || "payment"} (Stripe ${dispute.id})`, date: new Date().toISOString().slice(0, 10), stripe_refund_id: dispute.id };
+      if (pay.course_id) row.course_id = pay.course_id;
+      const r = await db(`pl_ledger`, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(row) });
+      if (!r.ok) { const t = await r.text(); if (!(r.status === 409 || t.includes("23505"))) throw new Error(`dispute ledger insert failed: ${r.status} ${t}`); }
+    }
+  }
+  await sendOfficeNote(`Dispute ${won ? "WON" : "closed"}: ${money(amt)}`,
+    `<p>The dispute for <b>${what}</b> (${money(amt)}) is closed: <b>${esc(dispute.status)}</b>.</p>
+     <p>${won ? "The money stays with the ministry and the order is unlocked." : "The money was returned to the customer. The LMS ledger has been updated."}</p>`).catch((e) => console.error("dispute close note failed", e));
+  return { code: 200, body: { received: true, dispute: dispute.status }, note: `dispute closed: ${dispute.status}`, meta };
+}
+
+/* Small helpers shared by the office notes. */
+function esc(t) { return String(t ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
+function money(n) { return "$" + (Number(n) || 0).toFixed(2); }
+async function sendOfficeNote(subject, bodyHtml) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) return;
+  const to = (process.env.ADMIN_ALERT_EMAIL || "admin@nctspurelight.com, elainethomasbenson@yahoo.com").split(",").map((x) => x.trim()).filter(Boolean);
+  if (!to.length) return;
+  const from = process.env.EMAIL_FROM || "The Healed Place <onboarding@resend.dev>";
+  const school = process.env.VITE_SCHOOL_NAME || "YonaLearn";
+  const html = `<!doctype html><html><body style="margin:0;padding:24px;background:#F5F0E8;font-family:Georgia,serif;color:#1a1a1a;">
+    <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;">
+      <div style="background:#1B3A6B;padding:18px 24px;text-align:center;color:#C5922E;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:2px;">${esc(school).toUpperCase()}</div>
+      <div style="padding:24px;font-size:14px;line-height:1.6;">${bodyHtml}</div></div></body></html>`;
+  await sendResend(apiKey, "office note", { from, to, subject: `[${school}] ${subject}`, html });
 }
 
 /* ---------------- STORE ORDERS ---------------- */
