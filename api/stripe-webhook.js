@@ -83,6 +83,19 @@ export default async function handler(req, res) {
       return;
     }
 
+    // -------- PATH 1b: STORE PURCHASE --------
+    if (md.store === "1") {
+      try {
+        const result = await recordStoreOrder({ supaUrl, serviceKey, s, md, amount, sessionId, sessionEmail });
+        console.log("stripe-webhook: store order", { sessionId, result });
+        res.status(200).json({ received: true, store: result });
+      } catch (e) {
+        console.error("stripe-webhook: store order failed", e);
+        res.status(500).send("Store order failed: " + (e.message || e));
+      }
+      return;
+    }
+
     // -------- PATH 2: NORMAL IN-APP PAYMENT --------
     let row = null;
     if (md.tuition_level && md.student_id) {
@@ -122,6 +135,79 @@ export default async function handler(req, res) {
   } catch (e) {
     console.error("stripe-webhook: unhandled error", e);
     res.status(500).send(String(e.message || e));
+  }
+}
+
+/* ---------------- STORE ORDERS ---------------- */
+async function recordStoreOrder({ supaUrl, serviceKey, s, md, amount, sessionId, sessionEmail }) {
+  const rest = (path, opts = {}) => fetch(`${supaUrl}/rest/v1/${path}`, {
+    ...opts, headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", ...(opts.headers || {}) },
+  });
+  if (!md.student_id || !md.product_id) throw new Error("store session missing student/product");
+
+  const prows = await rest(`pl_store_products?id=eq.${encodeURIComponent(md.product_id)}&select=id,title,kind,course_id`).then((r) => r.json()).catch(() => null);
+  const p = Array.isArray(prows) ? prows[0] : null;
+  const kind = p?.kind || md.kind || "digital";
+  const title = p?.title || md.title || "Store item";
+  const sd = s.collected_information?.shipping_details || s.shipping_details || null;
+  const shipping = sd ? { name: sd.name || null, address: sd.address || null } : null;
+
+  // 1) The order (unique on stripe_session_id, so a Stripe retry never doubles it).
+  const ins = await rest(`pl_store_orders`, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
+    student_id: md.student_id, product_id: md.product_id, title, kind, quantity: Number(md.quantity) || 1, amount,
+    status: "paid", shipping, stripe_session_id: sessionId,
+  }) });
+  if (!ins.ok) {
+    const t = await ins.text();
+    if (ins.status === 409 || t.includes("23505")) return "duplicate";
+    throw new Error(`order insert failed: ${ins.status} ${t}`);
+  }
+
+  // 2) Course purchases: enroll the student and record the payment on that class.
+  if (kind === "course" && p?.course_id) {
+    await rest(`pl_cert_enrollments`, { method: "POST", headers: { Prefer: "return=minimal,resolution=ignore-duplicates" }, body: JSON.stringify({ student_id: md.student_id, course_id: p.course_id }) }).catch(() => {});
+    const led = await rest(`pl_ledger`, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ student_id: md.student_id, course_id: p.course_id, kind: "payment", description: `Store: ${title}`, amount, method: "card", date: new Date().toISOString().slice(0, 10), stripe_session_id: sessionId, recorded_by: md.student_id }) });
+    if (!led.ok) { const t = await led.text(); if (!(led.status === 409 || t.includes("23505"))) console.error("store ledger insert failed", led.status, t); }
+  }
+
+  // 3) Emails: buyer receipt + office alert (both non-fatal).
+  let name = "Student", acctEmail = null;
+  try {
+    const rows = await rest(`pl_profiles?id=eq.${encodeURIComponent(md.student_id)}&select=full_name,email`).then((r) => r.json());
+    if (Array.isArray(rows) && rows[0]) { name = rows[0].full_name || name; acctEmail = rows[0].email || null; }
+  } catch (e) { /* defaults */ }
+  try { await sendStoreEmails({ name, to: [...new Set([acctEmail, sessionEmail].filter(Boolean))], title, kind, quantity: Number(md.quantity) || 1, amount, shipping }); }
+  catch (e) { console.error("store emails failed (non-fatal)", e); }
+  return { title, kind };
+}
+
+async function sendStoreEmails({ name, to, title, kind, quantity, amount, shipping }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) return;
+  const from = process.env.EMAIL_FROM || "The Healed Place <onboarding@resend.dev>";
+  const school = process.env.VITE_SCHOOL_NAME || "The Healed Place";
+  const appUrl = process.env.APP_URL || "https://thehealedplace.org";
+  const esc = (t) => String(t ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  const money = (n) => "$" + (Number(n) || 0).toFixed(2);
+  const a = shipping?.address || null;
+  const addr = a ? [shipping.name, a.line1, a.line2, `${a.city || ""}, ${a.state || ""} ${a.postal_code || ""}`].filter(Boolean).map(esc).join("<br>") : "";
+  const next = kind === "digital" ? "Your download is ready now. Sign in and open <b>Store → My purchases</b>."
+    : kind === "course" ? "You're enrolled. Sign in and the class will be in your portal."
+    : "We'll ship your order soon and let you know when it's on the way.";
+  const shell = (body) => `<!doctype html><html><body style="margin:0;padding:24px;background:#F5F0E8;font-family:Georgia,serif;color:#1a1a1a;">
+    <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;">
+      <div style="background:#1B3A6B;padding:18px 24px;text-align:center;color:#C5922E;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:2px;">${esc(school).toUpperCase()}</div>
+      <div style="padding:24px;font-size:14px;line-height:1.6;">${body}</div></div></body></html>`;
+  const detail = `<p><b>Item:</b> ${esc(title)}${quantity > 1 ? ` × ${quantity}` : ""}<br><b>Paid:</b> ${money(amount)}</p>${addr ? `<p><b>Ship to:</b><br>${addr}</p>` : ""}`;
+
+  if (to.length) {
+    await sendResend(apiKey, "store receipt", { from, to, subject: `Your order: ${title}`, html: shell(
+      `<h1 style="font-size:20px;color:#1B3A6B;margin:0 0 8px;">Thank you, ${esc(name)}!</h1>${detail}<p>${next}</p><p><a href="${appUrl}" style="color:#1B3A6B;">${esc(appUrl)}</a></p>`) });
+  }
+  const office = (process.env.ADMIN_ALERT_EMAIL || "admin@nctspurelight.com, elainethomasbenson@yahoo.com").split(",").map((x) => x.trim()).filter(Boolean);
+  if (office.length) {
+    await sendResend(apiKey, "store office alert", { from, to: office, subject: `Store order: ${title} (${money(amount)})${kind === "physical" ? " — needs shipping" : ""}`, html: shell(
+      `<h1 style="font-size:19px;color:#1B3A6B;margin:0 0 8px;">New store order</h1><p><b>Buyer:</b> ${esc(name)} (${esc(to[0] || "")})</p>${detail}${kind === "physical" ? "<p>Mark it shipped in <b>Store → Orders</b> once it's mailed.</p>" : ""}`) });
   }
 }
 
