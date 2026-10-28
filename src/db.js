@@ -994,3 +994,54 @@ export async function deleteHwDraft(homework_id) {
   await supabase.from("pl_homework_drafts").delete()
     .eq("homework_id", homework_id).eq("student_id", user.id);
 }
+
+/* ---------------- STORE ---------------- */
+export async function listStoreProducts() {
+  const { data, error } = await supabase.from("pl_store_products").select("*").order("sort_order").order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+export async function saveStoreProduct(product, imageFile, downloadFile) {
+  const row = { ...product };
+  if (imageFile) row.image_path = await uploadFile("store-images", imageFile);
+  if (downloadFile) row.file_path = await uploadFile("store-files", downloadFile);
+  row.price = Number(row.price) || 0;
+  row.shipping_fee = Number(row.shipping_fee) || 0;
+  if (!row.course_id) row.course_id = null;
+  if (row.id) {
+    const { id, created_at, created_by, ...patch } = row;
+    const { data, error } = await supabase.from("pl_store_products").update(patch).eq("id", id).select("id");
+    if (error) throw error;
+    if (!data || !data.length) throw new Error("Save was blocked. Only admins can edit the store.");
+    return;
+  }
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_store_products").insert({ ...row, created_by: user?.id || null });
+  if (error) throw error;
+}
+export async function deleteStoreProduct(id) {
+  const { error } = await supabase.from("pl_store_products").delete().eq("id", id);
+  if (error) throw error;
+}
+export async function listStoreOrders(student_id) {
+  let q = supabase.from("pl_store_orders").select("*, product:pl_store_products(file_path, image_path, course_id), student:pl_profiles(full_name, email)").order("created_at", { ascending: false });
+  if (student_id) q = q.eq("student_id", student_id);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}
+export async function markOrderShipped(id, shipped = true) {
+  const { error } = await supabase.from("pl_store_orders").update({ status: shipped ? "shipped" : "paid", fulfilled_at: shipped ? new Date().toISOString() : null }).eq("id", id);
+  if (error) throw error;
+}
+export async function startStoreCheckout(product_id, quantity) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const r = await fetch("/api/create-checkout-session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ product_id, quantity: quantity || 1, student_id: user.id, student_email: user.email, origin: window.location.origin }),
+  });
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
+  return j.url;
+}
