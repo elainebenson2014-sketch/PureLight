@@ -56,17 +56,20 @@ export default async function handler(req, res) {
     const days = prior.length ? DAYS : FIRST_RUN_DAYS;
     const since = Math.floor(Date.now() / 1000) - days * 86400;
     // Several schools may share one Stripe account: only check this school's payments.
-    const hosts = new Set([req.headers["x-forwarded-host"], req.headers.host, process.env.VERCEL_PROJECT_PRODUCTION_URL, process.env.APP_URL, ...(process.env.SCHOOL_HOSTS || "").split(",")]
+    const hosts = new Set([req.headers["x-forwarded-host"], req.headers.host, process.env.VERCEL_PROJECT_PRODUCTION_URL, process.env.VERCEL_URL, process.env.APP_URL, ...(process.env.SCHOOL_HOSTS || "").split(",")]
       .filter(Boolean).map((h) => hostOf(/^https?:/.test(h.trim()) ? h.trim() : `https://${h.trim()}`)).filter(Boolean));
     const seen = new Map();
     const mine = async (s) => {
       const md = s.metadata || {};
       const key = md.student_id ? `s:${md.student_id}` : md.reg_course_id ? `c:${md.reg_course_id}` : null;
+      // Same rule as the webhook: the web address the checkout started on decides first.
+      const h = hostOf(s.success_url || "");
+      if (h && hosts.has(h)) return true;
+      if (h && !h.endsWith(".vercel.app")) return false;
       if (key && seen.has(key)) return seen.get(key);
-      let ok;
+      let ok = false;
       if (md.student_id) ok = (await db(`pl_profiles?id=eq.${encodeURIComponent(md.student_id)}&select=id`)).length > 0;
       else if (md.reg_course_id) ok = (await db(`pl_courses?id=eq.${encodeURIComponent(md.reg_course_id)}&select=id`)).length > 0;
-      else ok = hosts.has(hostOf(s.success_url || ""));
       if (key) seen.set(key, ok);
       return ok;
     };
