@@ -1045,3 +1045,12 @@ export async function startStoreCheckout(product_id, quantity) {
   if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
   return j.url;
 }
+
+/* ---------------- PAYMENT LOG (admin) ---------------- */
+export async function listPaymentEvents(limit = 200) {
+  const { data, error } = await supabase.from("pl_payment_events")
+    .select("id, type, status, amount, note, error, created_at, payload->summary, payload->problems")
+    .order("created_at", { ascending: false }).limit(limit);
+  if (error) throw error;
+  return (data || []).map((r) => ({ ...r, payload: { summary: r.summary, problems: r.problems } }));
+}
