@@ -4,6 +4,7 @@ import {
   ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
   ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal, Receipt, BarChart3, LayoutGrid,
   Reply, FileCheck, BarChart2, Star, MessageSquare, ClipboardList, ToggleLeft, ToggleRight, CornerDownRight, ThumbsUp, RotateCcw,
+  ShoppingBag, Truck, Download,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
@@ -988,6 +989,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "resources",   label: "Resources",    icon: BookOpen,        show: true },
     { key: "announce",    label: "Announcements",icon: Sparkles,        show: true },
     { key: "messages",    label: "Messages",     icon: Mail,            show: FEATURES.messages },
+    { key: "store",       label: "Store",        icon: ShoppingBag,     show: FEATURES.store && (profile.role === "admin" || profile.role === "assistant") },
   ].filter((n) => n.show);
   // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
   let nav = fullNav;
@@ -1031,6 +1033,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "resources" && <ResourcesManager resources={resources} refresh={refresh} />}
           {active === "announce" && <AnnouncementsManager announcements={announcements} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
+          {active === "store" && FEATURES.store && (profile.role === "admin" || profile.role === "assistant") && <StoreManager courses={courses.filter((c) => c.is_certificate)} />}
         </>
       )}
     </Shell>
@@ -1970,6 +1973,11 @@ function StudentPortal({ profile, onLogout }) {
       const t = setTimeout(() => refresh(), 2500);
       return () => clearTimeout(t);
     }
+    if (p.get("store_paid") && FEATURES.store) {
+      window.history.replaceState({}, "", window.location.pathname);
+      setActive("store");
+      window.alert("Thank you for your order! It will appear under My purchases in a moment.");
+    }
   }, [refresh]);
 
   const prog = profile.program;
@@ -2025,6 +2033,7 @@ function StudentPortal({ profile, onLogout }) {
     { key: "surveys",     label: "Surveys",     icon: BarChart2,       show: true },
     { key: "resources",   label: "Resources",   icon: BookOpen,        show: true },
     { key: "inbox",       label: "Inbox",       icon: Mail,            show: FEATURES.messages },
+    { key: "store",       label: "Store",       icon: ShoppingBag,     show: FEATURES.store },
   ].filter((n) => n.show);
 
   return (
@@ -2049,6 +2058,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "surveys" && <StudentSurveys surveys={surveys} mySurveyResps={mySurveyResps} profile={profile} refresh={refresh} />}
           {active === "resources" && <StudentResources resources={resources} profile={profile} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
+          {active === "store" && FEATURES.store && <StudentStore profile={profile} />}
         </>
       )}
     </Shell>
@@ -6731,6 +6741,241 @@ function AnnouncementsManager({ announcements, refresh }) {
           </Card>
         ))}
       </div>
+    </>
+  );
+}
+
+
+/* ================= STORE ================= */
+const STORE_KINDS = [
+  { key: "digital",  label: "Digital download" },
+  { key: "physical", label: "Physical item (shipped)" },
+  { key: "course",   label: "Course (enrolls the buyer)" },
+];
+const kindLabel = (k) => (STORE_KINDS.find((x) => x.key === k) || {}).label || k;
+
+function StoreImage({ path, height = 160 }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => { let on = true; if (path) db.signedUrl(path).then((u) => on && setUrl(u)).catch(() => {}); return () => { on = false; }; }, [path]);
+  return (
+    <div style={{ height, borderRadius: 10, background: C.paper, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", marginBottom: 12 }}>
+      {url ? <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ShoppingBag size={36} color={C.muted} />}
+    </div>
+  );
+}
+
+function FilePick({ label, file, accept, onPick }) {
+  return (
+    <Field label={label}>
+      <label className="flex items-center gap-2" style={{ ...inputStyle, padding: 8, cursor: "pointer" }}>
+        <Upload size={16} color={C.muted} />
+        <span className="pl-body" style={{ fontSize: 14, color: file ? C.text : C.muted }}>{file ? file.name : "Choose a file…"}</span>
+        <input type="file" accept={accept} style={{ display: "none" }} onChange={(e) => onPick(e.target.files[0] || null)} />
+      </label>
+    </Field>
+  );
+}
+
+function StoreManager({ courses }) {
+  const empty = { title: "", description: "", kind: "digital", price: "", shipping_fee: "", course_id: "", active: true, sort_order: 0 };
+  const [tab, setTab] = useState("products");
+  const [products, setProducts] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState(null);
+  const [img, setImg] = useState(null);
+  const [dl, setDl] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const [p, o] = await Promise.all([db.listStoreProducts(), db.listStoreOrders()]); setProducts(p); setOrders(o); }
+    catch (e) { window.alert(e.message || "Could not load the store."); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  function edit(p) { setImg(null); setDl(null); setForm(p ? { ...empty, ...p, course_id: p.course_id || "" } : empty); }
+  async function save() {
+    if (!form.title.trim()) { window.alert("Give the item a title."); return; }
+    if (!(Number(form.price) >= 0.5)) { window.alert("Enter a price of at least $0.50."); return; }
+    if (form.kind === "digital" && !dl && !form.file_path) { window.alert("Upload the file buyers will download."); return; }
+    if (form.kind === "course" && !form.course_id) { window.alert("Choose the class this purchase enrolls them in."); return; }
+    setBusy(true);
+    try {
+      const { product, student, ...row } = form;
+      await db.saveStoreProduct(row, img, form.kind === "digital" ? dl : null);
+      setForm(null); await load();
+    } catch (e) { window.alert(e.message || "Save failed"); }
+    setBusy(false);
+  }
+  async function remove(p) {
+    if (!window.confirm(`Delete "${p.title}"? Past orders are kept.`)) return;
+    try { await db.deleteStoreProduct(p.id); await load(); } catch (e) { window.alert(e.message); }
+  }
+  async function ship(o, yes) {
+    try { await db.markOrderShipped(o.id, yes); await load(); } catch (e) { window.alert(e.message); }
+  }
+
+  if (form) {
+    return (
+      <>
+        <PageHead title={form.id ? "Edit item" : "Add an item"} sub="Signed-in students can buy this from the Store." action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setForm(null)}>Back</Btn>} />
+        <Card style={{ maxWidth: 640 }}>
+          <Field label="Title"><input style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Fully Known Workbook" /></Field>
+          <Field label="Description"><textarea style={{ ...inputStyle, minHeight: 90 }} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+          <Field label="Type"><select style={inputStyle} value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>{STORE_KINDS.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}</select></Field>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Price ($)"><input style={inputStyle} type="number" min="0" step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} /></Field>
+            {form.kind === "physical"
+              ? <Field label="Shipping per order ($)"><input style={inputStyle} type="number" min="0" step="0.01" value={form.shipping_fee} onChange={(e) => setForm({ ...form, shipping_fee: e.target.value })} /></Field>
+              : <Field label="Display order (lower shows first)"><input style={inputStyle} type="number" value={form.sort_order} onChange={(e) => setForm({ ...form, sort_order: Number(e.target.value) || 0 })} /></Field>}
+          </div>
+          {form.kind === "course" && (
+            <Field label="Class this enrolls them in">
+              <select style={inputStyle} value={form.course_id} onChange={(e) => setForm({ ...form, course_id: e.target.value })}>
+                <option value="">Choose a class…</option>
+                {courses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+              </select>
+            </Field>
+          )}
+          <FilePick label={form.image_path ? "Replace picture (optional)" : "Picture (optional)"} file={img} accept="image/*" onPick={setImg} />
+          {form.kind === "digital" && <FilePick label={form.file_path ? "Replace download file (optional)" : "Download file (PDF, audio, video…)"} file={dl} accept="*/*" onPick={setDl} />}
+          <label className="flex items-center gap-2 pl-body" style={{ fontSize: 14, margin: "6px 0 14px", cursor: "pointer" }}>
+            <input type="checkbox" checked={!!form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} /> Show in the store
+          </label>
+          <div className="flex gap-2">
+            <Btn icon={Check} onClick={save} disabled={busy}>{busy ? "Saving…" : form.id ? "Save changes" : "Add to store"}</Btn>
+            <Btn kind="ghost" onClick={() => setForm(null)}>Cancel</Btn>
+          </div>
+        </Card>
+      </>
+    );
+  }
+
+  const toShip = orders.filter((o) => o.kind === "physical" && o.status === "paid").length;
+  return (
+    <>
+      <PageHead title="Store" sub="Sell downloads, physical items and classes to signed-in students." action={tab === "products" ? <Btn icon={Plus} onClick={() => edit(null)}>Add item</Btn> : null} />
+      <div className="flex gap-2" style={{ marginBottom: 18 }}>
+        <Btn small kind={tab === "products" ? "primary" : "ghost"} onClick={() => setTab("products")}>Items ({products.length})</Btn>
+        <Btn small kind={tab === "orders" ? "primary" : "ghost"} onClick={() => setTab("orders")}>Orders ({orders.length}){toShip ? ` · ${toShip} to ship` : ""}</Btn>
+      </div>
+      {loading ? <Spinner /> : tab === "products" ? (
+        products.length === 0 ? <Card><div className="pl-body" style={{ color: C.muted }}>No items yet. Click <b>Add item</b> to put your first product in the store.</div></Card> : (
+          <div className="grid grid-cols-3 gap-4">
+            {products.map((p) => (
+              <Card key={p.id}>
+                <StoreImage path={p.image_path} height={130} />
+                <div className="pl-body" style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: 1 }}>{kindLabel(p.kind)}{p.active ? "" : " · hidden"}</div>
+                <div className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: "4px 0" }}>{p.title}</div>
+                <div className="pl-body" style={{ fontSize: 15, fontWeight: 700 }}>{money(p.price)}{p.kind === "physical" && Number(p.shipping_fee) > 0 ? ` + ${money(p.shipping_fee)} shipping` : ""}</div>
+                <div className="flex gap-2" style={{ marginTop: 12 }}>
+                  <Btn small kind="ghost" icon={PencilLine} onClick={() => edit(p)}>Edit</Btn>
+                  <Btn small kind="ghost" icon={Trash2} onClick={() => remove(p)}>Delete</Btn>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )
+      ) : (
+        orders.length === 0 ? <Card><div className="pl-body" style={{ color: C.muted }}>No orders yet.</div></Card> : (
+          <Card>
+            {orders.map((o) => {
+              const a = o.shipping?.address;
+              return (
+                <div key={o.id} className="flex items-start justify-between gap-4" style={{ padding: "12px 0", borderBottom: `1px solid ${C.line || "#e5e0d6"}` }}>
+                  <div className="pl-body" style={{ fontSize: 14 }}>
+                    <div style={{ fontWeight: 700, color: C.ink }}>{o.title}{o.quantity > 1 ? ` × ${o.quantity}` : ""} · {money(o.amount)}</div>
+                    <div style={{ color: C.muted }}>{o.student?.full_name || "Student"} · {o.student?.email || ""} · {new Date(o.created_at).toLocaleDateString()}</div>
+                    {a && <div style={{ marginTop: 4 }}>Ship to: {[o.shipping.name, a.line1, a.line2, `${a.city || ""}, ${a.state || ""} ${a.postal_code || ""}`].filter(Boolean).join(", ")}</div>}
+                  </div>
+                  <div style={{ whiteSpace: "nowrap" }}>
+                    {o.kind !== "physical" ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{kindLabel(o.kind)} · delivered</span>
+                      : o.status === "shipped" ? <Btn small kind="ghost" icon={RotateCcw} onClick={() => ship(o, false)}>Shipped ✓ (undo)</Btn>
+                      : <Btn small icon={Truck} onClick={() => ship(o, true)}>Mark shipped</Btn>}
+                  </div>
+                </div>
+              );
+            })}
+          </Card>
+        )
+      )}
+    </>
+  );
+}
+
+function StudentStore({ profile }) {
+  const [tab, setTab] = useState("shop");
+  const [products, setProducts] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [qty, setQty] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { const [p, o] = await Promise.all([db.listStoreProducts(), db.listStoreOrders(profile.id)]); setProducts(p.filter((x) => x.active)); setOrders(o); }
+    catch (e) { /* store may be empty */ }
+    setLoading(false);
+  }, [profile.id]);
+  useEffect(() => { load(); const t = setTimeout(load, 3000); return () => clearTimeout(t); }, [load]);
+
+  async function buy(p) {
+    setBusyId(p.id);
+    try { window.location.href = await db.startStoreCheckout(p.id, qty[p.id] || 1); }
+    catch (e) { window.alert(e.message || "Could not start checkout."); setBusyId(null); }
+  }
+  async function download(o) {
+    try { const u = await db.signedUrl(o.product?.file_path); window.open(u, "_blank"); }
+    catch (e) { window.alert("That file isn't available right now. Please contact the office."); }
+  }
+  const owned = new Set(orders.filter((o) => o.kind !== "physical" && o.status !== "refunded").map((o) => o.product_id));
+
+  return (
+    <>
+      <PageHead title="Store" sub="Books, resources and classes for your journey." />
+      <div className="flex gap-2" style={{ marginBottom: 18 }}>
+        <Btn small kind={tab === "shop" ? "primary" : "ghost"} icon={ShoppingBag} onClick={() => setTab("shop")}>Shop</Btn>
+        <Btn small kind={tab === "mine" ? "primary" : "ghost"} icon={Download} onClick={() => setTab("mine")}>My purchases ({orders.length})</Btn>
+      </div>
+      {loading ? <Spinner /> : tab === "shop" ? (
+        products.length === 0 ? <Card><div className="pl-body" style={{ color: C.muted }}>The store is being stocked. Please check back soon.</div></Card> : (
+          <div className="grid grid-cols-3 gap-4">
+            {products.map((p) => (
+              <Card key={p.id}>
+                <StoreImage path={p.image_path} />
+                <div className="pl-body" style={{ fontSize: 12, color: C.muted, textTransform: "uppercase", letterSpacing: 1 }}>{p.kind === "digital" ? "Instant download" : p.kind === "course" ? "Class" : "Shipped to you"}</div>
+                <div className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: "4px 0 6px" }}>{p.title}</div>
+                {p.description && <div className="pl-body" style={{ fontSize: 14, color: C.text, marginBottom: 10, whiteSpace: "pre-wrap" }}>{p.description}</div>}
+                <div className="pl-body" style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>{money(p.price)}{p.kind === "physical" && Number(p.shipping_fee) > 0 ? <span style={{ fontWeight: 400, color: C.muted, fontSize: 13 }}> + {money(p.shipping_fee)} shipping</span> : null}</div>
+                {owned.has(p.id) ? <Btn small kind="ghost" icon={Check} onClick={() => setTab("mine")}>You own this</Btn> : (
+                  <div className="flex items-center gap-2">
+                    {p.kind === "physical" && <select style={{ ...inputStyle, width: 70, padding: 6 }} value={qty[p.id] || 1} onChange={(e) => setQty({ ...qty, [p.id]: Number(e.target.value) })}>{[1,2,3,4,5,6,7,8,9,10].map((n) => <option key={n} value={n}>{n}</option>)}</select>}
+                    <Btn small icon={ShoppingBag} onClick={() => buy(p)} disabled={busyId === p.id}>{busyId === p.id ? "Opening…" : "Buy"}</Btn>
+                  </div>
+                )}
+              </Card>
+            ))}
+          </div>
+        )
+      ) : (
+        orders.length === 0 ? <Card><div className="pl-body" style={{ color: C.muted }}>No purchases yet.</div></Card> : (
+          <Card>
+            {orders.map((o) => (
+              <div key={o.id} className="flex items-center justify-between gap-4" style={{ padding: "12px 0", borderBottom: `1px solid ${C.line || "#e5e0d6"}` }}>
+                <div className="pl-body" style={{ fontSize: 14 }}>
+                  <div style={{ fontWeight: 700, color: C.ink }}>{o.title}{o.quantity > 1 ? ` × ${o.quantity}` : ""}</div>
+                  <div style={{ color: C.muted }}>{money(o.amount)} · {new Date(o.created_at).toLocaleDateString()}</div>
+                </div>
+                {o.kind === "digital" && o.product?.file_path ? <Btn small icon={Download} onClick={() => download(o)}>Download</Btn>
+                  : o.kind === "course" ? <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Enrolled · see My Courses</span>
+                  : <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>{o.status === "shipped" ? "Shipped" : "Preparing to ship"}</span>}
+              </div>
+            ))}
+          </Card>
+        )
+      )}
     </>
   );
 }
