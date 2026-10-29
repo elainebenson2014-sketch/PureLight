@@ -12,7 +12,8 @@
    (charge.dispute.created / charge.dispute.closed). Every event is logged in pl_payment_events.
 
    In Stripe → Developers → Webhooks, the endpoint must send these events:
-     checkout.session.completed, charge.refunded, charge.dispute.created, charge.dispute.closed
+     checkout.session.completed, charge.refunded, charge.dispute.created, charge.dispute.closed,
+     invoice.paid, invoice.payment_failed, customer.subscription.deleted   (for autopay)
 
    Vercel env vars required:
      STRIPE_WEBHOOK_SECRET        (whsec_... from the webhook you create in Stripe)
@@ -77,6 +78,9 @@ export default async function handler(req, res) {
     else if (event.type === "charge.refunded") out = await handleRefund({ supaUrl, serviceKey, charge: event.data.object || {}, hosts });
     else if (event.type === "charge.dispute.created") out = await handleDispute({ supaUrl, serviceKey, dispute: event.data.object || {}, opened: true, hosts });
     else if (event.type === "charge.dispute.closed") out = await handleDispute({ supaUrl, serviceKey, dispute: event.data.object || {}, opened: false, hosts });
+    else if (event.type === "invoice.paid") out = await handleInvoicePaid({ supaUrl, serviceKey, invoice: event.data.object || {}, hosts });
+    else if (event.type === "invoice.payment_failed") out = await handleInvoiceFailed({ supaUrl, serviceKey, invoice: event.data.object || {}, hosts });
+    else if (event.type === "customer.subscription.deleted") out = await handleSubscriptionEnded({ supaUrl, serviceKey, sub: event.data.object || {} });
     else out = { code: 200, body: { received: true, ignored: event.type }, status: "ignored" };
 
     await log.finish(out.status || (out.code < 300 ? "processed" : "failed"), out.note || null, out.error || null, out.meta || {});
@@ -156,11 +160,23 @@ async function handleCheckout({ supaUrl, serviceKey, s, hosts }) {
   const sessionEmail = s.customer_details?.email || s.customer_email || null;
   const meta = { session_id: sessionId, payment_intent: typeof s.payment_intent === "string" ? s.payment_intent : null, amount };
 
-  if (s.payment_status && s.payment_status !== "paid") {
+  if (s.mode !== "subscription" && s.payment_status && s.payment_status !== "paid") {
     return { code: 200, body: { received: true, ignored: `payment_status=${s.payment_status}` }, status: "ignored", note: `payment_status=${s.payment_status}`, meta };
   }
   if (!(await belongsHere({ supaUrl, serviceKey, session: s, hosts }))) {
     return { code: 200, body: { received: true, ignored: "another school" }, status: "ignored", note: "payment belongs to another school on this Stripe account", meta };
+  }
+
+  // PATH 0: monthly autopay was set up. Each monthly payment is recorded by invoice.paid.
+  if (s.mode === "subscription") {
+    const result = await startAutopay({ supaUrl, serviceKey, s, md });
+    return { code: 200, body: { received: true, autopay: result }, note: `autopay set up: ${result}`, meta };
+  }
+
+  // PATH 0b: donation
+  if (md.donation === "1") {
+    const result = await recordDonation({ supaUrl, serviceKey, s, md, amount, sessionId });
+    return { code: 200, body: { received: true, donation: result }, note: `donation ${money(amount)} ${result}`, meta };
   }
 
   // PATH 1: pay-first registration
@@ -178,30 +194,15 @@ async function handleCheckout({ supaUrl, serviceKey, s, hosts }) {
   }
 
   // PATH 2: normal in-app payment
-  let row = null;
-  if (md.tuition_level && md.student_id) {
-    row = { student_id: md.student_id, kind: "payment", description: md.description || `${md.tuition_level} tuition`, amount, method: "card", plan: md.plan || null, recorded_by: md.student_id };
-  } else if (md.course_id && md.student_id) {
-    row = { student_id: md.student_id, course_id: md.course_id, kind: "payment", description: md.title ? `Certificate class: ${md.title}` : "Certificate class payment", amount, method: "card", plan: md.plan || null, recorded_by: md.student_id };
-  }
+  const row = ledgerRowFor(md, amount);
   if (!row) {
     console.error("stripe-webhook: no usable metadata on session", sessionId, md);
     return { code: 200, body: { received: true, ignored: "missing metadata" }, status: "ignored", note: "no LMS metadata on this payment", meta };
   }
-
-  if (sessionId) row.stripe_session_id = sessionId;
-  row.date = new Date().toISOString().slice(0, 10);
-  const r = await fetch(`${supaUrl}/rest/v1/pl_ledger`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, Prefer: "return=minimal" },
-    body: JSON.stringify(row),
-  });
-  if (!r.ok) {
-    const text = await r.text();
-    if (r.status === 409 || text.includes("23505")) return { code: 200, body: { received: true, duplicate: sessionId }, note: "already recorded", meta };
-    console.error("stripe-webhook: ledger insert failed", r.status, text, row);
-    return { code: 500, body: { error: "Ledger insert failed" }, error: `ledger insert failed: ${r.status} ${text}`, meta };
-  }
+  row.stripe_session_id = sessionId;
+  const ins = await insertLedger(supaUrl, serviceKey, row);
+  if (ins === "duplicate") return { code: 200, body: { received: true, duplicate: sessionId }, note: "already recorded", meta };
+  if (ins !== "ok") return { code: 500, body: { error: "Ledger insert failed" }, error: ins, meta };
 
   console.log("stripe-webhook: posted payment", { sessionId, student: md.student_id, amount });
   try { await sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail }); }
@@ -209,12 +210,46 @@ async function handleCheckout({ supaUrl, serviceKey, s, hosts }) {
   return { code: 200, body: { received: true, posted: amount }, note: `payment ${amount}`, meta };
 }
 
-/* ---------------- REFUNDS ----------------
-   Fires for refunds made anywhere: the LMS Refund button OR the Stripe dashboard.
-   Each refund is written to the ledger once (unique stripe_refund_id), and a fully
-   refunded store order is marked refunded, which locks its download. */
-async function stripeGet(path) {
-  const r = await fetch(`https://api.stripe.com/v1/${path}`, { headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` } });
+/* The ledger row for a tuition or class payment, from the checkout/subscription tags. */
+function ledgerRowFor(md, amount) {
+  const date = new Date().toISOString().slice(0, 10);
+  if (md.tuition_level && md.student_id) {
+    return { student_id: md.student_id, kind: "payment", description: md.description || `${md.tuition_level} tuition`, amount, method: "card", plan: md.plan || null, recorded_by: md.student_id, date };
+  }
+  if (md.course_id && md.student_id) {
+    return { student_id: md.student_id, course_id: md.course_id, kind: "payment", description: md.title ? `Certificate class: ${md.title}` : "Certificate class payment", amount, method: "card", plan: md.plan || null, recorded_by: md.student_id, date };
+  }
+  return null;
+}
+async function insertLedger(supaUrl, serviceKey, row) {
+  const r = await fetch(`${supaUrl}/rest/v1/pl_ledger`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, Prefer: "return=minimal" },
+    body: JSON.stringify(row),
+  });
+  if (r.ok) return "ok";
+  const text = await r.text();
+  if (r.status === 409 && text.includes("23505")) return "duplicate";
+  console.error("stripe-webhook: ledger insert failed", r.status, text, row);
+  return `ledger insert failed: ${r.status} ${text}`;
+}
+
+/* ---------------- STRIPE HELPERS ----------------
+   Lookups pin an older API version so the fields we read (charge.invoice,
+   invoice.subscription, subscription.metadata) are always present. */
+const PIN = "2024-06-20";
+async function stripeGet(path, pinned = false) {
+  const r = await fetch(`https://api.stripe.com/v1/${path}`, { headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, ...(pinned ? { "Stripe-Version": PIN } : {}) } });
+  const j = await r.json();
+  if (!r.ok) throw new Error(`Stripe ${path}: ${j.error?.message || r.status}`);
+  return j;
+}
+async function stripePost(path, params) {
+  const r = await fetch(`https://api.stripe.com/v1/${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, "Content-Type": "application/x-www-form-urlencoded", "Stripe-Version": PIN },
+    body: new URLSearchParams(params).toString(),
+  });
   const j = await r.json();
   if (!r.ok) throw new Error(`Stripe ${path}: ${j.error?.message || r.status}`);
   return j;
@@ -229,27 +264,43 @@ async function findSession(pi) {
   const list = await stripeGet(`checkout/sessions?payment_intent=${encodeURIComponent(pi)}&limit=1`);
   return (list.data || [])[0] || null;
 }
+/* Which LMS record does a charge belong to? A checkout session (one-time payments,
+   store, donations) or an invoice (autopay). Returns { key, session, invoice }. */
+async function paymentKey(pi, chargeId) {
+  const session = await findSession(pi).catch(() => null);
+  if (session) return { key: session.id, session };
+  if (!chargeId) return { key: null };
+  const ch = await stripeGet(`charges/${encodeURIComponent(chargeId)}`, true).catch(() => null);
+  const invId = ch && (typeof ch.invoice === "string" ? ch.invoice : ch.invoice?.id);
+  return invId ? { key: invId, invoice: invId } : { key: null };
+}
 
+/* ---------------- REFUNDS ----------------
+   Fires for refunds made anywhere: the LMS Refund button OR the Stripe dashboard.
+   Each refund is written to the ledger once (unique stripe_refund_id); a fully
+   refunded store order or donation is marked refunded (a download locks). */
 async function handleRefund({ supaUrl, serviceKey, charge, hosts }) {
   const db = rest(supaUrl, serviceKey);
   const pi = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
   const meta = { payment_intent: pi || null, amount: (charge.amount_refunded || 0) / 100 };
   if (!process.env.STRIPE_SECRET_KEY) return { code: 500, body: { error: "STRIPE_SECRET_KEY not set" }, error: "STRIPE_SECRET_KEY not set", meta };
 
-  const session = await findSession(pi);
-  if (!session) return { code: 200, body: { received: true, ignored: "refund not from an LMS checkout" }, status: "ignored", note: "no checkout session for this charge", meta };
-  meta.session_id = session.id;
-  const sid = encodeURIComponent(session.id);
+  const { key } = await paymentKey(pi, charge.id);
+  if (!key) return { code: 200, body: { received: true, ignored: "refund not from an LMS payment" }, status: "ignored", note: "no checkout session or autopay invoice for this charge", meta };
+  meta.session_id = key;
+  const k = encodeURIComponent(key);
   const fullyRefunded = (charge.amount_refunded || 0) >= (charge.amount || 0);
 
-  const pays = await db(`pl_ledger?stripe_session_id=eq.${sid}&kind=eq.payment&select=student_id,course_id,description`).then((r) => r.json()).catch(() => []);
+  const pays = await db(`pl_ledger?stripe_session_id=eq.${k}&kind=eq.payment&select=student_id,course_id,description`).then((r) => r.json()).catch(() => []);
   const pay = Array.isArray(pays) ? pays[0] : null;
-  const orders = await db(`pl_store_orders?stripe_session_id=eq.${sid}&select=id,title,kind,status,student_id`).then((r) => r.ok ? r.json() : []).catch(() => []);
+  const orders = await db(`pl_store_orders?stripe_session_id=eq.${k}&select=id,title,kind,status,student_id`).then((r) => r.ok ? r.json() : []).catch(() => []);
   const order = Array.isArray(orders) ? orders[0] : null;
+  const gifts = await db(`pl_donations?stripe_session_id=eq.${k}&select=id,status,designation`).then((r) => r.ok ? r.json() : []).catch(() => []);
+  const gift = Array.isArray(gifts) ? gifts[0] : null;
 
-  const refunds = await stripeGet(`refunds?payment_intent=${encodeURIComponent(pi)}&limit=100`);
   let posted = 0;
-  if (pay) {
+  if (pay && pi) {
+    const refunds = await stripeGet(`refunds?payment_intent=${encodeURIComponent(pi)}&limit=100`);
     for (const rf of refunds.data || []) {
       if (rf.status !== "succeeded") continue;
       const row = {
@@ -265,18 +316,21 @@ async function handleRefund({ supaUrl, serviceKey, charge, hosts }) {
   if (order && fullyRefunded && order.status !== "refunded") {
     await db(`pl_store_orders?id=eq.${order.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "refunded" }) });
   }
-  if (posted || (order && fullyRefunded)) {
+  if (gift && gift.status !== "refunded") {
+    await db(`pl_donations?id=eq.${gift.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: fullyRefunded ? "refunded" : "partly_refunded", refunded_amount: (charge.amount_refunded || 0) / 100 }) });
+  }
+  if (posted || (order && fullyRefunded) || gift) {
     try {
       await sendOfficeNote(`Refund recorded: ${money(charge.amount_refunded / 100)}`,
         `<p>A refund of <b>${money(charge.amount_refunded / 100)}</b>${fullyRefunded ? " (full)" : " (partial)"} went through in Stripe and the LMS has been updated.</p>
-         <p><b>For:</b> ${esc(order?.title || pay?.description || "payment")}</p>
+         <p><b>For:</b> ${esc(order?.title || pay?.description || (gift ? `Gift: ${gift.designation}` : "payment"))}</p>
          ${order?.kind === "digital" && fullyRefunded ? "<p>The download is now locked for this buyer.</p>" : ""}
          ${(order?.kind === "course" || pay?.course_id) && fullyRefunded ? "<p>The student is still enrolled in the class. Remove the enrollment in Cert Classes if they should lose access.</p>" : ""}
          ${order?.kind === "physical" && order.status !== "shipped" ? "<p>This item had not shipped yet. Don't ship it.</p>" : ""}`);
     } catch (e) { console.error("refund office note failed (non-fatal)", e); }
   }
-  if (!pay && !order) return { code: 200, body: { received: true, ignored: "another school" }, status: "ignored", note: "refund for a payment not in this school", meta };
-  return { code: 200, body: { received: true, refunds_posted: posted }, note: `refund: ${posted} ledger row(s)${order && fullyRefunded ? ", order refunded" : ""}`, meta };
+  if (!pay && !order && !gift) return { code: 200, body: { received: true, ignored: "another school" }, status: "ignored", note: "refund for a payment not in this school", meta };
+  return { code: 200, body: { received: true, refunds_posted: posted }, note: `refund: ${posted} ledger row(s)${order && fullyRefunded ? ", order refunded" : ""}${gift ? ", gift updated" : ""}`, meta };
 }
 
 /* ---------------- DISPUTES (chargebacks) ----------------
@@ -285,17 +339,20 @@ async function handleRefund({ supaUrl, serviceKey, charge, hosts }) {
 async function handleDispute({ supaUrl, serviceKey, dispute, opened, hosts }) {
   const db = rest(supaUrl, serviceKey);
   const pi = typeof dispute.payment_intent === "string" ? dispute.payment_intent : dispute.payment_intent?.id;
+  const chargeId = typeof dispute.charge === "string" ? dispute.charge : dispute.charge?.id;
   const amt = (dispute.amount || 0) / 100;
   const meta = { payment_intent: pi || null, amount: amt };
-  const session = process.env.STRIPE_SECRET_KEY ? await findSession(pi).catch(() => null) : null;
-  if (session) meta.session_id = session.id;
-  const sid = session ? encodeURIComponent(session.id) : null;
-  const orders = sid ? await db(`pl_store_orders?stripe_session_id=eq.${sid}&select=id,title,status`).then((r) => r.ok ? r.json() : []).catch(() => []) : [];
+  const { key, session } = process.env.STRIPE_SECRET_KEY ? await paymentKey(pi, chargeId).catch(() => ({ key: null })) : { key: null };
+  if (key) meta.session_id = key;
+  const k = key ? encodeURIComponent(key) : null;
+  const orders = k ? await db(`pl_store_orders?stripe_session_id=eq.${k}&select=id,title,status`).then((r) => r.ok ? r.json() : []).catch(() => []) : [];
   const order = Array.isArray(orders) ? orders[0] : null;
-  const pays = sid ? await db(`pl_ledger?stripe_session_id=eq.${sid}&kind=eq.payment&select=student_id,course_id,description`).then((r) => r.json()).catch(() => []) : [];
+  const pays = k ? await db(`pl_ledger?stripe_session_id=eq.${k}&kind=eq.payment&select=student_id,course_id,description`).then((r) => r.json()).catch(() => []) : [];
   const pay = Array.isArray(pays) ? pays[0] : null;
-  const what = esc(order?.title || pay?.description || session?.metadata?.title || "a payment");
-  if (!order && !pay && !(session && (await belongsHere({ supaUrl, serviceKey, session, hosts })))) {
+  const gifts = k ? await db(`pl_donations?stripe_session_id=eq.${k}&select=id,designation`).then((r) => r.ok ? r.json() : []).catch(() => []) : [];
+  const gift = Array.isArray(gifts) ? gifts[0] : null;
+  const what = esc(order?.title || pay?.description || (gift ? `Gift: ${gift.designation}` : "") || session?.metadata?.title || "a payment");
+  if (!order && !pay && !gift && !(session && (await belongsHere({ supaUrl, serviceKey, session, hosts })))) {
     return { code: 200, body: { received: true, ignored: "another school" }, status: "ignored", note: "dispute belongs to another school or a non-LMS payment", meta };
   }
 
@@ -314,6 +371,7 @@ async function handleDispute({ supaUrl, serviceKey, dispute, opened, hosts }) {
     if (order && order.status === "disputed") await db(`pl_store_orders?id=eq.${order.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "paid" }) });
   } else {
     if (order) await db(`pl_store_orders?id=eq.${order.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "refunded" }) });
+    if (gift) await db(`pl_donations?id=eq.${gift.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "refunded", refunded_amount: amt }) });
     if (pay) {
       const row = { student_id: pay.student_id, kind: "payment", amount: -Math.abs(amt), method: "card-refund", description: `Chargeback lost: ${pay.description || "payment"} (Stripe ${dispute.id})`, date: new Date().toISOString().slice(0, 10), stripe_refund_id: dispute.id };
       if (pay.course_id) row.course_id = pay.course_id;
@@ -325,6 +383,151 @@ async function handleDispute({ supaUrl, serviceKey, dispute, opened, hosts }) {
     `<p>The dispute for <b>${what}</b> (${money(amt)}) is closed: <b>${esc(dispute.status)}</b>.</p>
      <p>${won ? "The money stays with the ministry and the order is unlocked." : "The money was returned to the customer. The LMS ledger has been updated."}</p>`).catch((e) => console.error("dispute close note failed", e));
   return { code: 200, body: { received: true, dispute: dispute.status }, note: `dispute closed: ${dispute.status}`, meta };
+}
+
+/* ---------------- AUTOPAY (monthly payment plans) ----------------
+   Checkout creates a monthly subscription for a fixed number of payments.
+   startAutopay records the plan and tells Stripe to stop after the last payment;
+   every successful monthly invoice becomes a ledger payment (keyed by invoice id). */
+function addMonths(ts, n) { const d = new Date(ts * 1000); d.setUTCMonth(d.getUTCMonth() + n); return Math.floor(d.getTime() / 1000); }
+
+async function startAutopay({ supaUrl, serviceKey, s, md }) {
+  const db = rest(supaUrl, serviceKey);
+  const subId = typeof s.subscription === "string" ? s.subscription : s.subscription?.id;
+  if (!subId) throw new Error("subscription missing on autopay checkout");
+  const n = Math.max(2, parseInt(md.payments, 10) || 2);
+  const sub = await stripeGet(`subscriptions/${encodeURIComponent(subId)}`, true);
+  const anchor = sub.billing_cycle_anchor || sub.start_date || Math.floor(Date.now() / 1000);
+  // Stop a week after the last scheduled payment, before another one could start.
+  await stripePost(`subscriptions/${encodeURIComponent(subId)}`, { cancel_at: String(addMonths(anchor, n - 1) + 7 * 86400), proration_behavior: "none" });
+  const per = (sub.items?.data?.[0]?.price?.unit_amount || 0) / 100;
+  const r = await db(`pl_autopay`, { method: "POST", headers: { Prefer: "return=minimal,resolution=ignore-duplicates" }, body: JSON.stringify({
+    student_id: md.student_id, course_id: md.course_id || null, tuition_level: md.tuition_level || null,
+    description: md.description || (md.title ? `Certificate class: ${md.title}` : "Payment plan"),
+    payments: n, amount: per, stripe_subscription_id: subId, status: "active",
+  }) });
+  if (!r.ok) { const t = await r.text(); if (!t.includes("23505")) throw new Error(`autopay insert failed: ${r.status} ${t}`); }
+  try {
+    await sendOfficeNote(`Autopay started: ${money(per)} x ${n}`, `<p>A student set up monthly autopay: <b>${n} payments of ${money(per)}</b> for <b>${esc(md.description || md.title || "their balance")}</b>. Each payment is recorded automatically.</p>`);
+  } catch (e) { console.error("autopay office note failed", e); }
+  return `${n} x ${money(per)}`;
+}
+
+/* Fetch an invoice with its subscription's tags (pinned version). */
+async function invoiceWithTags(invId) {
+  const inv = await stripeGet(`invoices/${encodeURIComponent(invId)}?expand[]=subscription`, true);
+  const sub = inv.subscription && typeof inv.subscription === "object" ? inv.subscription : null;
+  const md = sub?.metadata || inv.subscription_details?.metadata || {};
+  return { inv, sub, md };
+}
+
+async function handleInvoicePaid({ supaUrl, serviceKey, invoice, hosts }) {
+  const db = rest(supaUrl, serviceKey);
+  const meta = { session_id: invoice.id, amount: (invoice.amount_paid || 0) / 100 };
+  const { inv, sub, md } = await invoiceWithTags(invoice.id);
+  if (md.autopay !== "1") return { code: 200, body: { received: true, ignored: "not an LMS autopay invoice" }, status: "ignored", note: "invoice is not LMS autopay", meta };
+  if (!(await belongsHere({ supaUrl, serviceKey, session: { metadata: md, success_url: md.origin }, hosts }))) {
+    return { code: 200, body: { received: true, ignored: "another school" }, status: "ignored", note: "autopay belongs to another school on this Stripe account", meta };
+  }
+  const amount = (inv.amount_paid || 0) / 100;
+  if (amount <= 0) return { code: 200, body: { received: true, ignored: "zero invoice" }, status: "ignored", note: "nothing was charged", meta };
+  const row = ledgerRowFor({ ...md, plan: "autopay" }, amount);
+  if (!row) return { code: 200, body: { received: true, ignored: "missing tags" }, status: "ignored", note: "autopay invoice has no student/class tags", meta };
+  row.stripe_session_id = inv.id;
+  const ins = await insertLedger(supaUrl, serviceKey, row);
+  if (ins === "duplicate") return { code: 200, body: { received: true, duplicate: inv.id }, note: "already recorded", meta };
+  if (ins !== "ok") return { code: 500, body: { error: "Ledger insert failed" }, error: ins, meta };
+
+  // Count payments made on this plan; stop the subscription after the last one.
+  const subId = sub?.id || (typeof inv.subscription === "string" ? inv.subscription : null);
+  let made = 0, total = parseInt(md.payments, 10) || 0;
+  if (subId) {
+    const plans = await db(`pl_autopay?stripe_subscription_id=eq.${encodeURIComponent(subId)}&select=id,payments_made,payments`).then((r) => r.ok ? r.json() : []).catch(() => []);
+    const plan = Array.isArray(plans) ? plans[0] : null;
+    if (plan) {
+      made = (plan.payments_made || 0) + 1; total = plan.payments || total;
+      await db(`pl_autopay?id=eq.${plan.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ payments_made: made, status: made >= total ? "completed" : "active", last_paid_at: new Date().toISOString() }) });
+    }
+    if (total && made >= total) await stripePost(`subscriptions/${encodeURIComponent(subId)}`, { cancel_at_period_end: "true" }).catch((e) => console.error("autopay stop failed", e));
+  }
+  try { await sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail: inv.customer_email || null, note: total ? `Autopay payment ${made || "?"} of ${total}.` : "" }); }
+  catch (e) { console.error("autopay receipt failed (non-fatal)", e); }
+  return { code: 200, body: { received: true, posted: amount }, note: `autopay payment ${made || "?"}/${total || "?"} ${money(amount)}`, meta };
+}
+
+async function handleInvoiceFailed({ supaUrl, serviceKey, invoice, hosts }) {
+  const db = rest(supaUrl, serviceKey);
+  const meta = { session_id: invoice.id, amount: (invoice.amount_due || 0) / 100 };
+  const { inv, sub, md } = await invoiceWithTags(invoice.id);
+  if (md.autopay !== "1") return { code: 200, body: { received: true, ignored: "not an LMS autopay invoice" }, status: "ignored", note: "invoice is not LMS autopay", meta };
+  if (!(await belongsHere({ supaUrl, serviceKey, session: { metadata: md, success_url: md.origin }, hosts }))) {
+    return { code: 200, body: { received: true, ignored: "another school" }, status: "ignored", note: "autopay belongs to another school", meta };
+  }
+  if (sub?.id) await db(`pl_autopay?stripe_subscription_id=eq.${encodeURIComponent(sub.id)}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "past_due" }) });
+  const amt = money((inv.amount_due || 0) / 100);
+  const what = esc(md.description || md.title || "your payment plan");
+  const next = inv.next_payment_attempt ? new Date(inv.next_payment_attempt * 1000).toLocaleDateString("en-US", { dateStyle: "long" }) : null;
+  const apiKey = process.env.RESEND_API_KEY;
+  const to = [inv.customer_email].filter(Boolean);
+  if (apiKey && to.length) {
+    const school = process.env.VITE_SCHOOL_NAME || "Your school";
+    const from = process.env.EMAIL_FROM || "YonaLearn <onboarding@resend.dev>";
+    await sendResend(apiKey, "autopay failed (student)", { from, to, subject: `Your ${amt} payment didn't go through`, html:
+      `<p>Hi,</p><p>Your monthly payment of <b>${amt}</b> for <b>${what}</b> was declined by your card.</p>
+       <p>${next ? `We'll try again on <b>${esc(next)}</b>. ` : ""}To avoid a missed payment, sign in to the student portal and pay this month's amount with <b>Pay</b> or <b>Other amount</b>, or contact the office to update your card.</p>
+       <p>— ${esc(school)}</p>` }).catch((e) => console.error(e));
+  }
+  await sendOfficeNote(`Autopay payment failed: ${amt}`, `<p>An autopay payment of <b>${amt}</b> for <b>${what}</b> (${esc(inv.customer_email || "student")}) was declined.</p><p>${next ? `Stripe will retry on ${esc(next)}. ` : ""}The student was emailed.</p>`).catch(() => {});
+  return { code: 200, body: { received: true, failed: inv.id }, note: `autopay failed ${amt}`, meta };
+}
+
+async function handleSubscriptionEnded({ supaUrl, serviceKey, sub }) {
+  const db = rest(supaUrl, serviceKey);
+  const md = sub.metadata || {};
+  const meta = { session_id: sub.id };
+  if (md.autopay !== "1") return { code: 200, body: { received: true, ignored: "not LMS autopay" }, status: "ignored", note: "not LMS autopay", meta };
+  const plans = await db(`pl_autopay?stripe_subscription_id=eq.${encodeURIComponent(sub.id)}&select=id,payments_made,payments`).then((r) => r.ok ? r.json() : []).catch(() => []);
+  const plan = Array.isArray(plans) ? plans[0] : null;
+  if (!plan) return { code: 200, body: { received: true, ignored: "plan not in this school" }, status: "ignored", note: "autopay plan not in this school", meta };
+  const done = (plan.payments_made || 0) >= (plan.payments || 0);
+  await db(`pl_autopay?id=eq.${plan.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: done ? "completed" : "canceled" }) });
+  if (!done) await sendOfficeNote("Autopay stopped early", `<p>An autopay plan stopped after ${plan.payments_made || 0} of ${plan.payments} payments (canceled in Stripe or repeatedly declined). Check the student's balance in Billing.</p>`).catch(() => {});
+  return { code: 200, body: { received: true, autopay: done ? "completed" : "canceled" }, note: `autopay ${done ? "completed" : "canceled early"}`, meta };
+}
+
+/* ---------------- DONATIONS ---------------- */
+async function recordDonation({ supaUrl, serviceKey, s, md, amount, sessionId }) {
+  const db = rest(supaUrl, serviceKey);
+  const email = md.donor_email || s.customer_details?.email || null;
+  const r = await db(`pl_donations`, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
+    donor_name: md.donor_name || s.customer_details?.name || "", donor_email: email || "", amount,
+    designation: md.designation || "General giving", note: md.note || null, student_id: md.student_id || null,
+    stripe_session_id: sessionId, status: "paid",
+  }) });
+  if (!r.ok) { const t = await r.text(); if (r.status === 409 && t.includes("23505")) return "duplicate"; throw new Error(`donation insert failed: ${r.status} ${t}`); }
+
+  const apiKey = process.env.RESEND_API_KEY;
+  if (apiKey) {
+    const school = process.env.VITE_SCHOOL_NAME || "our ministry";
+    const legal = process.env.VITE_SCHOOL_LEGAL_NAME || school;
+    const ein = process.env.DONATION_EIN || "";
+    const from = process.env.EMAIL_FROM || "YonaLearn <onboarding@resend.dev>";
+    const when = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+    const taxLine = ein
+      ? `<p style="font-size:13px;color:#555;">${esc(legal)} is a tax-exempt 501(c)(3) organization (EIN ${esc(ein)}). No goods or services were provided in exchange for this contribution. Please keep this receipt for your tax records.</p>`
+      : "";
+    if (email) {
+      await sendResend(apiKey, "donation receipt", { from, to: [email], subject: `Thank you for your gift to ${school}`, html:
+        `<div style="font-family:Georgia,serif;max-width:560px;margin:0 auto;padding:24px;">
+          <h1 style="font-size:22px;color:#1B3A6B;">Thank you, ${esc(md.donor_name || "friend")}!</h1>
+          <p>We received your gift of <b>${money(amount)}</b> to <b>${esc(md.designation || "General giving")}</b> on ${esc(when)}.</p>
+          <p>Your generosity helps people learn, heal and grow. We're grateful for you.</p>
+          ${taxLine}
+          <p>— ${esc(school)}</p></div>` }).catch((e) => console.error("donation receipt failed", e));
+    }
+    await sendOfficeNote(`New gift: ${money(amount)}`, `<p><b>${esc(md.donor_name || "A donor")}</b> (${esc(email || "")}) gave <b>${money(amount)}</b> to <b>${esc(md.designation || "General giving")}</b>.</p>${md.note ? `<p>Note: ${esc(md.note)}</p>` : ""}`).catch(() => {});
+  }
+  return "recorded";
 }
 
 /* Small helpers shared by the office notes. */
@@ -486,7 +689,7 @@ async function sendOfficeAlert({ email, name, program, amount, paidFull, desc })
   const to = rawTo.split(",").map((s) => s.trim()).filter(Boolean);
   if (!to.length) return;
   const from = process.env.EMAIL_FROM || "The Healed Place <onboarding@resend.dev>";
-  const school = program === "certificate" ? "The Healed Place" : (process.env.VITE_SCHOOL_NAME || "NCTS");
+  const school = process.env.VITE_SCHOOL_NAME || (program === "certificate" ? "The Healed Place" : "NCTS");
   const esc = (t) => String(t ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
   const money = (n) => "$" + (Number(n) || 0).toFixed(2);
   const when = new Date().toLocaleString("en-US", { timeZone: "America/Chicago", dateStyle: "full", timeStyle: "short" });
@@ -527,7 +730,7 @@ async function sendWelcome({ email, name, link, program, amount, paidFull }) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) { console.error("stripe-webhook: RESEND_API_KEY not set, welcome email NOT sent to " + email); return; }
   const from = process.env.EMAIL_FROM || "The Healed Place <onboarding@resend.dev>";
-  const school = program === "certificate" ? "The Healed Place" : (process.env.VITE_SCHOOL_NAME || "NCTS");
+  const school = process.env.VITE_SCHOOL_NAME || (program === "certificate" ? "The Healed Place" : "NCTS");
   const esc = (t) => String(t ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
   const money = (n) => "$" + (Number(n) || 0).toFixed(2);
 
@@ -547,7 +750,7 @@ async function sendWelcome({ email, name, link, program, amount, paidFull }) {
   await sendResend(apiKey, "welcome email", { from, to: [email], subject: `Welcome to ${school} — set your password`, html });
 }
 
-async function sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail }) {
+async function sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail, note = "" }) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return;
   const from = process.env.EMAIL_FROM || "NCTS PureLight <onboarding@resend.dev>";
@@ -562,7 +765,7 @@ async function sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail }) {
   if (recipients.length === 0) return;
 
   const isCert = md.course_id || program === "certificate";
-  const school = isCert ? "The Healed Place" : "NCTS Pure Light School of Ministry";
+  const school = process.env.VITE_SCHOOL_NAME || (isCert ? "The Healed Place" : "NCTS Pure Light School of Ministry");
   const item = md.title ? `Certificate class: ${md.title}` : (md.description || "Tuition payment");
   const money = (n) => "$" + (Number(n) || 0).toFixed(2);
   const esc = (t) => String(t ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
@@ -579,6 +782,7 @@ async function sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail }) {
         <tr><td style="padding:8px 0;color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;">For</td><td style="padding:8px 0;">${esc(item)}</td></tr>
         <tr><td style="padding:8px 0;color:#1B3A6B;font-family:Arial,sans-serif;font-weight:bold;">Date</td><td style="padding:8px 0;">${esc(when)}</td></tr>
       </table>
+      ${note ? `<p style="font-size:14px;margin:14px 0 0;"><b>${esc(note)}</b></p>` : ""}
       <div style="margin-top:20px;background:#F5F0E8;border-left:4px solid #C5922E;padding:12px 16px;font-size:13px;line-height:1.6;">You can view your full account and any remaining balance anytime in your student portal.</div>
     </div>
   </div></body></html>`;
