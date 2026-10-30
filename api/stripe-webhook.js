@@ -203,6 +203,7 @@ async function handleCheckout({ supaUrl, serviceKey, s, hosts }) {
   const ins = await insertLedger(supaUrl, serviceKey, row);
   if (ins === "duplicate") return { code: 200, body: { received: true, duplicate: sessionId }, note: "already recorded", meta };
   if (ins !== "ok") return { code: 500, body: { error: "Ledger insert failed" }, error: ins, meta };
+  await recordDiscount(supaUrl, serviceKey, s, row);
 
   console.log("stripe-webhook: posted payment", { sessionId, student: md.student_id, amount });
   try { await sendReceipt({ supaUrl, serviceKey, md, amount, sessionEmail }); }
@@ -220,6 +221,13 @@ function ledgerRowFor(md, amount) {
     return { student_id: md.student_id, course_id: md.course_id, kind: "payment", description: md.title ? `Certificate class: ${md.title}` : "Certificate class payment", amount, method: "card", plan: md.plan || null, recorded_by: md.student_id, date };
   }
   return null;
+}
+/* A promo code lowers what the student owes: post the discount as a credit on the same class/tuition. */
+async function recordDiscount(supaUrl, serviceKey, s, base) {
+  const off = (s.total_details?.amount_discount || 0) / 100;
+  if (!(off > 0) || !base) return;
+  const res = await insertLedger(supaUrl, serviceKey, { ...base, kind: "scholarship", description: "Promo code discount", amount: off, method: null, plan: null, stripe_session_id: `${s.id}:promo` });
+  if (res !== "ok" && res !== "duplicate") console.error("promo discount not recorded", res);
 }
 async function insertLedger(supaUrl, serviceKey, row) {
   const r = await fetch(`${supaUrl}/rest/v1/pl_ledger`, {
@@ -407,6 +415,14 @@ async function startAutopay({ supaUrl, serviceKey, s, md }) {
     payments: n, amount: per, stripe_subscription_id: subId, status: "active",
   }) });
   if (!r.ok) { const t = await r.text(); if (!t.includes("23505")) throw new Error(`autopay insert failed: ${r.status} ${t}`); }
+  // Stripe often sends the first invoice.paid BEFORE this event; if that payment is already posted, count it.
+  const firstInv = typeof s.invoice === "string" ? s.invoice : s.invoice?.id;
+  if (firstInv) {
+    const got = await db(`pl_ledger?stripe_session_id=eq.${encodeURIComponent(firstInv)}&select=id`).then((x) => x.ok ? x.json() : []).catch(() => []);
+    if (Array.isArray(got) && got.length) {
+      await db(`pl_autopay?stripe_subscription_id=eq.${encodeURIComponent(subId)}&payments_made=eq.0`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ payments_made: 1, last_paid_at: new Date().toISOString() }) });
+    }
+  }
   try {
     await sendOfficeNote(`Autopay started: ${money(per)} x ${n}`, `<p>A student set up monthly autopay: <b>${n} payments of ${money(per)}</b> for <b>${esc(md.description || md.title || "their balance")}</b>. Each payment is recorded automatically.</p>`);
   } catch (e) { console.error("autopay office note failed", e); }
@@ -577,6 +593,7 @@ async function recordStoreOrder({ supaUrl, serviceKey, s, md, amount, sessionId,
     await rest(`pl_cert_enrollments`, { method: "POST", headers: { Prefer: "return=minimal,resolution=ignore-duplicates" }, body: JSON.stringify({ student_id: md.student_id, course_id: p.course_id }) }).catch(() => {});
     const led = await rest(`pl_ledger`, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ student_id: md.student_id, course_id: p.course_id, kind: "payment", description: `Store: ${title}`, amount, method: "card", date: new Date().toISOString().slice(0, 10), stripe_session_id: sessionId, recorded_by: md.student_id }) });
     if (!led.ok) { const t = await led.text(); if (!(led.status === 409 || t.includes("23505"))) console.error("store ledger insert failed", led.status, t); }
+    await recordDiscount(supaUrl, serviceKey, s, { student_id: md.student_id, course_id: p.course_id, recorded_by: md.student_id, date: new Date().toISOString().slice(0, 10) });
   }
 
   // 3) Emails: buyer receipt + office alert (both non-fatal).
