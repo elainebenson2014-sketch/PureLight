@@ -1054,3 +1054,48 @@ export async function listPaymentEvents(limit = 200) {
   if (error) throw error;
   return (data || []).map((r) => ({ ...r, payload: { summary: r.summary, problems: r.problems } }));
 }
+
+/* ---------------- AUTOPAY (monthly payment plans) ---------------- */
+export async function listMyAutopay() {
+  const { data, error } = await supabase.from("pl_autopay").select("*").order("created_at", { ascending: false });
+  if (error) return []; // table may not exist yet at a school
+  return data || [];
+}
+export async function listAutopay() {
+  const { data, error } = await supabase.from("pl_autopay").select("*, student:pl_profiles(full_name, email)").order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+/* ---------------- DONATIONS ---------------- */
+export async function startDonation({ amount, donor_name, donor_email, designation, note }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const r = await fetch("/api/create-checkout-session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ donation: true, amount, donor_name, donor_email, designation, note, student_id: user?.id || null, origin: window.location.origin }),
+  });
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
+  return j.url;
+}
+export async function listDonations() {
+  const { data, error } = await supabase.from("pl_donations").select("*").order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+/* ---------------- PROMO CODES (admin) ---------------- */
+async function couponApi(method, body) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const r = await fetch("/api/coupons", {
+    method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token || ""}` },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error(j.error || "Promo code request failed.");
+  return j;
+}
+export const listCoupons = () => couponApi("GET").then((j) => j.codes || []);
+export const createCoupon = (c) => couponApi("POST", { action: "create", ...c });
+export const deactivateCoupon = (id) => couponApi("POST", { action: "deactivate", id });

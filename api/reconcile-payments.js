@@ -29,8 +29,9 @@ export default async function handler(req, res) {
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!stripeKey || !supaUrl || !serviceKey) { res.status(200).json({ skipped: "payments not configured for this school" }); return; }
 
+  // Pinned API version so invoice fields (subscription_details) are always present.
   const stripe = async (path) => {
-    const r = await fetch(`https://api.stripe.com/v1/${path}`, { headers: { Authorization: `Bearer ${stripeKey}` } });
+    const r = await fetch(`https://api.stripe.com/v1/${path}`, { headers: { Authorization: `Bearer ${stripeKey}`, "Stripe-Version": "2024-06-20" } });
     const j = await r.json();
     if (!r.ok) throw new Error(`Stripe: ${j.error?.message || r.status}`);
     return j;
@@ -85,6 +86,10 @@ export default async function handler(req, res) {
     const since_q = encodeURIComponent(sinceIso);
     const ledger = await db(`pl_ledger?created_at=gte.${since_q}&select=stripe_session_id,stripe_refund_id,description&limit=10000`);
     const orders = await db(`pl_store_orders?created_at=gte.${since_q}&select=stripe_session_id,status`);
+    const gifts = await db(`pl_donations?created_at=gte.${since_q}&select=stripe_session_id`);
+    const giftSessions = new Set(gifts.map((g) => g.stripe_session_id).filter(Boolean));
+    const invoices = (await listAll(`invoices?status=paid&created[gte]=${since}`).catch(() => []))
+      .filter((i) => i.created < settle && (i.amount_paid || 0) > 0 && i.subscription_details?.metadata?.autopay === "1");
     const failed = await db(`pl_payment_events?created_at=gte.${since_q}&status=eq.failed&type=neq.reconcile.run&select=type,error,created_at,stripe_event_id`);
 
     const ledgerSessions = new Set(ledger.map((l) => l.stripe_session_id).filter(Boolean));
@@ -95,11 +100,18 @@ export default async function handler(req, res) {
     const problems = [];
     for (const s of sessions) {
       const md = s.metadata || {};
-      const isLms = md.signup === "1" || md.store === "1" || md.tuition_level || md.course_id;
+      if (s.mode === "subscription") continue; // autopay: each monthly invoice is checked below
+      const isLms = md.signup === "1" || md.store === "1" || md.donation === "1" || md.tuition_level || md.course_id;
       if (!isLms) continue; // not a payment from this LMS
       if (!(await mine(s))) continue; // another school's payment on a shared Stripe account
-      const found = md.store === "1" ? orderSessions.has(s.id) : ledgerSessions.has(s.id);
+      const found = md.store === "1" ? orderSessions.has(s.id) : md.donation === "1" ? giftSessions.has(s.id) : ledgerSessions.has(s.id);
       if (!found) problems.push({ kind: "Payment not recorded in the LMS", amount: s.amount_total / 100, who: s.customer_details?.email || s.customer_email || "", what: md.title || md.description || md.reg_name || (md.signup === "1" ? "Registration" : "Payment"), ref: s.id });
+    }
+    // Autopay: every paid monthly invoice must be on the ledger (keyed by invoice id).
+    for (const inv of invoices) {
+      const md = inv.subscription_details.metadata;
+      if (!(await mine({ metadata: md, success_url: md.origin }))) continue;
+      if (!ledgerSessions.has(inv.id)) problems.push({ kind: "Autopay payment not recorded in the LMS", amount: inv.amount_paid / 100, who: inv.customer_email || "", what: md.description || md.title || "Autopay", ref: inv.id });
     }
     // Refunds: only those tied to an LMS checkout that has a ledger row (store downloads/items have no ledger row).
     for (const r of refunds) {
@@ -116,7 +128,7 @@ export default async function handler(req, res) {
     }
     for (const f of failed) problems.push({ kind: "Payment event failed to process", amount: null, who: "", what: `${f.type}: ${(f.error || "").slice(0, 160)}`, ref: f.stripe_event_id });
 
-    const summary = { days, checked_sessions: sessions.length, checked_refunds: refunds.length, problems: problems.length };
+    const summary = { days, checked_sessions: sessions.length + invoices.length, checked_refunds: refunds.length, problems: problems.length };
     await logRun(supaUrl, serviceKey, summary, problems);
     if (problems.length) await emailOffice(problems, summary);
     res.status(200).json({ ok: true, ...summary });

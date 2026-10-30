@@ -3,7 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>NCTS PureLight — School of Excellence</title>
+    <title>Student Portal</title>
+    <link rel="manifest" href="/api/manifest" />
+    <link rel="icon" type="image/png" href="/icon-192.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#15213d" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <!-- Adobe PDF Embed API — free key at https://developer.adobe.com/document-services/apis/pdf-embed/
          Add VITE_ADOBE_CLIENT_ID to Vercel env vars to enable inline PDF viewing for forms. -->
     <script src="https://acrobatservices.adobe.com/view-sdk/main.js"></script>
@@ -11,5 +17,9 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      // Lets phones install the portal like an app (see public/sw.js).
+      if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+    </script>
   </body>
 </html>

@@ -4,7 +4,7 @@ import {
   ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
   ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal, Receipt, BarChart3, LayoutGrid,
   Reply, FileCheck, BarChart2, Star, MessageSquare, ClipboardList, ToggleLeft, ToggleRight, CornerDownRight, ThumbsUp, RotateCcw,
-  ShoppingBag, Truck, Download,
+  ShoppingBag, Truck, Download, Heart, Tag, Smartphone, Repeat,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
@@ -319,11 +319,19 @@ export default function App() {
 
   async function logout() { await supabase.auth.signOut(); setProfile(null); }
 
+  // Each school's own name in the browser tab (index.html is shared by every school).
+  useEffect(() => { document.title = BRAND.name; }, []);
+  // Public giving page: anyone (signed in or not) can open /?give=1.
+  const qs = new URLSearchParams(window.location.search);
+  const giveMode = FEATURES.give && (qs.has("give") || qs.has("give_thanks"));
+
   return (
     <div className="pl-body" style={{ minHeight: "100vh", background: C.paper, color: C.text }}>
       <style>{FONTS}</style>
       {recovery ? (
         <ResetPassword onDone={() => setRecovery(false)} />
+      ) : giveMode ? (
+        <GivePage profile={profile} standalone />
       ) : !session ? (
         <Auth />
       ) : loading ? (
@@ -443,6 +451,11 @@ function Auth() {
           )}
         </Card>
         <div className="text-center pl-body" style={{ color: "#ffffff88", fontSize: 12, marginTop: 16 }}>New students create an account. Instructor access is granted by the administrator.</div>
+        {FEATURES.give && (
+          <div className="text-center" style={{ marginTop: 14 }}>
+            <a href="/?give=1" className="pl-body" style={{ color: C.goldSoft, fontSize: 14, fontWeight: 600, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}><Heart size={15} /> Give a gift</a>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -991,6 +1004,8 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "messages",    label: "Messages",     icon: Mail,            show: FEATURES.messages },
     { key: "store",       label: "Store",        icon: ShoppingBag,     show: FEATURES.store && (profile.role === "admin" || profile.role === "assistant") },
     { key: "paylog",      label: "Payment Log",  icon: ClipboardList,   show: FEATURES.billing && profile.role === "admin" },
+    { key: "coupons",     label: "Promo Codes",  icon: Tag,             show: FEATURES.billing && profile.role === "admin" },
+    { key: "donations",   label: "Donations",    icon: Heart,           show: FEATURES.give && profile.role === "admin" },
   ].filter((n) => n.show);
   // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
   let nav = fullNav;
@@ -1036,6 +1051,8 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
           {active === "store" && FEATURES.store && (profile.role === "admin" || profile.role === "assistant") && <StoreManager courses={courses.filter((c) => c.is_certificate)} />}
           {active === "paylog" && profile.role === "admin" && <PaymentLog />}
+          {active === "coupons" && profile.role === "admin" && <CouponsManager />}
+          {active === "donations" && profile.role === "admin" && <DonationsManager />}
         </>
       )}
     </Shell>
@@ -2036,10 +2053,12 @@ function StudentPortal({ profile, onLogout }) {
     { key: "resources",   label: "Resources",   icon: BookOpen,        show: true },
     { key: "inbox",       label: "Inbox",       icon: Mail,            show: FEATURES.messages },
     { key: "store",       label: "Store",       icon: ShoppingBag,     show: FEATURES.store },
+    { key: "give",        label: "Give",        icon: Heart,           show: FEATURES.give },
   ].filter((n) => n.show);
 
   return (
     <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ tests: available.length, homework: availableHw.length }}>
+      <InstallPrompt />
       {loading ? <Spinner /> : (
         <>
           {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, myHwSubs, homework, tests, attendance, announcements, setActive }} />}
@@ -2055,12 +2074,13 @@ function StudentPortal({ profile, onLogout }) {
           {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
           {active === "cehours" && <StudentCEHours profile={profile} courses={courses} tests={tests} subs={mySubs} certificates={certificates} />}
           {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certificates={certificates} ledger={ledger.filter((e) => e.student_id === profile.id)} refresh={refresh} />}
-          {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} tuition={tuition} profile={profile} />}
+          {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id && !e.course_id)} tuition={tuition} profile={profile} />}
           {active === "forms" && <StudentForms forms={forms} myFormSubs={myFormSubs} profile={profile} refresh={refresh} />}
           {active === "surveys" && <StudentSurveys surveys={surveys} mySurveyResps={mySurveyResps} profile={profile} refresh={refresh} />}
           {active === "resources" && <StudentResources resources={resources} profile={profile} />}
           {active === "inbox" && <MessagesView messages={messages} students={[]} profile={profile} canSend={false} refresh={refresh} />}
           {active === "store" && FEATURES.store && <StudentStore profile={profile} />}
+          {active === "give" && FEATURES.give && <GivePage profile={profile} />}
         </>
       )}
     </Shell>
@@ -4335,7 +4355,7 @@ function CertClassesManager({ courses, students, profiles, tests, homework, subs
                     const { done, total } = progressFor(c, r.student_id);
                     const ready = total > 0 && done >= total;
                     const cert = certificates.find((x) => x.course_id === c.id && x.student_id === r.student_id);
-                    const paidAmt = (ledger || []).filter((e) => e.kind === "payment" && e.course_id === c.id && e.student_id === r.student_id).reduce((a, e) => a + (Number(e.amount) || 0), 0);
+                    const paidAmt = (ledger || []).filter((e) => (e.kind === "payment" || e.kind === "scholarship") && e.course_id === c.id && e.student_id === r.student_id).reduce((a, e) => a + (Number(e.amount) || 0), 0);
                     const paid = Number(c.fee) > 0 && paidAmt >= Number(c.fee) - 0.005;
                     return (
                       <div key={r.id} className="flex items-center justify-between gap-3" style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
@@ -4405,12 +4425,15 @@ function ClassEditor({ draft, onClose, refresh }) {
 }
 
 function StudentCertClasses({ courses, enrollments, profile, certificates, ledger, refresh }) {
+  const [plans, setPlans] = useState([]);
+  useEffect(() => { if (FEATURES.autopay) db.listMyAutopay().then(setPlans).catch(() => {}); }, []);
+  const planFor = (courseId) => plans.find((p) => p.course_id === courseId && ["active", "past_due"].includes(p.status));
   const myEnroll = enrollments.filter((e) => e.student_id === profile.id);
   const myClassIds = new Set(myEnroll.map((e) => e.course_id));
   const myClasses = courses.filter((c) => c.is_certificate && myClassIds.has(c.id));
   const myCerts = certificates.filter((c) => c.student_id === profile.id && myClassIds.has(c.course_id));
   const paidForCourse = (id) => (ledger || [])
-    .filter((e) => e.kind === "payment" && e.course_id === id)
+    .filter((e) => (e.kind === "payment" || e.kind === "scholarship") && e.course_id === id)
     .reduce((a, e) => a + (Number(e.amount) || 0), 0);
 
   // Billing summary across all enrolled cert classes — same shape as the
@@ -4418,7 +4441,8 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
   const certCharged = myClasses.reduce((a, c) => a + (Number(c.fee) || 0), 0);
   const certEntries = (ledger || []).filter((e) => myClassIds.has(e.course_id));
   const certPaid = certEntries.filter((e) => e.kind === "payment").reduce((a, e) => a + (Number(e.amount) || 0), 0);
-  const certBalance = certCharged - certPaid;
+  const certCredit = certEntries.filter((e) => e.kind === "scholarship").reduce((a, e) => a + (Number(e.amount) || 0), 0);
+  const certBalance = certCharged - certPaid - certCredit;
   const certEs = [...certEntries].sort((a, b) => (a.date < b.date ? -1 : 1));
 
   async function pay(c, plan, customAmt) {
@@ -4462,8 +4486,13 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
                   <span className="pl-body" style={{ fontSize: 14, color: C.ink }}>Tuition: <b>{money(fee)}</b>{cPaid > 0 && !isPaid ? <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}> · {money(cRemaining)} left</span> : null}</span>
                   {isPaid ? (
                     <span className="pl-body" style={{ fontSize: 13, color: C.green, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Check size={15} /> Paid</span>
+                  ) : planFor(c.id) ? (
+                    <AutopayBadge plan={planFor(c.id)} />
                   ) : (
                     <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
+                      {FEATURES.autopay && weeks >= 12 && cRemaining > Math.round((fee / 4) * 100) / 100 + 0.005 && (
+                        <Btn small icon={Repeat} onClick={() => { if (window.confirm(`Set up monthly autopay? Your card will be charged about ${money(Math.round((fee / 4) * 100) / 100)} each month until ${money(cRemaining)} is paid.`)) pay(c, "auto"); }}>Autopay monthly</Btn>
+                      )}
                       {weeks >= 12 && cRemaining > Math.round((fee / 4) * 100) / 100 + 0.005 && (
                         <Btn small kind="ghost" icon={Receipt} onClick={() => pay(c, "quarter")}>Pay 1 of 4 {money(Math.min(Math.round((fee / 4) * 100) / 100, cRemaining))}</Btn>
                       )}
@@ -5298,6 +5327,8 @@ function TuitionManager({ tuition, refresh }) {
 
 /* ---------- TUITION (student) ---------- */
 function StudentTuition({ ledger, tuition, profile }) {
+  const [plans, setPlans] = useState([]);
+  useEffect(() => { if (FEATURES.autopay) db.listMyAutopay().then(setPlans).catch(() => {}); }, []);
   const charged = ledger.filter((e) => e.kind === "charge").reduce((a, e) => a + Number(e.amount || 0), 0);
   const paid = ledger.filter((e) => e.kind === "payment").reduce((a, e) => a + Number(e.amount || 0), 0);
   const scholarship = ledger.filter((e) => e.kind === "scholarship").reduce((a, e) => a + Number(e.amount || 0), 0);
@@ -5324,6 +5355,8 @@ function StudentTuition({ ledger, tuition, profile }) {
   const halfAmt = Math.round((tuitionPortion / 2) * 100) / 100;
   const fourAmt = Math.round((tuitionPortion / 4) * 100) / 100;
   const sevenAmt = Math.round((tuitionPortion / 7) * 100) / 100;
+  const autoAmt = Math.round((tuitionPortion / ((myT && Number(myT.installments)) || 7)) * 100) / 100;
+  const tuitionPlan = plans.find((p) => p.tuition_level === prog && ["active", "past_due"].includes(p.status));
   // Only offer half/four/seven as distinct options while they'd actually leave a
   // balance afterward — once remaining is that small, "pay full" is the same
   // thing, so there's no point cluttering the buttons.
@@ -5390,8 +5423,12 @@ function StudentTuition({ ledger, tuition, profile }) {
             <span className="pl-body" style={{ fontSize: 13, color: C.muted }}>Contact the office</span>
           ) : null}
         </div>
-        {tuitionPortion > 0 && !done && TUITION_PAY_ENABLED && (
+        {tuitionPortion > 0 && !done && TUITION_PAY_ENABLED && tuitionPlan && <div style={{ marginTop: 8 }}><AutopayBadge plan={tuitionPlan} /></div>}
+        {tuitionPortion > 0 && !done && TUITION_PAY_ENABLED && !tuitionPlan && (
           <div className="flex items-center gap-2" style={{ flexWrap: "wrap", marginTop: 8 }}>
+            {FEATURES.autopay && tuitionRemaining > autoAmt + 0.005 && (
+              <Btn small icon={Repeat} onClick={() => { if (window.confirm(`Set up monthly autopay? Your card will be charged about ${money(autoAmt)} each month until ${money(tuitionRemaining)} is paid.`)) pay("tuition", "auto"); }}>Autopay monthly</Btn>
+            )}
             <Btn small icon={Receipt} onClick={() => pay("tuition", "full")}>Pay full {money(tuitionRemaining)}</Btn>
             {showHalf && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "half")}>Pay half {money(Math.min(halfAmt, tuitionRemaining))}</Btn>}
             {showFour && <Btn small kind="ghost" icon={Receipt} onClick={() => pay("tuition", "four")}>Pay 1 of 4 {money(Math.min(fourAmt, tuitionRemaining))}</Btn>}
@@ -7015,8 +7052,9 @@ function PaymentLog() {
         <Btn small kind={only === "all" ? "primary" : "ghost"} onClick={() => setOnly("all")}>All ({rows.length})</Btn>
         <Btn small kind={only === "problems" ? "primary" : "ghost"} onClick={() => setOnly("problems")}>Needs review ({problems})</Btn>
         <Btn small kind={only === "checks" ? "primary" : "ghost"} onClick={() => setOnly("checks")}>Daily checks</Btn>
+        {FEATURES.autopay && <Btn small kind={only === "autopay" ? "primary" : "ghost"} icon={Repeat} onClick={() => setOnly("autopay")}>Autopay plans</Btn>}
       </div>
-      {loading ? <Spinner /> : shown.length === 0 ? <Card><div className="pl-body" style={{ color: C.muted }}>Nothing here yet. Entries appear as Stripe sends payment events.</div></Card> : (
+      {only === "autopay" ? <AutopayPlans /> : loading ? <Spinner /> : shown.length === 0 ? <Card><div className="pl-body" style={{ color: C.muted }}>Nothing here yet. Entries appear as Stripe sends payment events.</div></Card> : (
         <Card>
           {shown.map((r) => (
             <div key={r.id} className="flex items-start justify-between gap-4" style={{ padding: "11px 0", borderBottom: `1px solid ${C.line}` }}>
@@ -7036,5 +7074,213 @@ function PaymentLog() {
         </Card>
       )}
     </>
+  );
+}
+
+/* ================= AUTOPAY ================= */
+function AutopayBadge({ plan }) {
+  const late = plan.status === "past_due";
+  return (
+    <span className="pl-body" style={{ fontSize: 13, fontWeight: 600, color: late ? C.rose : C.green, display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <Repeat size={15} />
+      {late ? "Autopay: last payment was declined. Please pay this month's amount or contact the office."
+        : `Autopay on: ${money(plan.amount)} monthly · ${plan.payments_made || 0} of ${plan.payments} paid`}
+    </span>
+  );
+}
+
+function AutopayPlans() {
+  const [rows, setRows] = useState(null);
+  useEffect(() => { db.listAutopay().then(setRows).catch((e) => { window.alert(e.message); setRows([]); }); }, []);
+  if (!rows) return <Spinner />;
+  if (!rows.length) return <Card><div className="pl-body" style={{ color: C.muted }}>No autopay plans yet. Students can choose "Autopay monthly" on 12-week classes and tuition.</div></Card>;
+  const tone = { active: C.green, completed: C.muted, past_due: C.rose, canceled: C.rose };
+  const word = { active: "Active", completed: "Completed", past_due: "Payment declined", canceled: "Stopped early" };
+  return (
+    <Card>
+      <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginBottom: 8 }}>To stop or change a plan, open the subscription in Stripe (Customers → the student → Subscriptions).</div>
+      {rows.map((r) => (
+        <div key={r.id} className="flex items-start justify-between gap-4" style={{ padding: "11px 0", borderBottom: `1px solid ${C.line}` }}>
+          <div className="pl-body" style={{ fontSize: 14 }}>
+            <div style={{ fontWeight: 700, color: C.ink }}>{r.student?.full_name || "Student"} · {r.description}</div>
+            <div style={{ color: C.muted }}>{money(r.amount)} monthly · {r.payments_made || 0} of {r.payments} paid · started {new Date(r.created_at).toLocaleDateString()}</div>
+          </div>
+          <span className="pl-body" style={{ fontSize: 12, fontWeight: 800, color: tone[r.status] || C.muted, whiteSpace: "nowrap", textTransform: "uppercase", letterSpacing: 1 }}>{word[r.status] || r.status}</span>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+/* ================= GIVING ================= */
+const GIVE_FUNDS = ["General giving", "Scholarships", "Ministry outreach", "Building fund"];
+function GivePage({ profile, standalone }) {
+  const qs = new URLSearchParams(window.location.search);
+  const thanks = qs.has("give_thanks");
+  const [form, setForm] = useState({ amount: 50, other: "", donor_name: profile?.full_name || "", donor_email: profile?.email || "", designation: GIVE_FUNDS[0], note: "" });
+  const [busy, setBusy] = useState(false);
+  const amount = form.amount === "other" ? Number(form.other) : form.amount;
+  async function give() {
+    if (!(amount >= 1)) { window.alert("Please enter a gift of at least $1."); return; }
+    if (!form.donor_name.trim() || !/^\S+@\S+\.\S+$/.test(form.donor_email.trim())) { window.alert("Please enter your name and email for your receipt."); return; }
+    setBusy(true);
+    try { window.location.href = await db.startDonation({ ...form, amount }); }
+    catch (e) { window.alert(e.message); setBusy(false); }
+  }
+  const body = thanks ? (
+    <Card style={{ textAlign: "center", maxWidth: 520, margin: "0 auto" }}>
+      <Heart size={36} color={C.gold} />
+      <h2 className="pl-display" style={{ fontSize: 26, color: C.ink, margin: "10px 0 6px" }}>Thank you for your gift!</h2>
+      <p className="pl-body" style={{ color: C.text }}>Your receipt is on its way to your email. Your generosity makes this ministry possible.</p>
+      <div style={{ marginTop: 14 }}><Btn onClick={() => { window.location.href = "/"; }}>{profile ? "Back to the portal" : "Go to the portal"}</Btn></div>
+    </Card>
+  ) : (
+    <Card style={{ maxWidth: 560, margin: "0 auto" }}>
+      <Field label="Gift amount">
+        <div className="flex gap-2" style={{ flexWrap: "wrap" }}>
+          {[25, 50, 100, 250].map((a) => (
+            <Btn key={a} small kind={form.amount === a ? "primary" : "ghost"} onClick={() => setForm({ ...form, amount: a })}>{money(a)}</Btn>
+          ))}
+          <Btn small kind={form.amount === "other" ? "primary" : "ghost"} onClick={() => setForm({ ...form, amount: "other" })}>Other</Btn>
+        </div>
+        {form.amount === "other" && <input style={{ ...inputStyle, marginTop: 8 }} type="number" min="1" step="1" placeholder="Amount in dollars" value={form.other} onChange={(e) => setForm({ ...form, other: e.target.value })} />}
+      </Field>
+      <Field label="Give toward"><select style={inputStyle} value={form.designation} onChange={(e) => setForm({ ...form, designation: e.target.value })}>{GIVE_FUNDS.map((f) => <option key={f}>{f}</option>)}</select></Field>
+      <div className="grid grid-cols-2 gap-4">
+        <Field label="Your name"><input style={inputStyle} value={form.donor_name} onChange={(e) => setForm({ ...form, donor_name: e.target.value })} /></Field>
+        <Field label="Email (for your receipt)"><input style={inputStyle} type="email" value={form.donor_email} onChange={(e) => setForm({ ...form, donor_email: e.target.value })} /></Field>
+      </div>
+      <Field label="Note or prayer request (optional)"><textarea style={{ ...inputStyle, minHeight: 70 }} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
+      <Btn full kind="gold" icon={Heart} onClick={give} disabled={busy}>{busy ? "Opening secure checkout…" : `Give ${amount >= 1 ? money(amount) : ""}`}</Btn>
+      <p className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 10, textAlign: "center" }}>Secure payment by card, Apple Pay or Google Pay through Stripe. You'll get an emailed receipt.</p>
+    </Card>
+  );
+  if (!standalone) return <><PageHead title="Give" sub={`Support the work of ${BRAND.name}.`} />{body}</>;
+  return (
+    <div style={{ minHeight: "100vh", padding: "40px 16px", background: `radial-gradient(1200px 600px at 50% -10%, ${C.ink2} 0%, ${C.ink} 60%, ${C.ink} 100%)` }}>
+      <div className="text-center" style={{ marginBottom: 22 }}>
+        {BRAND.logoUrl && <img src={BRAND.logoUrl} alt="" style={{ width: 72, height: 72, borderRadius: "50%", objectFit: "cover", background: "#fff", marginBottom: 10 }} />}
+        <div className="pl-display" style={{ color: "#fff", fontSize: 30, fontWeight: 600 }}>Give to {BRAND.name}</div>
+        {BRAND.tagline && <div className="pl-body" style={{ color: C.goldSoft, fontSize: 13, letterSpacing: ".18em", textTransform: "uppercase", marginTop: 4 }}>{BRAND.tagline}</div>}
+      </div>
+      {body}
+    </div>
+  );
+}
+
+function DonationsManager() {
+  const [rows, setRows] = useState(null);
+  useEffect(() => { db.listDonations().then(setRows).catch((e) => { window.alert(e.message); setRows([]); }); }, []);
+  if (!rows) return <Spinner />;
+  const kept = rows.filter((r) => r.status !== "refunded");
+  const total = kept.reduce((a, r) => a + (Number(r.amount) || 0) - (Number(r.refunded_amount) || 0), 0);
+  const month = new Date().toISOString().slice(0, 7);
+  const thisMonth = kept.filter((r) => (r.created_at || "").startsWith(month)).reduce((a, r) => a + (Number(r.amount) || 0), 0);
+  function exportCsv() {
+    const head = ["Date", "Name", "Email", "Amount", "Toward", "Status", "Note"];
+    const lines = rows.map((r) => [new Date(r.created_at).toLocaleDateString(), r.donor_name, r.donor_email, r.amount, r.designation, r.status, (r.note || "").replace(/\n/g, " ")].map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","));
+    const blob = new Blob([[head.join(","), ...lines].join("\n")], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "donations.csv"; a.click();
+  }
+  return (
+    <>
+      <PageHead title="Donations" sub={`Gifts received online. Share your giving page: ${window.location.origin}/?give=1`} action={<Btn kind="ghost" icon={Download} onClick={exportCsv}>Export CSV</Btn>} />
+      <div className="grid grid-cols-3 gap-4" style={{ marginBottom: 20 }}>
+        <Stat icon={Heart} label="Total given" value={money(total)} tone={C.green} />
+        <Stat icon={CalendarDays} label="This month" value={money(thisMonth)} />
+        <Stat icon={Users} label="Gifts" value={kept.length} />
+      </div>
+      {rows.length === 0 ? <Card><div className="pl-body" style={{ color: C.muted }}>No gifts yet. Share your giving page link above.</div></Card> : (
+        <Card>
+          {rows.map((r) => (
+            <div key={r.id} className="flex items-start justify-between gap-4" style={{ padding: "11px 0", borderBottom: `1px solid ${C.line}` }}>
+              <div className="pl-body" style={{ fontSize: 14 }}>
+                <div style={{ fontWeight: 700, color: C.ink }}>{r.donor_name || "Donor"} · {money(r.amount)} · {r.designation}</div>
+                <div style={{ color: C.muted }}>{r.donor_email} · {new Date(r.created_at).toLocaleDateString()}{r.note ? ` · "${r.note}"` : ""}</div>
+              </div>
+              <span className="pl-body" style={{ fontSize: 12, fontWeight: 800, color: r.status === "paid" ? C.green : C.rose, textTransform: "uppercase", letterSpacing: 1, whiteSpace: "nowrap" }}>{r.status === "paid" ? "Received" : r.status.replace("_", " ")}</span>
+            </div>
+          ))}
+        </Card>
+      )}
+    </>
+  );
+}
+
+/* ================= PROMO CODES ================= */
+function CouponsManager() {
+  const empty = { code: "", type: "percent", value: "", max_redemptions: "", expires: "", note: "" };
+  const [rows, setRows] = useState(null);
+  const [form, setForm] = useState(empty);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => db.listCoupons().then(setRows).catch((e) => { window.alert(e.message); setRows([]); }), []);
+  useEffect(() => { load(); }, [load]);
+  async function create() {
+    setBusy(true);
+    try {
+      await db.createCoupon({ code: form.code, [form.type === "percent" ? "percent_off" : "amount_off"]: Number(form.value), max_redemptions: form.max_redemptions || null, expires: form.expires || null, note: form.note });
+      setForm(empty); await load();
+    } catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  async function stop(r) {
+    if (!window.confirm(`Turn off ${r.code}? It can't be turned back on (make a new code instead).`)) return;
+    try { await db.deactivateCoupon(r.id); await load(); } catch (e) { window.alert(e.message); }
+  }
+  return (
+    <>
+      <PageHead title="Promo Codes" sub="Discount codes students type at checkout, for scholarships, early-bird pricing or groups." />
+      <Card style={{ marginBottom: 20, maxWidth: 720 }}>
+        <div className="grid grid-cols-3 gap-4">
+          <Field label="Code"><input style={inputStyle} value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="EARLYBIRD" /></Field>
+          <Field label="Discount type"><select style={inputStyle} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}><option value="percent">Percent off</option><option value="amount">Dollars off</option></select></Field>
+          <Field label={form.type === "percent" ? "Percent (1–100)" : "Dollars off"}><input style={inputStyle} type="number" min="1" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} /></Field>
+          <Field label="Max uses (optional)"><input style={inputStyle} type="number" min="1" value={form.max_redemptions} onChange={(e) => setForm({ ...form, max_redemptions: e.target.value })} /></Field>
+          <Field label="Expires (optional)"><input style={inputStyle} type="date" value={form.expires} onChange={(e) => setForm({ ...form, expires: e.target.value })} /></Field>
+          <Field label="Note (optional)"><input style={inputStyle} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="Scholarship for…" /></Field>
+        </div>
+        <Btn icon={Plus} onClick={create} disabled={busy || !form.code || !form.value}>{busy ? "Creating…" : "Create code"}</Btn>
+        <p className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 10 }}>Each code takes its discount off one payment. Students enter it on the Stripe checkout page ("Add promotion code").</p>
+      </Card>
+      {!rows ? <Spinner /> : rows.length === 0 ? <Card><div className="pl-body" style={{ color: C.muted }}>No promo codes yet.</div></Card> : (
+        <Card>
+          {rows.map((r) => (
+            <div key={r.id} className="flex items-center justify-between gap-4" style={{ padding: "11px 0", borderBottom: `1px solid ${C.line}` }}>
+              <div className="pl-body" style={{ fontSize: 14 }}>
+                <div style={{ fontWeight: 800, color: r.active ? C.ink : C.muted, letterSpacing: 1 }}>{r.code} <span style={{ fontWeight: 600, letterSpacing: 0 }}>· {r.percent_off ? `${r.percent_off}% off` : `${money(r.amount_off)} off`}</span></div>
+                <div style={{ color: C.muted }}>Used {r.used}{r.max ? ` of ${r.max}` : ""} times{r.expires ? ` · expires ${r.expires}` : ""}{r.note ? ` · ${r.note}` : ""}</div>
+              </div>
+              {r.active ? <Btn small kind="ghost" onClick={() => stop(r)}>Turn off</Btn> : <span className="pl-body" style={{ fontSize: 12, color: C.muted, fontWeight: 700 }}>OFF</span>}
+            </div>
+          ))}
+        </Card>
+      )}
+    </>
+  );
+}
+
+/* ================= INSTALL ON PHONE ================= */
+function InstallPrompt() {
+  const [evt, setEvt] = useState(null);
+  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem("pl_install_hidden") === "1"; } catch { return false; } });
+  useEffect(() => {
+    const h = (e) => { e.preventDefault(); setEvt(e); };
+    window.addEventListener("beforeinstallprompt", h);
+    return () => window.removeEventListener("beforeinstallprompt", h);
+  }, []);
+  const standaloneNow = window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone;
+  const ios = /iphone|ipad|ipod/i.test(window.navigator.userAgent);
+  if (hidden || standaloneNow || (!evt && !ios)) return null;
+  const hide = () => { setHidden(true); try { localStorage.setItem("pl_install_hidden", "1"); } catch {} };
+  return (
+    <Card style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <Smartphone size={22} color={C.gold} />
+      <div className="pl-body" style={{ flex: 1, minWidth: 200, fontSize: 14 }}>
+        <b>Add {BRAND.name} to your home screen</b>
+        <div style={{ color: C.muted, fontSize: 13 }}>{evt ? "Open your classes with one tap, like an app." : "On iPhone: tap the Share button, then \"Add to Home Screen\"."}</div>
+      </div>
+      {evt && <Btn small onClick={async () => { evt.prompt(); await evt.userChoice.catch(() => {}); setEvt(null); hide(); }}>Install</Btn>}
+      <Btn small kind="ghost" onClick={hide}>Not now</Btn>
+    </Card>
   );
 }

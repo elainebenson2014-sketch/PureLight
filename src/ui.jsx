@@ -38,6 +38,8 @@ export const FEATURES = {
   people:          (ENV.VITE_FEATURE_PEOPLE           ?? "true") !== "false",
   transcripts:     (ENV.VITE_FEATURE_TRANSCRIPTS      ?? "true") !== "false",
   store:           (ENV.VITE_FEATURE_STORE            ?? "false") !== "false",
+  give:            (ENV.VITE_FEATURE_GIVE             ?? "false") !== "false",
+  autopay:         (ENV.VITE_FEATURE_AUTOPAY          ?? "false") !== "false",
 };
 
 export const C = {
