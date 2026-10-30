@@ -4355,7 +4355,7 @@ function CertClassesManager({ courses, students, profiles, tests, homework, subs
                     const { done, total } = progressFor(c, r.student_id);
                     const ready = total > 0 && done >= total;
                     const cert = certificates.find((x) => x.course_id === c.id && x.student_id === r.student_id);
-                    const paidAmt = (ledger || []).filter((e) => e.kind === "payment" && e.course_id === c.id && e.student_id === r.student_id).reduce((a, e) => a + (Number(e.amount) || 0), 0);
+                    const paidAmt = (ledger || []).filter((e) => (e.kind === "payment" || e.kind === "scholarship") && e.course_id === c.id && e.student_id === r.student_id).reduce((a, e) => a + (Number(e.amount) || 0), 0);
                     const paid = Number(c.fee) > 0 && paidAmt >= Number(c.fee) - 0.005;
                     return (
                       <div key={r.id} className="flex items-center justify-between gap-3" style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
@@ -4433,7 +4433,7 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
   const myClasses = courses.filter((c) => c.is_certificate && myClassIds.has(c.id));
   const myCerts = certificates.filter((c) => c.student_id === profile.id && myClassIds.has(c.course_id));
   const paidForCourse = (id) => (ledger || [])
-    .filter((e) => e.kind === "payment" && e.course_id === id)
+    .filter((e) => (e.kind === "payment" || e.kind === "scholarship") && e.course_id === id)
     .reduce((a, e) => a + (Number(e.amount) || 0), 0);
 
   // Billing summary across all enrolled cert classes — same shape as the
@@ -4441,7 +4441,8 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
   const certCharged = myClasses.reduce((a, c) => a + (Number(c.fee) || 0), 0);
   const certEntries = (ledger || []).filter((e) => myClassIds.has(e.course_id));
   const certPaid = certEntries.filter((e) => e.kind === "payment").reduce((a, e) => a + (Number(e.amount) || 0), 0);
-  const certBalance = certCharged - certPaid;
+  const certCredit = certEntries.filter((e) => e.kind === "scholarship").reduce((a, e) => a + (Number(e.amount) || 0), 0);
+  const certBalance = certCharged - certPaid - certCredit;
   const certEs = [...certEntries].sort((a, b) => (a.date < b.date ? -1 : 1));
 
   async function pay(c, plan, customAmt) {
