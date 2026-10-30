@@ -2074,7 +2074,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "certificates" && <StudentCertificates certificates={certificates} profile={profile} />}
           {active === "cehours" && <StudentCEHours profile={profile} courses={courses} tests={tests} subs={mySubs} certificates={certificates} />}
           {active === "certprograms" && <StudentCertClasses courses={courses} enrollments={certEnrollments} profile={profile} certificates={certificates} ledger={ledger.filter((e) => e.student_id === profile.id)} refresh={refresh} />}
-          {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id)} tuition={tuition} profile={profile} />}
+          {active === "tuition" && <StudentTuition ledger={ledger.filter((e) => e.student_id === profile.id && !e.course_id)} tuition={tuition} profile={profile} />}
           {active === "forms" && <StudentForms forms={forms} myFormSubs={myFormSubs} profile={profile} refresh={refresh} />}
           {active === "surveys" && <StudentSurveys surveys={surveys} mySurveyResps={mySurveyResps} profile={profile} refresh={refresh} />}
           {active === "resources" && <StudentResources resources={resources} profile={profile} />}
