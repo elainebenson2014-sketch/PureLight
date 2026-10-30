@@ -6,6 +6,8 @@
    2) HOMEWORK DUE TOMORROW: published homework due tomorrow (Central time),
       sent only to students who haven't turned it in yet.
 
+   3) TEACHING TOMORROW: instructors on the Teaching Schedule for tomorrow get a heads-up.
+
    Students are BCC'd in batches, so no one sees anyone else's address.
    Security: if CRON_SECRET is set, the request must carry it (Vercel Cron does this).
 
@@ -60,7 +62,7 @@ export default async function handler(req, res) {
     const now = new Date();
     const end = new Date(now.getTime() + 24 * 3600 * 1000);
     const [profiles, courses, enrolls] = await Promise.all([
-      get("pl_profiles?select=id,email,program,role,status"),
+      get("pl_profiles?select=id,email,full_name,program,role,status"),
       get("pl_courses?select=id,title,is_certificate"),
       get("pl_cert_enrollments?select=student_id,course_id"),
     ]);
@@ -100,7 +102,26 @@ export default async function handler(req, res) {
          <p>This assignment is due <b>tomorrow</b>. Open <b>Homework</b> in the portal to finish and submit it. If you've started, your draft is saved.</p>`);
     }
 
-    return res.status(200).json({ ok: true, classes: sessions.length, class_emails: classMails, homework_due: hw.length, homework_emails: hwMails });
+    // 3) TEACHERS: anyone on the Teaching Schedule for tomorrow gets a heads-up.
+    const teach = await get(`pl_schedule?select=*&session_date=eq.${tomorrow}`);
+    const staff = new Map(profiles.filter((p) => p.email && p.role !== "student").map((p) => [p.id, p]));
+    const staffByName = new Map(profiles.filter((p) => p.email && p.role !== "student" && p.full_name).map((p) => [p.full_name.toLowerCase().trim(), p]));
+    let teachMails = 0;
+    const perTeacher = new Map();
+    for (const t of teach) {
+      const who = (t.teacher_id && staff.get(t.teacher_id)) || staffByName.get((t.teacher_name || "").toLowerCase().trim());
+      if (!who) continue;
+      if (!perTeacher.has(who.email)) perTeacher.set(who.email, []);
+      perTeacher.get(who.email).push(t);
+    }
+    for (const [email, list] of perTeacher) {
+      const items = list.map((t) => `<li><b>${esc(t.topic)}</b>${t.strand ? ` · ${esc(t.strand)}` : ""}${t.program ? ` (${esc(t.program)})` : ""}</li>`).join("");
+      teachMails += await send([email], `You're teaching tomorrow: ${list[0].topic}${list.length > 1 ? ` (+${list.length - 1} more)` : ""}`,
+        `<h2 style="font-size:20px;color:#1B3A6B;margin:0 0 8px;">You're teaching tomorrow</h2><ul>${items}</ul>
+         <p>Your full rotation is under <b>Teaching Schedule</b> in the portal.</p>`);
+    }
+
+    return res.status(200).json({ ok: true, classes: sessions.length, class_emails: classMails, homework_due: hw.length, homework_emails: hwMails, teaching_tomorrow: teach.length, teacher_emails: teachMails });
   } catch (e) {
     console.error("send-reminders failed", e);
     return res.status(500).json({ error: String(e.message || e) });
