@@ -306,6 +306,9 @@ async function handleRefund({ supaUrl, serviceKey, charge, hosts }) {
   const gifts = await db(`pl_donations?stripe_session_id=eq.${k}&select=id,status,designation`).then((r) => r.ok ? r.json() : []).catch(() => []);
   const gift = Array.isArray(gifts) ? gifts[0] : null;
 
+  // Cart order (several items in one payment).
+  if (Array.isArray(orders) && orders.length > 1) return refundCart({ db, key, orders, charge, fullyRefunded, meta });
+
   let posted = 0;
   if (pay && pi) {
     const refunds = await stripeGet(`refunds?payment_intent=${encodeURIComponent(pi)}&limit=100`);
@@ -341,6 +344,34 @@ async function handleRefund({ supaUrl, serviceKey, charge, hosts }) {
   return { code: 200, body: { received: true, refunds_posted: posted }, note: `refund: ${posted} ledger row(s)${order && fullyRefunded ? ", order refunded" : ""}${gift ? ", gift updated" : ""}`, meta };
 }
 
+/* Refund on a multi-item order. Full refund: every item is refunded and each class payment
+   is reversed on the ledger. Partial refund: the office is told to adjust by hand,
+   since Stripe doesn't say which item was refunded. */
+async function refundCart({ db, key, orders, charge, fullyRefunded, meta, note = "Refund" }) {
+  let posted = 0;
+  if (fullyRefunded) {
+    await db(`pl_store_orders?stripe_session_id=eq.${encodeURIComponent(key)}&status=neq.refunded`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "refunded" }) });
+    const classPays = await db(`pl_ledger?stripe_session_id=like.${encodeURIComponent(key)}:*&kind=eq.payment&select=id,student_id,course_id,description,amount`).then((r) => r.ok ? r.json() : []).catch(() => []);
+    for (const p of Array.isArray(classPays) ? classPays : []) {
+      if (!(Number(p.amount) > 0)) continue;
+      const r = await db(`pl_ledger`, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify({
+        student_id: p.student_id, course_id: p.course_id, kind: "payment", amount: -Math.abs(Number(p.amount)), method: "card-refund",
+        description: `${note} of ${p.description || "payment"}`, date: new Date().toISOString().slice(0, 10), stripe_refund_id: `${charge.id}:${p.id}`,
+      }) });
+      if (r.ok) posted++;
+      else { const t = await r.text(); if (!(r.status === 409 || t.includes("23505"))) throw new Error(`cart refund ledger insert failed: ${r.status} ${t}`); }
+    }
+  }
+  const list = orders.map((o) => `${esc(o.title)}${o.kind === "physical" && o.status !== "shipped" ? " (not shipped yet: don't ship it)" : ""}`).join("<br>");
+  try {
+    await sendOfficeNote(`${note} recorded: ${money((charge.amount_refunded ?? charge.amount ?? 0) / 100)} (multi-item order)`,
+      fullyRefunded
+        ? `<p>The whole order was ${note === "Refund" ? "refunded" : "lost to a chargeback"}. Every item is marked refunded (downloads lock).</p><p><b>Items:</b><br>${list}</p>${orders.some((o) => o.kind === "course") ? "<p>The student is still enrolled in any class from this order. Remove the enrollment in Cert Classes if they should lose access.</p>" : ""}`
+        : `<p>Part of a multi-item order was refunded (${money((charge.amount_refunded || 0) / 100)}). Stripe doesn't say which item, so nothing was changed automatically.</p><p><b>Items:</b><br>${list}</p><p>If a class was refunded, record it in Billing. If a physical item was refunded, don't ship it.</p>`);
+  } catch (e) { console.error("cart refund note failed (non-fatal)", e); }
+  return { code: 200, body: { received: true, refunds_posted: posted }, note: `${note.toLowerCase()} on cart: ${fullyRefunded ? `all items refunded, ${posted} class row(s)` : "partial, office told"}`, meta };
+}
+
 /* ---------------- DISPUTES (chargebacks) ----------------
    Opened: lock the store order and alert the office with the evidence deadline.
    Closed: won -> unlock; lost -> record the loss on the ledger and mark refunded. */
@@ -365,7 +396,7 @@ async function handleDispute({ supaUrl, serviceKey, dispute, opened, hosts }) {
   }
 
   if (opened) {
-    if (order && order.status !== "refunded") await db(`pl_store_orders?id=eq.${order.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "disputed" }) });
+    if (order) await db(`pl_store_orders?stripe_session_id=eq.${k}&status=neq.refunded`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "disputed" }) });
     const due = dispute.evidence_details?.due_by ? new Date(dispute.evidence_details.due_by * 1000).toLocaleDateString("en-US", { dateStyle: "full" }) : "soon";
     await sendOfficeNote(`URGENT: payment disputed (${money(amt)})`,
       `<p>A customer's bank has disputed <b>${money(amt)}</b> for <b>${what}</b>. Reason given: <b>${esc(dispute.reason || "not given")}</b>.</p>
@@ -376,9 +407,11 @@ async function handleDispute({ supaUrl, serviceKey, dispute, opened, hosts }) {
 
   const won = dispute.status === "won";
   if (won) {
-    if (order && order.status === "disputed") await db(`pl_store_orders?id=eq.${order.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "paid" }) });
+    if (order) await db(`pl_store_orders?stripe_session_id=eq.${k}&status=eq.disputed`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "paid" }) });
   } else {
-    if (order) await db(`pl_store_orders?id=eq.${order.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "refunded" }) });
+    if (orders.length > 1) {
+      await refundCart({ db, key, orders, charge: { id: dispute.id, amount: dispute.amount, amount_refunded: dispute.amount }, fullyRefunded: true, meta, note: "Chargeback" });
+    } else if (order) await db(`pl_store_orders?id=eq.${order.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "refunded" }) });
     if (gift) await db(`pl_donations?id=eq.${gift.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ status: "refunded", refunded_amount: amt }) });
     if (pay) {
       const row = { student_id: pay.student_id, kind: "payment", amount: -Math.abs(amt), method: "card-refund", description: `Chargeback lost: ${pay.description || "payment"} (Stripe ${dispute.id})`, date: new Date().toISOString().slice(0, 10), stripe_refund_id: dispute.id };
@@ -568,6 +601,7 @@ async function recordStoreOrder({ supaUrl, serviceKey, s, md, amount, sessionId,
   const rest = (path, opts = {}) => fetch(`${supaUrl}/rest/v1/${path}`, {
     ...opts, headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json", ...(opts.headers || {}) },
   });
+  if (md.cart === "1") return recordCartOrder({ supaUrl, serviceKey, s, md, sessionId, sessionEmail });
   if (!md.student_id || !md.product_id) throw new Error("store session missing student/product");
 
   const prows = await rest(`pl_store_products?id=eq.${encodeURIComponent(md.product_id)}&select=id,title,kind,course_id`).then((r) => r.json()).catch(() => null);
@@ -607,7 +641,71 @@ async function recordStoreOrder({ supaUrl, serviceKey, s, md, amount, sessionId,
   return { title, kind };
 }
 
-async function sendStoreEmails({ name, to, title, kind, quantity, amount, shipping }) {
+/* A cart checkout: one order row per item (unique on session + product). */
+async function recordCartOrder({ supaUrl, serviceKey, s, md, sessionId, sessionEmail }) {
+  const db = rest(supaUrl, serviceKey);
+  if (!md.student_id) throw new Error("cart session missing student");
+  const li = await stripeGet(`checkout/sessions/${encodeURIComponent(sessionId)}/line_items?limit=100&expand[]=data.price.product`, true);
+  const lines = (li.data || []).map((l) => ({
+    pid: l.price?.product?.metadata?.product_id || null,
+    qty: l.quantity || 1,
+    paid: (l.amount_total || 0) / 100,
+    off: (l.amount_discount || 0) / 100,
+    name: l.description || l.price?.product?.name || "Item",
+  }));
+  const items = lines.filter((l) => l.pid);
+  if (!items.length) throw new Error("cart session has no store items");
+  const shipLine = lines.find((l) => !l.pid);
+  const shipPaid = shipLine ? shipLine.paid : 0;
+
+  const ids = items.map((l) => l.pid);
+  const prows = await db(`pl_store_products?id=in.(${ids.join(",")})&select=id,title,kind,course_id`).then((r) => r.ok ? r.json() : []).catch(() => []);
+  const byId = new Map((Array.isArray(prows) ? prows : []).map((p) => [p.id, p]));
+  const sd = s.collected_information?.shipping_details || s.shipping_details || null;
+  const shipping = sd ? { name: sd.name || null, address: sd.address || null } : null;
+
+  let shipAdded = false;
+  const rows = items.map((l) => {
+    const p = byId.get(l.pid) || {};
+    const kind = p.kind || "digital";
+    let amount = l.paid;
+    if (kind === "physical" && !shipAdded && shipPaid > 0) { amount = Math.round((amount + shipPaid) * 100) / 100; shipAdded = true; }
+    return { student_id: md.student_id, product_id: l.pid, title: p.title || l.name, kind, quantity: l.qty, amount, status: "paid", shipping: kind === "physical" ? shipping : null, stripe_session_id: sessionId };
+  });
+  const ins = await db(`pl_store_orders?on_conflict=stripe_session_id,product_id`, { method: "POST", headers: { Prefer: "return=representation,resolution=ignore-duplicates" }, body: JSON.stringify(rows) });
+  if (!ins.ok) throw new Error(`cart order insert failed: ${ins.status} ${await ins.text()}`);
+  const fresh = await ins.json().catch(() => []);
+  if (!Array.isArray(fresh) || !fresh.length) return "duplicate";
+
+  // Classes in the cart: enroll and post the payment (and any promo credit) on that class.
+  const today = new Date().toISOString().slice(0, 10);
+  for (const l of items) {
+    const p = byId.get(l.pid);
+    if (!p || p.kind !== "course" || !p.course_id) continue;
+    await db(`pl_cert_enrollments`, { method: "POST", headers: { Prefer: "return=minimal,resolution=ignore-duplicates" }, body: JSON.stringify({ student_id: md.student_id, course_id: p.course_id }) }).catch(() => {});
+    const base = { student_id: md.student_id, course_id: p.course_id, method: "card", date: today, recorded_by: md.student_id };
+    const r1 = await insertLedger(supaUrl, serviceKey, { ...base, kind: "payment", description: `Store: ${p.title}`, amount: l.paid, stripe_session_id: `${sessionId}:${p.id}` });
+    if (r1 !== "ok" && r1 !== "duplicate") console.error("cart ledger insert failed", r1);
+    if (l.off > 0) {
+      const r2 = await insertLedger(supaUrl, serviceKey, { ...base, kind: "scholarship", method: null, description: "Promo code discount", amount: l.off, stripe_session_id: `${sessionId}:${p.id}:promo` });
+      if (r2 !== "ok" && r2 !== "duplicate") console.error("cart promo credit failed", r2);
+    }
+  }
+
+  let name = "Student", acctEmail = null;
+  try {
+    const pr = await db(`pl_profiles?id=eq.${encodeURIComponent(md.student_id)}&select=full_name,email`).then((r) => r.json());
+    if (Array.isArray(pr) && pr[0]) { name = pr[0].full_name || name; acctEmail = pr[0].email || null; }
+  } catch (e) { /* defaults */ }
+  const total = (s.amount_total || 0) / 100;
+  const kinds = new Set(rows.map((r) => r.kind));
+  try {
+    await sendStoreEmails({ name, to: [...new Set([acctEmail, sessionEmail].filter(Boolean))], title: rows.length === 1 ? rows[0].title : `${rows.length} items`, kind: kinds.has("physical") ? "physical" : kinds.size === 1 ? [...kinds][0] : "mixed", quantity: 1, amount: total, shipping, items: rows });
+  } catch (e) { console.error("cart emails failed (non-fatal)", e); }
+  return { title: md.title || `${rows.length} items`, kind: [...kinds].join("+") };
+}
+
+async function sendStoreEmails({ name, to, title, kind, quantity, amount, shipping, items }) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) return;
   const from = process.env.EMAIL_FROM || "The Healed Place <onboarding@resend.dev>";
@@ -617,14 +715,20 @@ async function sendStoreEmails({ name, to, title, kind, quantity, amount, shippi
   const money = (n) => "$" + (Number(n) || 0).toFixed(2);
   const a = shipping?.address || null;
   const addr = a ? [shipping.name, a.line1, a.line2, `${a.city || ""}, ${a.state || ""} ${a.postal_code || ""}`].filter(Boolean).map(esc).join("<br>") : "";
-  const next = kind === "digital" ? "Your download is ready now. Sign in and open <b>Store → My purchases</b>."
+  const kinds = new Set((items || []).map((i) => i.kind));
+  const next = items && items.length > 1
+    ? [kinds.has("digital") ? "Downloads are ready now under <b>Store → My purchases</b>." : "", kinds.has("course") ? "You're enrolled in your new class." : "", kinds.has("physical") ? "We'll ship your items soon." : ""].filter(Boolean).join(" ")
+    : kind === "digital" ? "Your download is ready now. Sign in and open <b>Store → My purchases</b>."
     : kind === "course" ? "You're enrolled. Sign in and the class will be in your portal."
     : "We'll ship your order soon and let you know when it's on the way.";
   const shell = (body) => `<!doctype html><html><body style="margin:0;padding:24px;background:#F5F0E8;font-family:Georgia,serif;color:#1a1a1a;">
     <div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden;">
       <div style="background:#1B3A6B;padding:18px 24px;text-align:center;color:#C5922E;font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:2px;">${esc(school).toUpperCase()}</div>
       <div style="padding:24px;font-size:14px;line-height:1.6;">${body}</div></div></body></html>`;
-  const detail = `<p><b>Item:</b> ${esc(title)}${quantity > 1 ? ` × ${quantity}` : ""}<br><b>Paid:</b> ${money(amount)}</p>${addr ? `<p><b>Ship to:</b><br>${addr}</p>` : ""}`;
+  const list = items && items.length > 1
+    ? `<p><b>Items:</b><br>${items.map((i) => `${esc(i.title)}${i.quantity > 1 ? ` × ${i.quantity}` : ""}`).join("<br>")}</p><p><b>Paid:</b> ${money(amount)}</p>`
+    : `<p><b>Item:</b> ${esc(title)}${quantity > 1 ? ` × ${quantity}` : ""}<br><b>Paid:</b> ${money(amount)}</p>`;
+  const detail = `${list}${addr ? `<p><b>Ship to:</b><br>${addr}</p>` : ""}`;
 
   if (to.length) {
     await sendResend(apiKey, "store receipt", { from, to, subject: `Your order: ${title}`, html: shell(

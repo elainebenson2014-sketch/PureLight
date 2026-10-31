@@ -39,6 +39,7 @@ export const FEATURES = {
   transcripts:     (ENV.VITE_FEATURE_TRANSCRIPTS      ?? "true") !== "false",
   store:           (ENV.VITE_FEATURE_STORE            ?? "false") !== "false",
   give:            (ENV.VITE_FEATURE_GIVE             ?? "false") !== "false",
+  admissions:      (ENV.VITE_FEATURE_ADMISSIONS       ?? "false") !== "false",
   autopay:         (ENV.VITE_FEATURE_AUTOPAY          ?? "false") !== "false",
 };
 

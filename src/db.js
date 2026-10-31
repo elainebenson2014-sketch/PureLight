@@ -1046,6 +1046,18 @@ export async function startStoreCheckout(product_id, quantity) {
   return j.url;
 }
 
+export async function startCartCheckout(items) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const r = await fetch("/api/create-checkout-session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cart: items, student_id: user.id, student_email: user.email, origin: window.location.origin }),
+  });
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || "Could not start checkout.");
+  return j.url;
+}
+
 /* ---------------- PAYMENT LOG (admin) ---------------- */
 export async function listPaymentEvents(limit = 200) {
   const { data, error } = await supabase.from("pl_payment_events")
@@ -1099,3 +1111,45 @@ async function couponApi(method, body) {
 export const listCoupons = () => couponApi("GET").then((j) => j.codes || []);
 export const createCoupon = (c) => couponApi("POST", { action: "create", ...c });
 export const deactivateCoupon = (id) => couponApi("POST", { action: "deactivate", id });
+
+/* ---------------- ADMISSIONS ---------------- */
+export async function getAdmissionSettings() {
+  const { data, error } = await supabase.from("pl_admission_settings").select("*").eq("id", 1).maybeSingle();
+  if (error) throw error;
+  return data || { id: 1, open: true, intro: "", programs: [], questions: [] };
+}
+export async function saveAdmissionSettings(s) {
+  const { data, error } = await supabase.from("pl_admission_settings")
+    .update({ open: !!s.open, intro: s.intro || "", programs: s.programs || [], questions: s.questions || [], updated_at: new Date().toISOString() })
+    .eq("id", 1).select("id");
+  if (error) throw error;
+  if (!data || !data.length) throw new Error("Save was blocked. Only administrators can change admissions settings.");
+}
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1] || "");
+    r.onerror = () => reject(new Error(`Couldn't read ${file.name}.`));
+    r.readAsDataURL(file);
+  });
+}
+async function admissionsApi(body, authed) {
+  const headers = { "Content-Type": "application/json" };
+  if (authed) { const { data: { session } } = await supabase.auth.getSession(); headers.Authorization = `Bearer ${session?.access_token || ""}`; }
+  const r = await fetch("/api/admissions", { method: "POST", headers, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error(j.error || (r.status === 413 ? "Your documents are too large. Please send smaller files." : "Something went wrong. Please try again."));
+  return j;
+}
+export async function submitApplication(form, files) {
+  const list = [];
+  for (const f of files || []) list.push({ name: f.name, type: f.type, data: await fileToBase64(f) });
+  return admissionsApi({ action: "apply", ...form, files: list });
+}
+export async function listApplications() {
+  const { data, error } = await supabase.from("pl_applications").select("*").order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+export const approveApplication = (id, program, course_id) => admissionsApi({ action: "approve", id, program, course_id: course_id || null }, true);
+export const declineApplication = (id, note, notify) => admissionsApi({ action: "decline", id, note, notify }, true);
