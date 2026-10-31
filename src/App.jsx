@@ -4,7 +4,7 @@ import {
   ArrowLeft, ChevronRight, Award, Clock, PencilLine, X, Check, Inbox, Library,
   ClipboardCheck, Sparkles, ScrollText, NotebookPen, CalendarDays, ExternalLink, PlayCircle, GraduationCap, Medal, Receipt, BarChart3, LayoutGrid,
   Reply, FileCheck, BarChart2, Star, MessageSquare, ClipboardList, ToggleLeft, ToggleRight, CornerDownRight, ThumbsUp, RotateCcw,
-  ShoppingBag, Truck, Download, Heart, Tag, Smartphone, Repeat,
+  ShoppingBag, Truck, Download, Heart, Tag, Smartphone, Repeat, ShoppingCart, UserPlus, Paperclip,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 import * as db from "./db";
@@ -324,6 +324,8 @@ export default function App() {
   // Public giving page: anyone (signed in or not) can open /?give=1.
   const qs = new URLSearchParams(window.location.search);
   const giveMode = FEATURES.give && (qs.has("give") || qs.has("give_thanks"));
+  // Public admissions form: /?apply=1
+  const applyMode = FEATURES.admissions && qs.has("apply");
 
   return (
     <div className="pl-body" style={{ minHeight: "100vh", background: C.paper, color: C.text }}>
@@ -332,6 +334,8 @@ export default function App() {
         <ResetPassword onDone={() => setRecovery(false)} />
       ) : giveMode ? (
         <GivePage profile={profile} standalone />
+      ) : applyMode ? (
+        <ApplyPage />
       ) : !session ? (
         <Auth />
       ) : loading ? (
@@ -451,6 +455,11 @@ function Auth() {
           )}
         </Card>
         <div className="text-center pl-body" style={{ color: "#ffffff88", fontSize: 12, marginTop: 16 }}>New students create an account. Instructor access is granted by the administrator.</div>
+        {FEATURES.admissions && (
+          <div className="text-center" style={{ marginTop: 14 }}>
+            <a href="/?apply=1" className="pl-body" style={{ color: C.goldSoft, fontSize: 14, fontWeight: 600, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}><UserPlus size={15} /> Apply for admission</a>
+          </div>
+        )}
         {FEATURES.give && (
           <div className="text-center" style={{ marginTop: 14 }}>
             <a href="/?give=1" className="pl-body" style={{ color: C.goldSoft, fontSize: 14, fontWeight: 600, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}><Heart size={15} /> Give a gift</a>
@@ -1006,6 +1015,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "paylog",      label: "Payment Log",  icon: ClipboardList,   show: FEATURES.billing && profile.role === "admin" },
     { key: "coupons",     label: "Promo Codes",  icon: Tag,             show: FEATURES.billing && profile.role === "admin" },
     { key: "donations",   label: "Donations",    icon: Heart,           show: FEATURES.give && profile.role === "admin" },
+    { key: "admissions",  label: "Admissions",   icon: UserPlus,        show: FEATURES.admissions && (profile.role === "admin" || profile.role === "assistant") },
   ].filter((n) => n.show);
   // Administration sees everything; Assistant loses Billing + Certificates; Instructor gets the teaching subset.
   let nav = fullNav;
@@ -1053,6 +1063,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "paylog" && profile.role === "admin" && <PaymentLog />}
           {active === "coupons" && profile.role === "admin" && <CouponsManager />}
           {active === "donations" && profile.role === "admin" && <DonationsManager />}
+          {active === "admissions" && FEATURES.admissions && (profile.role === "admin" || profile.role === "assistant") && <AdmissionsManager courses={courses} isAdmin={profile.role === "admin"} />}
         </>
       )}
     </Shell>
@@ -1994,8 +2005,13 @@ function StudentPortal({ profile, onLogout }) {
     }
     if (p.get("store_paid") && FEATURES.store) {
       window.history.replaceState({}, "", window.location.pathname);
+      cartSave(profile.id, []);
       setActive("store");
       window.alert("Thank you for your order! It will appear under My purchases in a moment.");
+    }
+    if (p.get("store_canceled") && FEATURES.store) {
+      window.history.replaceState({}, "", window.location.pathname);
+      setActive("store");
     }
   }, [refresh]);
 
@@ -6945,13 +6961,19 @@ function StoreManager({ courses }) {
   );
 }
 
+/* Shopping cart: kept in this browser per student (a convenience; prices are always
+   re-read on the server at checkout). */
+function cartLoad(uid) { try { const v = JSON.parse(window.localStorage.getItem(`pl_cart_${uid}`) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } }
+function cartSave(uid, items) { try { window.localStorage.setItem(`pl_cart_${uid}`, JSON.stringify(items)); } catch { /* storage blocked */ } }
+
 function StudentStore({ profile }) {
   const [tab, setTab] = useState("shop");
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
-  const [qty, setQty] = useState({});
+  const [cart, setCartState] = useState(() => cartLoad(profile.id));
   const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const setCart = (items) => { setCartState(items); cartSave(profile.id, items); };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -6961,24 +6983,48 @@ function StudentStore({ profile }) {
   }, [profile.id]);
   useEffect(() => { load(); const t = setTimeout(load, 3000); return () => clearTimeout(t); }, [load]);
 
-  async function buy(p) {
-    setBusyId(p.id);
-    try { window.location.href = await db.startStoreCheckout(p.id, qty[p.id] || 1); }
-    catch (e) { window.alert(e.message || "Could not start checkout."); setBusyId(null); }
-  }
   async function download(o) {
     try { const u = await db.signedUrl(o.product?.file_path); window.open(u, "_blank"); }
     catch (e) { window.alert("That file isn't available right now. Please contact the office."); }
   }
   const owned = new Set(orders.filter((o) => o.kind !== "physical" && o.status !== "refunded").map((o) => o.product_id));
+  const byId = new Map(products.map((p) => [p.id, p]));
+  // Drop anything that's gone from the store or already owned.
+  const lines = cart.map((c) => ({ ...c, p: byId.get(c.product_id) })).filter((c) => c.p && !(c.p.kind !== "physical" && owned.has(c.p.id)));
+  const inCart = (id) => lines.some((l) => l.product_id === id);
+  const count = lines.reduce((a, l) => a + (l.p.kind === "physical" ? l.quantity : 1), 0);
+  const subtotal = lines.reduce((a, l) => a + Number(l.p.price || 0) * (l.p.kind === "physical" ? l.quantity : 1), 0);
+  const shipping = lines.filter((l) => l.p.kind === "physical").reduce((m, l) => Math.max(m, Number(l.p.shipping_fee) || 0), 0);
+
+  function add(p) {
+    if (inCart(p.id)) { setCart(lines.map((l) => l.product_id === p.id && p.kind === "physical" ? { product_id: l.product_id, quantity: Math.min(20, l.quantity + 1) } : { product_id: l.product_id, quantity: l.quantity })); return; }
+    setCart([...lines.map((l) => ({ product_id: l.product_id, quantity: l.quantity })), { product_id: p.id, quantity: 1 }]);
+  }
+  function setQty(id, q) { setCart(lines.map((l) => ({ product_id: l.product_id, quantity: l.product_id === id ? q : l.quantity }))); }
+  function remove(id) { setCart(lines.filter((l) => l.product_id !== id).map((l) => ({ product_id: l.product_id, quantity: l.quantity }))); }
+  async function checkout() {
+    if (!lines.length) return;
+    setBusy(true);
+    try { window.location.href = await db.startCartCheckout(lines.map((l) => ({ product_id: l.product_id, quantity: l.p.kind === "physical" ? l.quantity : 1 }))); }
+    catch (e) { window.alert(e.message || "Could not start checkout."); setBusy(false); }
+  }
 
   return (
     <>
       <PageHead title="Store" sub="Books, resources and classes for your journey." />
-      <div className="flex gap-2" style={{ marginBottom: 18 }}>
+      <div className="flex gap-2" style={{ marginBottom: 18, flexWrap: "wrap" }}>
         <Btn small kind={tab === "shop" ? "primary" : "ghost"} icon={ShoppingBag} onClick={() => setTab("shop")}>Shop</Btn>
+        <Btn small kind={tab === "cart" ? "primary" : "ghost"} icon={ShoppingCart} onClick={() => setTab("cart")}>Cart ({count})</Btn>
         <Btn small kind={tab === "mine" ? "primary" : "ghost"} icon={Download} onClick={() => setTab("mine")}>My purchases ({orders.length})</Btn>
       </div>
+      {tab === "shop" && count > 0 && (
+        <Card style={{ marginBottom: 16, background: C.paper2, borderLeft: `4px solid ${C.gold}` }}>
+          <div className="flex items-center justify-between gap-3" style={{ flexWrap: "wrap" }}>
+            <span className="pl-body" style={{ fontSize: 14, color: C.ink }}><b>{count} item{count === 1 ? "" : "s"}</b> in your cart · {money(subtotal)}</span>
+            <Btn small kind="gold" icon={ShoppingCart} onClick={() => setTab("cart")}>View cart and check out</Btn>
+          </div>
+        </Card>
+      )}
       {loading ? <Spinner /> : tab === "shop" ? (
         products.length === 0 ? <Card><div className="pl-body" style={{ color: C.muted }}>The store is being stocked. Please check back soon.</div></Card> : (
           <div className="grid grid-cols-3 gap-4">
@@ -6989,15 +7035,42 @@ function StudentStore({ profile }) {
                 <div className="pl-display" style={{ fontSize: 19, fontWeight: 600, color: C.ink, margin: "4px 0 6px" }}>{p.title}</div>
                 {p.description && <div className="pl-body" style={{ fontSize: 14, color: C.text, marginBottom: 10, whiteSpace: "pre-wrap" }}>{p.description}</div>}
                 <div className="pl-body" style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>{money(p.price)}{p.kind === "physical" && Number(p.shipping_fee) > 0 ? <span style={{ fontWeight: 400, color: C.muted, fontSize: 13 }}> + {money(p.shipping_fee)} shipping</span> : null}</div>
-                {owned.has(p.id) ? <Btn small kind="ghost" icon={Check} onClick={() => setTab("mine")}>You own this</Btn> : (
-                  <div className="flex items-center gap-2">
-                    {p.kind === "physical" && <select style={{ ...inputStyle, width: 70, padding: 6 }} value={qty[p.id] || 1} onChange={(e) => setQty({ ...qty, [p.id]: Number(e.target.value) })}>{[1,2,3,4,5,6,7,8,9,10].map((n) => <option key={n} value={n}>{n}</option>)}</select>}
-                    <Btn small icon={ShoppingBag} onClick={() => buy(p)} disabled={busyId === p.id}>{busyId === p.id ? "Opening…" : "Buy"}</Btn>
-                  </div>
-                )}
+                {owned.has(p.id) ? <Btn small kind="ghost" icon={Check} onClick={() => setTab("mine")}>You own this</Btn>
+                  : inCart(p.id) && p.kind !== "physical" ? <Btn small kind="ghost" icon={Check} onClick={() => setTab("cart")}>In your cart</Btn>
+                  : <Btn small icon={ShoppingCart} onClick={() => add(p)}>{inCart(p.id) ? "Add another" : "Add to cart"}</Btn>}
               </Card>
             ))}
           </div>
+        )
+      ) : tab === "cart" ? (
+        lines.length === 0 ? <Card><div className="pl-body" style={{ color: C.muted }}>Your cart is empty. Open <b>Shop</b> to add items.</div></Card> : (
+          <Card style={{ maxWidth: 680 }}>
+            {lines.map((l) => (
+              <div key={l.product_id} className="flex items-center justify-between gap-3" style={{ padding: "12px 0", borderBottom: `1px solid ${C.line}`, flexWrap: "wrap" }}>
+                <div className="pl-body" style={{ fontSize: 14, minWidth: 180, flex: 1 }}>
+                  <div style={{ fontWeight: 700, color: C.ink }}>{l.p.title}</div>
+                  <div style={{ color: C.muted, fontSize: 12.5 }}>{l.p.kind === "digital" ? "Instant download" : l.p.kind === "course" ? "Class" : "Shipped to you"} · {money(l.p.price)} each</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {l.p.kind === "physical"
+                    ? <select aria-label={`Quantity of ${l.p.title}`} style={{ ...inputStyle, width: 70, padding: 6 }} value={l.quantity} onChange={(e) => setQty(l.product_id, Number(e.target.value))}>{[1,2,3,4,5,6,7,8,9,10].map((n) => <option key={n} value={n}>{n}</option>)}</select>
+                    : <span className="pl-body" style={{ fontSize: 13, color: C.muted, width: 70, textAlign: "center" }}>1</span>}
+                  <span className="pl-body" style={{ fontWeight: 700, width: 80, textAlign: "right" }}>{money(Number(l.p.price || 0) * (l.p.kind === "physical" ? l.quantity : 1))}</span>
+                  <button aria-label={`Remove ${l.p.title}`} onClick={() => remove(l.product_id)} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.muted, padding: 4 }}><Trash2 size={16} /></button>
+                </div>
+              </div>
+            ))}
+            <div className="pl-body" style={{ fontSize: 14, marginTop: 12, display: "grid", gap: 4, justifyItems: "end" }}>
+              <div>Subtotal: <b>{money(subtotal)}</b></div>
+              {shipping > 0 && <div>Shipping: <b>{money(shipping)}</b></div>}
+              <div style={{ fontSize: 16 }}>Total: <b>{money(subtotal + shipping)}</b></div>
+              <div style={{ fontSize: 12, color: C.muted }}>Have a promo code? Enter it on the next page.</div>
+            </div>
+            <div className="flex gap-2" style={{ marginTop: 14, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <Btn kind="ghost" onClick={() => setTab("shop")}>Keep shopping</Btn>
+              <Btn kind="gold" icon={ShoppingCart} onClick={checkout} disabled={busy}>{busy ? "Opening secure checkout…" : `Check out ${money(subtotal + shipping)}`}</Btn>
+            </div>
+          </Card>
         )
       ) : (
         orders.length === 0 ? <Card><div className="pl-body" style={{ color: C.muted }}>No purchases yet.</div></Card> : (
@@ -7022,6 +7095,252 @@ function StudentStore({ profile }) {
   );
 }
 
+
+/* ================= ADMISSIONS ================= */
+// Standard questions on every application (each school can add its own in Settings).
+const STD_QUESTIONS = [
+  { label: "Mailing address", type: "long", required: false },
+  { label: "Church or ministry", type: "text", required: false },
+  { label: "Pastor or reference (name and phone)", type: "text", required: false },
+  { label: "Highest education completed", type: "text", required: false },
+  { label: "Why do you want to study with us?", type: "long", required: true },
+  { label: "How did you hear about us?", type: "text", required: false },
+];
+const progLabel = (k) => (PROGRAMS.find((p) => p.key === k) || {}).label || k || "";
+
+function ApplyPage() {
+  const [settings, setSettings] = useState(null);
+  const [form, setForm] = useState({ full_name: "", email: "", phone: "", program: "", website: "" });
+  const [answers, setAnswers] = useState({});
+  const [files, setFiles] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  useEffect(() => { db.getAdmissionSettings().then(setSettings).catch(() => setSettings({ open: true, intro: "", programs: [], questions: [] })); }, []);
+  const programs = settings && Array.isArray(settings.programs) && settings.programs.length ? STUDENT_PROGRAMS.filter((p) => settings.programs.includes(p.key)) : STUDENT_PROGRAMS;
+  const questions = [...STD_QUESTIONS, ...((settings && Array.isArray(settings.questions)) ? settings.questions : [])];
+
+  function pickFiles(list) {
+    const arr = [...(list || [])].slice(0, 3);
+    const total = arr.reduce((a, f) => a + f.size, 0);
+    if (total > 3 * 1024 * 1024) { window.alert("Please keep your documents under 3 MB together. Photos of documents can be shrunk or sent as PDFs."); return; }
+    setFiles(arr);
+  }
+  async function submit() {
+    if (!form.full_name.trim() || !/^\S+@\S+\.\S+$/.test(form.email.trim())) { window.alert("Please enter your full name and a valid email."); return; }
+    if (!form.program) { window.alert("Please choose the program you're applying for."); return; }
+    const missing = questions.find((q) => q.required && !String(answers[q.label] || "").trim());
+    if (missing) { window.alert(`Please answer: ${missing.label}`); return; }
+    setBusy(true);
+    try { await db.submitApplication({ ...form, program: progLabel(form.program), answers }, files); setDone(true); window.scrollTo(0, 0); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+
+  let body;
+  if (!settings) body = <Spinner />;
+  else if (done) body = (
+    <Card style={{ textAlign: "center", maxWidth: 560, margin: "0 auto" }}>
+      <Check size={36} color={C.gold} />
+      <h2 className="pl-display" style={{ fontSize: 26, color: C.ink, margin: "10px 0 6px" }}>Application received!</h2>
+      <p className="pl-body" style={{ color: C.text }}>Thank you, {form.full_name.split(" ")[0]}. A confirmation is on its way to <b>{form.email}</b>. We'll email you once your application has been reviewed.</p>
+    </Card>
+  );
+  else if (!settings.open) body = (
+    <Card style={{ textAlign: "center", maxWidth: 560, margin: "0 auto" }}>
+      <p className="pl-body" style={{ color: C.text, margin: 0 }}>Applications are closed right now. Please contact the office for the next start date.</p>
+    </Card>
+  );
+  else body = (
+    <Card style={{ maxWidth: 640, margin: "0 auto" }}>
+      {settings.intro && <p className="pl-body" style={{ color: C.text, marginTop: 0, whiteSpace: "pre-wrap" }}>{settings.intro}</p>}
+      <div className="grid grid-cols-2 gap-4">
+        <Field label="Full name *"><input style={inputStyle} autoComplete="name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} /></Field>
+        <Field label="Email *"><input style={inputStyle} type="email" autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
+        <Field label="Phone"><input style={inputStyle} type="tel" autoComplete="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
+        <Field label="Program *"><select style={inputStyle} value={form.program} onChange={(e) => setForm({ ...form, program: e.target.value })}><option value="">Choose…</option>{programs.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}</select></Field>
+      </div>
+      {questions.map((q) => (
+        <Field key={q.label} label={`${q.label}${q.required ? " *" : ""}`}>
+          {q.type === "long" ? <textarea style={{ ...inputStyle, minHeight: 80 }} value={answers[q.label] || ""} onChange={(e) => setAnswers({ ...answers, [q.label]: e.target.value })} />
+            : q.type === "yesno" ? <select style={inputStyle} value={answers[q.label] || ""} onChange={(e) => setAnswers({ ...answers, [q.label]: e.target.value })}><option value="">Choose…</option><option>Yes</option><option>No</option></select>
+            : <input style={inputStyle} value={answers[q.label] || ""} onChange={(e) => setAnswers({ ...answers, [q.label]: e.target.value })} />}
+        </Field>
+      ))}
+      <Field label="Documents (optional): transcripts, ID, letters. Up to 3 files, 3 MB total.">
+        <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" onChange={(e) => pickFiles(e.target.files)} className="pl-body" style={{ fontSize: 13 }} />
+        {files.length > 0 && <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 6 }}>{files.map((f) => f.name).join(", ")}</div>}
+      </Field>
+      <input type="text" tabIndex={-1} autoComplete="off" aria-hidden="true" value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} style={{ position: "absolute", left: -9999, width: 1, height: 1, opacity: 0 }} />
+      <Btn full kind="gold" icon={Send} onClick={submit} disabled={busy}>{busy ? "Sending your application…" : "Submit application"}</Btn>
+      <p className="pl-body" style={{ fontSize: 12, color: C.muted, marginTop: 10, textAlign: "center" }}>Your information is private and seen only by our admissions staff.</p>
+    </Card>
+  );
+  return (
+    <div style={{ minHeight: "100vh", padding: "40px 16px", background: `radial-gradient(1200px 600px at 50% -10%, ${C.ink2} 0%, ${C.ink} 60%, ${C.ink} 100%)` }}>
+      <div className="text-center" style={{ marginBottom: 22 }}>
+        {BRAND.logoUrl && <img src={BRAND.logoUrl} alt="" style={{ width: 72, height: 72, borderRadius: "50%", objectFit: "cover", background: "#fff", marginBottom: 10 }} />}
+        <div className="pl-display" style={{ color: "#fff", fontSize: 30, fontWeight: 600 }}>Apply to {BRAND.name}</div>
+        {BRAND.tagline && <div className="pl-body" style={{ color: C.goldSoft, fontSize: 13, letterSpacing: ".18em", textTransform: "uppercase", marginTop: 4 }}>{BRAND.tagline}</div>}
+      </div>
+      {body}
+      <div className="text-center" style={{ marginTop: 16 }}><a href="/" className="pl-body" style={{ color: "#ffffffaa", fontSize: 13 }}>Already a student? Sign in</a></div>
+    </div>
+  );
+}
+
+function AdmissionsManager({ courses, isAdmin }) {
+  const [rows, setRows] = useState(null);
+  const [tab, setTab] = useState("new");
+  const [open, setOpen] = useState(null);
+  const load = useCallback(() => db.listApplications().then(setRows).catch((e) => { window.alert(e.message); setRows([]); }), []);
+  useEffect(() => { load(); }, [load]);
+  if (!rows) return <Spinner />;
+  const counts = { new: rows.filter((r) => r.status === "new").length, approved: rows.filter((r) => r.status === "approved").length, declined: rows.filter((r) => r.status === "declined").length };
+  const list = rows.filter((r) => r.status === tab);
+  const link = `${window.location.origin}/?apply=1`;
+  return (
+    <>
+      <PageHead title="Admissions" sub={`Applications from your public form. Share it: ${link}`} />
+      <div className="flex gap-2" style={{ marginBottom: 16, flexWrap: "wrap" }}>
+        <Btn small kind={tab === "new" ? "primary" : "ghost"} onClick={() => { setTab("new"); setOpen(null); }}>To review ({counts.new})</Btn>
+        <Btn small kind={tab === "approved" ? "primary" : "ghost"} onClick={() => { setTab("approved"); setOpen(null); }}>Accepted ({counts.approved})</Btn>
+        <Btn small kind={tab === "declined" ? "primary" : "ghost"} onClick={() => { setTab("declined"); setOpen(null); }}>Declined ({counts.declined})</Btn>
+        {isAdmin && <Btn small kind={tab === "settings" ? "primary" : "ghost"} onClick={() => { setTab("settings"); setOpen(null); }}>Form settings</Btn>}
+      </div>
+      {tab === "settings" ? <AdmissionSettings /> : open ? (
+        <ApplicationDetail app={open} courses={courses} onBack={() => setOpen(null)} onDone={async () => { setOpen(null); await load(); }} />
+      ) : list.length === 0 ? (
+        <Card><div className="pl-body" style={{ color: C.muted }}>{tab === "new" ? "No new applications. Share your application link above." : "Nothing here yet."}</div></Card>
+      ) : (
+        <Card>
+          {list.map((r) => (
+            <button key={r.id} onClick={() => setOpen(r)} className="pl-press flex items-center justify-between gap-3" style={{ width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: `1px solid ${C.line}`, padding: "12px 0", cursor: "pointer" }}>
+              <span className="pl-body" style={{ fontSize: 14 }}>
+                <b style={{ color: C.ink }}>{r.full_name}</b> · {r.program || "No program"}
+                <span style={{ display: "block", color: C.muted, fontSize: 12.5 }}>{r.email} · {new Date(r.created_at).toLocaleDateString()}{(r.files || []).length ? ` · ${(r.files || []).length} document(s)` : ""}</span>
+              </span>
+              <ChevronRight size={16} color={C.muted} />
+            </button>
+          ))}
+        </Card>
+      )}
+    </>
+  );
+}
+
+function ApplicationDetail({ app, courses, onBack, onDone }) {
+  const guess = (STUDENT_PROGRAMS.find((p) => p.label.toLowerCase() === String(app.program || "").toLowerCase()) || {}).key || "";
+  const [program, setProgram] = useState(guess);
+  const [courseId, setCourseId] = useState("");
+  const [note, setNote] = useState("");
+  const [notify, setNotify] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const certClasses = (courses || []).filter((c) => c.is_certificate);
+  async function openFile(f) {
+    try { window.open(await db.signedUrl(f.path), "_blank"); } catch (e) { window.alert("Couldn't open that document."); }
+  }
+  async function accept() {
+    if (!program) { window.alert("Choose the program to place this student in."); return; }
+    if (!window.confirm(`Accept ${app.full_name}? This creates their student account and emails them a link to set their password.`)) return;
+    setBusy(true);
+    try { const r = await db.approveApplication(app.id, program, courseId); window.alert(r.existing ? "Accepted. They already had an account, so they were emailed to sign in." : r.emailed ? "Accepted. Their account is ready and the welcome email was sent." : "Accepted and the account is ready, but the welcome email didn't send. Ask them to use “Forgot password?” with their email."); await onDone(); }
+    catch (e) { window.alert(e.message); setBusy(false); }
+  }
+  async function reject() {
+    if (!window.confirm(`Decline ${app.full_name}'s application?${notify ? " They'll get a kind email." : ""}`)) return;
+    setBusy(true);
+    try { await db.declineApplication(app.id, note, notify); await onDone(); }
+    catch (e) { window.alert(e.message); setBusy(false); }
+  }
+  return (
+    <Card style={{ maxWidth: 760 }}>
+      <Btn small kind="ghost" icon={ArrowLeft} onClick={onBack}>All applications</Btn>
+      <h2 className="pl-display" style={{ fontSize: 24, color: C.ink, margin: "14px 0 2px" }}>{app.full_name}</h2>
+      <div className="pl-body" style={{ color: C.muted, fontSize: 13.5 }}>
+        <a href={`mailto:${app.email}`} style={{ color: C.ink }}>{app.email}</a>{app.phone ? ` · ${app.phone}` : ""} · Applied {new Date(app.created_at).toLocaleDateString()}
+        <br />Program: <b style={{ color: C.ink }}>{app.program || "Not chosen"}</b>
+      </div>
+      <div style={{ marginTop: 14 }}>
+        {Object.entries(app.answers || {}).filter(([, v]) => String(v || "").trim()).map(([k, v]) => (
+          <div key={k} style={{ padding: "8px 0", borderTop: `1px solid ${C.line}` }}>
+            <div className="pl-body" style={{ fontSize: 12.5, fontWeight: 700, color: C.muted }}>{k}</div>
+            <div className="pl-body" style={{ fontSize: 14, color: C.text, whiteSpace: "pre-wrap" }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {(app.files || []).length > 0 && (
+        <div style={{ marginTop: 10 }} className="flex gap-2">
+          {(app.files || []).map((f) => <Btn key={f.path} small kind="ghost" icon={Paperclip} onClick={() => openFile(f)}>{f.name}</Btn>)}
+        </div>
+      )}
+      {app.status === "new" ? (
+        <div className="grid grid-cols-2 gap-4" style={{ marginTop: 18 }}>
+          <div style={{ padding: 14, border: `1px solid ${C.line}`, borderRadius: 12 }}>
+            <div className="pl-body" style={{ fontWeight: 700, color: C.ink, marginBottom: 8 }}>Accept</div>
+            <Field label="Place in program"><select style={inputStyle} value={program} onChange={(e) => setProgram(e.target.value)}><option value="">Choose…</option>{STUDENT_PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}</select></Field>
+            {program === "certificate" && certClasses.length > 0 && (
+              <Field label="Enroll in a certificate class (optional)"><select style={inputStyle} value={courseId} onChange={(e) => setCourseId(e.target.value)}><option value="">Not yet</option>{certClasses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}</select></Field>
+            )}
+            <Btn full kind="gold" icon={Check} onClick={accept} disabled={busy}>Accept and create account</Btn>
+          </div>
+          <div style={{ padding: 14, border: `1px solid ${C.line}`, borderRadius: 12 }}>
+            <div className="pl-body" style={{ fontWeight: 700, color: C.ink, marginBottom: 8 }}>Decline</div>
+            <Field label="Note to the applicant (optional)"><textarea style={{ ...inputStyle, minHeight: 70 }} value={note} onChange={(e) => setNote(e.target.value)} placeholder="For example: we'd love to see you apply again next term." /></Field>
+            <label className="pl-body flex items-center gap-2" style={{ fontSize: 13, marginBottom: 10 }}><input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} /> Email them the decision</label>
+            <Btn full kind="ghost" icon={X} onClick={reject} disabled={busy}>Decline</Btn>
+          </div>
+        </div>
+      ) : (
+        <div className="pl-body" style={{ marginTop: 16, fontSize: 13.5, color: C.muted }}>
+          {app.status === "approved" ? "Accepted" : "Declined"}{app.reviewed_at ? ` on ${new Date(app.reviewed_at).toLocaleDateString()}` : ""}.{app.decision_note ? ` Note: ${app.decision_note}` : ""}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function AdmissionSettings() {
+  const [s, setS] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { db.getAdmissionSettings().then((x) => setS({ ...x, programs: x.programs || [], questions: x.questions || [] })).catch((e) => window.alert(e.message)); }, []);
+  if (!s) return <Spinner />;
+  const setQ = (i, patch) => setS({ ...s, questions: s.questions.map((q, j) => (j === i ? { ...q, ...patch } : q)) });
+  const toggleProg = (k) => setS({ ...s, programs: s.programs.includes(k) ? s.programs.filter((x) => x !== k) : [...s.programs, k] });
+  async function save() {
+    const qs = s.questions.map((q) => ({ label: String(q.label || "").trim().slice(0, 200), type: q.type || "text", required: !!q.required })).filter((q) => q.label);
+    setBusy(true);
+    try { await db.saveAdmissionSettings({ ...s, questions: qs }); setS({ ...s, questions: qs }); window.alert("Saved."); }
+    catch (e) { window.alert(e.message); }
+    setBusy(false);
+  }
+  return (
+    <Card style={{ maxWidth: 720 }}>
+      <label className="pl-body flex items-center gap-2" style={{ fontSize: 14, fontWeight: 600, color: C.ink, marginBottom: 12 }}>
+        <input type="checkbox" checked={!!s.open} onChange={(e) => setS({ ...s, open: e.target.checked })} /> Accepting applications
+      </label>
+      <Field label="Welcome text at the top of the form (optional)"><textarea style={{ ...inputStyle, minHeight: 70 }} value={s.intro} onChange={(e) => setS({ ...s, intro: e.target.value })} placeholder="For example: Classes begin January 12. Applications close December 15." /></Field>
+      <Field label="Programs applicants can choose (none checked = all)">
+        <div className="flex gap-3" style={{ flexWrap: "wrap" }}>
+          {STUDENT_PROGRAMS.map((p) => <label key={p.key} className="pl-body flex items-center gap-1" style={{ fontSize: 13.5 }}><input type="checkbox" checked={s.programs.includes(p.key)} onChange={() => toggleProg(p.key)} /> {p.label}</label>)}
+        </div>
+      </Field>
+      <div className="pl-body" style={{ fontWeight: 700, color: C.ink, margin: "6px 0 4px" }}>Your own questions</div>
+      <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginBottom: 8 }}>Every form already asks: name, email, phone, program, {STD_QUESTIONS.map((q) => q.label.toLowerCase()).join(", ")}, and documents.</div>
+      {s.questions.map((q, i) => (
+        <div key={i} className="flex items-center gap-2" style={{ marginBottom: 8, flexWrap: "wrap" }}>
+          <input style={{ ...inputStyle, flex: 1, minWidth: 220 }} value={q.label} placeholder="Question" onChange={(e) => setQ(i, { label: e.target.value })} />
+          <select style={{ ...inputStyle, width: 130 }} value={q.type || "text"} onChange={(e) => setQ(i, { type: e.target.value })}><option value="text">Short answer</option><option value="long">Paragraph</option><option value="yesno">Yes / No</option></select>
+          <label className="pl-body flex items-center gap-1" style={{ fontSize: 13 }}><input type="checkbox" checked={!!q.required} onChange={(e) => setQ(i, { required: e.target.checked })} /> Required</label>
+          <button aria-label="Remove question" onClick={() => setS({ ...s, questions: s.questions.filter((_, j) => j !== i) })} className="pl-press" style={{ background: "none", border: "none", cursor: "pointer", color: C.muted }}><Trash2 size={16} /></button>
+        </div>
+      ))}
+      <div className="flex gap-2" style={{ marginTop: 6 }}>
+        <Btn small kind="ghost" icon={Plus} onClick={() => setS({ ...s, questions: [...s.questions, { label: "", type: "text", required: false }] })}>Add a question</Btn>
+        <Btn small kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save settings"}</Btn>
+      </div>
+    </Card>
+  );
+}
 
 /* ================= PAYMENT LOG (admin) ================= */
 const EVENT_LABEL = {
