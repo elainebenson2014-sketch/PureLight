@@ -10,6 +10,7 @@
         tuition plans: "full" | "half" | "four" | "seven" | "custom" | "auto"
         "auto" = monthly autopay of (tuition / installments) until the remainder is paid.
    3) Store item:         { product_id, quantity, student_id, ... }
+      Store cart:         { cart: [{ product_id, quantity }], student_id, ... }  (several items, one checkout)
    4) Donation:           { donation: true, amount, donor_name, donor_email, designation, note, origin }
         Needs no account. Recorded in pl_donations by the webhook.
 
@@ -48,6 +49,7 @@ async function createSession({ mode = "payment", lines, metadata, successUrl, ca
     p.append(`line_items[${i}][price_data][currency]`, "usd");
     p.append(`line_items[${i}][price_data][unit_amount]`, String(l.cents));
     p.append(`line_items[${i}][price_data][product_data][name]`, l.name);
+    if (l.pid) p.append(`line_items[${i}][price_data][product_data][metadata][product_id]`, l.pid);
     if (l.monthly) p.append(`line_items[${i}][price_data][recurring][interval]`, "month");
   });
   for (const [k, v] of Object.entries(metadata)) {
@@ -111,7 +113,44 @@ export default async function handler(req, res) {
     const customAmt = custom_amount != null && custom_amount !== "" ? round2(Number(custom_amount)) : null;
     const hasCustom = customAmt != null && !isNaN(customAmt) && customAmt >= 0.5;
 
-    // -------- Store purchase: price and shipping always read from the database --------
+    // -------- Store cart: several items in one checkout (prices read from the database) --------
+    if (Array.isArray(body.cart)) {
+      const want = new Map();
+      for (const it of body.cart.slice(0, 30)) {
+        const id = String(it?.product_id || "").trim();
+        if (/^[0-9a-f-]{36}$/i.test(id)) want.set(id, (want.get(id) || 0) + (parseInt(it.quantity, 10) || 1));
+      }
+      if (!want.size) { res.status(400).json({ error: "Your cart is empty." }); return; }
+      const prows = await sb(`pl_store_products?id=in.(${[...want.keys()].join(",")})&active=eq.true&select=id,title,price,shipping_fee,kind,course_id`);
+      const prods = Array.isArray(prows) ? prows : [];
+      if (prods.length !== want.size) { res.status(409).json({ error: "Something in your cart is no longer available. Please refresh the store." }); return; }
+      // Don't sell a download or class the student already owns.
+      const mine = await sb(`pl_store_orders?student_id=eq.${encodeURIComponent(student_id)}&status=neq.refunded&select=product_id,kind`);
+      const owned = new Set((Array.isArray(mine) ? mine : []).filter((o) => o.kind !== "physical").map((o) => o.product_id));
+      const dup = prods.find((p) => p.kind !== "physical" && owned.has(p.id));
+      if (dup) { res.status(409).json({ error: `You already own "${dup.title}". Remove it from your cart.` }); return; }
+      const lines = [];
+      let ship = 0, physical = false;
+      for (const p of prods) {
+        const unit = Math.round((Number(p.price) || 0) * 100);
+        if (unit < 50) { res.status(400).json({ error: `"${p.title}" has no price set.` }); return; }
+        const qty = p.kind === "physical" ? Math.min(20, Math.max(1, want.get(p.id))) : 1;
+        lines.push({ cents: unit, qty, name: p.title || "Store item", pid: p.id });
+        if (p.kind === "physical") { physical = true; ship = Math.max(ship, Math.round((Number(p.shipping_fee) || 0) * 100)); }
+      }
+      // One shipping charge per order: the highest shipping fee among the shipped items.
+      if (ship > 0) lines.push({ cents: ship, name: "Shipping" });
+      const count = lines.filter((l) => l.pid).reduce((a, l) => a + l.qty, 0);
+      const url = await createSession({
+        lines, cancelUrl: `${base}/?store_canceled=1`, email: student_email, successUrl: `${base}/?store_paid=1`,
+        metadata: { store: "1", cart: "1", student_id, items: String(prods.length), title: prods.length === 1 ? (prods[0].title || "Store item") : `${count} items`, origin: base },
+        extra: physical ? { "shipping_address_collection[allowed_countries][0]": "US" } : {},
+      });
+      res.status(200).json({ url });
+      return;
+    }
+
+    // -------- Store purchase (one item): price and shipping always read from the database --------
     if (product_id) {
       const prows = await sb(`pl_store_products?id=eq.${encodeURIComponent(product_id)}&active=eq.true&select=id,title,price,shipping_fee,kind`);
       const p = Array.isArray(prows) ? prows[0] : null;
