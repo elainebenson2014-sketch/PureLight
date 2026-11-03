@@ -934,6 +934,7 @@ function TranscriptManager({ students, courses, subs, tests, hwSubs, homework, c
 }
 function InstructorPortal({ profile, onLogout }) {
   const [active, setActive] = useState("dash");
+  const [hwOpenId, setHwOpenId] = useState(null); // a homework submission opened from the Grading page
   const [books, setBooks] = useState([]);
   const [tests, setTests] = useState([]);
   const [subs, setSubs] = useState([]);
@@ -1031,7 +1032,7 @@ function InstructorPortal({ profile, onLogout }) {
   const scopedHwSubs = myCourseSet ? hwSubs.filter((s) => myCourseSet.has((homework.find((h) => h.id === s.homework_id) || {}).course_id)) : hwSubs;
 
   return (
-    <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ grading: pending, homework: pendingHw }}>
+    <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ grading: pending + pendingHw, homework: pendingHw }}>
       {loading ? <Spinner /> : (
         <>
           {active === "dash" && <><NextClassBanner schedule={schedule} profile={profile} /><InstructorDash {...{ students, books, tests, subs, profiles, setActive }} /></>}
@@ -1041,10 +1042,10 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "dlibrary" && teachesDegree && <LibraryManager books={books.filter((b) => b.program !== "certificate")} courses={courses} refresh={refresh} profile={profile} title="Degree Library" />}
           {active === "syllabus" && <SyllabusManager syllabi={syllabi} refresh={refresh} />}
           {active === "tests" && <TestsManager tests={tests} books={books} courses={courses} refresh={refresh} />}
-          {active === "homework" && <HomeworkManager homework={scopedHomework} hwSubs={scopedHwSubs} profiles={profiles} courses={courses} refresh={refresh} />}
+          {active === "homework" && <HomeworkManager homework={scopedHomework} hwSubs={scopedHwSubs} profiles={profiles} courses={courses} refresh={refresh} openSubId={hwOpenId} onOpened={() => setHwOpenId(null)} />}
           {active === "classes" && <ScheduleManager sessions={sessions} courses={courses} students={students} certEnrollments={certEnrollments} profile={profile} refresh={refresh} />}
           {active === "attendance" && profile.role === "admin" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} certEnrollments={certEnrollments} refresh={refresh} />}
-          {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} />}
+          {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} hwSubs={scopedHwSubs} homework={scopedHomework} onGradeHw={(id) => { setHwOpenId(id); setActive("homework"); }} />}
           {active === "reports" && profile.role === "admin" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "transcripts" && FEATURES.transcripts && profile.role === "admin" && <TranscriptManager students={students} courses={courses} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} certEnrollments={certEnrollments} />}
@@ -1485,7 +1486,7 @@ function TestsManager({ tests, books, courses, refresh }) {
 }
 
 /* ---------- GRADING ---------- */
-function Grading({ subs, tests, profiles, refresh }) {
+function Grading({ subs, tests, profiles, refresh, hwSubs = [], homework = [], onGradeHw }) {
   const [openId, setOpenId] = useState(null);
   const [manual, setManual] = useState({});
   const [feedback, setFeedback] = useState("");
@@ -1556,14 +1557,40 @@ function Grading({ subs, tests, profiles, refresh }) {
   const subInProg = (s) => { if (progFilter === "all") return true; const t = tests.find((x) => x.id === s.test_id); return (t?.program || "all") === progFilter; };
   const pending = subs.filter((s) => s.status !== "graded" && subInProg(s));
   const graded = subs.filter((s) => s.status === "graded" && subInProg(s));
+  const hwOf = (s) => homework.find((h) => h.id === s.homework_id);
+  const hwInProg = (s) => progFilter === "all" || (hwOf(s)?.program || "all") === progFilter;
+  const hwPending = hwSubs.filter((s) => s.status !== "graded" && hwInProg(s)).sort((a, b) => String(a.submitted_at || "").localeCompare(String(b.submitted_at || "")));
+  const hwGraded = hwSubs.filter((s) => s.status === "graded" && hwInProg(s));
+  const hwBadge = (s) => s.status === "grading" ? { label: "Draft saved", color: C.gold, bg: "#fffaf0" } : s.status === "returned" ? { label: "Sent back", color: C.rose, bg: "#fef6f6" } : null;
   return (
     <>
-      <PageHead title="Grading" sub="Submissions awaiting review and graded history." action={
+      <PageHead title="Grading" sub="Homework and quiz submissions awaiting review, and graded history." action={
         <select style={{ ...inputStyle, maxWidth: 200 }} value={progFilter} onChange={(e) => setProgFilter(e.target.value)}>
           {PROGRAMS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
         </select>
       } />
-      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Awaiting grading</h3>
+      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Homework awaiting grading ({hwPending.length})</h3>
+      <div className="flex flex-col gap-3" style={{ marginBottom: 26 }}>
+        {hwPending.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No homework waiting.{hwGraded.length ? ` ${hwGraded.length} graded so far: see Homework for the history.` : ""}</span></Card>}
+        {hwPending.map((s) => { const b = hwBadge(s); return (
+          <Card key={s.id}>
+            <div className="flex items-center justify-between" style={{ gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <div className="flex items-center gap-2">
+                  <div className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{nameOf(s.student_id)}</div>
+                  {b && <span className="pl-body" style={{ fontSize: 11, fontWeight: 700, color: b.color, background: b.bg, border: `1px solid ${b.color}`, borderRadius: 6, padding: "2px 8px" }}>{b.label}</span>}
+                </div>
+                <div className="pl-body" style={{ fontSize: 13, color: C.muted }}>Homework · {hwOf(s)?.title || "Assignment"} · submitted {fdate(s.submitted_at)}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Btn small kind="ghost" icon={ExternalLink} onClick={() => openSubmission(s, hwOf(s), nameOf(s.student_id))}>View</Btn>
+                {onGradeHw && <Btn icon={ClipboardCheck} onClick={() => onGradeHw(s.id)}>{s.status === "grading" ? "Resume" : "Grade"}</Btn>}
+              </div>
+            </div>
+          </Card>
+        ); })}
+      </div>
+      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Quizzes awaiting grading ({pending.length})</h3>
       <div className="flex flex-col gap-3" style={{ marginBottom: 26 }}>
         {pending.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>Nothing pending.</span></Card>}
         {pending.map((s) => (
@@ -1581,9 +1608,9 @@ function Grading({ subs, tests, profiles, refresh }) {
           </Card>
         ))}
       </div>
-      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Graded</h3>
+      <h3 className="pl-display" style={{ fontSize: 18, color: C.ink, marginBottom: 10 }}>Graded quizzes</h3>
       <div className="flex flex-col gap-3">
-        {graded.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No graded submissions yet.</span></Card>}
+        {graded.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No graded quizzes yet.</span></Card>}
         {graded.map((s) => (
           <Card key={s.id}>
             <div className="flex items-center justify-between">
@@ -2840,7 +2867,7 @@ function StudentSyllabus({ syllabi, profile }) {
 }
 
 /* ---------- HOMEWORK (instructor) — builder + grading ---------- */
-function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
+function HomeworkManager({ homework, hwSubs, profiles, courses, refresh, openSubId, onOpened }) {
   const [mode, setMode] = useState("list");
   const [draft, setDraft] = useState(null);
   const [qs, setQs] = useState([]);
@@ -2953,6 +2980,13 @@ function HomeworkManager({ homework, hwSubs, profiles, courses, refresh }) {
     try { await db.deleteHomework(id); await refresh(); } catch (e) { window.alert(e.message); }
   }
   function openGrade(s) { setGradeId(s.id); setManual(s.manual || {}); setScore(s.score ?? ""); setFeedback(s.feedback || ""); setMode("grade"); }
+  // Opened from the Grading page: jump straight into that submission.
+  useEffect(() => {
+    if (!openSubId) return;
+    const s = (hwSubs || []).find((x) => x.id === openSubId);
+    if (s) openGrade(s);
+    if (onOpened) onOpened();
+  }, [openSubId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function finalize() {
     const sub = hwSubs.find((s) => s.id === gradeId);
