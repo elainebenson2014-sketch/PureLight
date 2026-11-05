@@ -1012,7 +1012,7 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "resources",   label: "Resources",    icon: BookOpen,        show: true },
     { key: "announce",    label: "Announcements",icon: Sparkles,        show: true },
     { key: "messages",    label: "Messages",     icon: Mail,            show: FEATURES.messages },
-    { key: "store",       label: "Store",        icon: ShoppingBag,     show: FEATURES.store && (profile.role === "admin" || profile.role === "assistant") },
+    { key: "store",       label: "Store",        icon: ShoppingBag,     show: FEATURES.store && (profile.role === "admin" || profile.role === "assistant" || profile.role === "instructor") },
     { key: "paylog",      label: "Payment Log",  icon: ClipboardList,   show: FEATURES.billing && profile.role === "admin" },
     { key: "coupons",     label: "Promo Codes",  icon: Tag,             show: FEATURES.billing && profile.role === "admin" },
     { key: "donations",   label: "Donations",    icon: Heart,           show: FEATURES.give && profile.role === "admin" },
@@ -1061,6 +1061,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "announce" && <AnnouncementsManager announcements={announcements} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
           {active === "store" && FEATURES.store && (profile.role === "admin" || profile.role === "assistant") && <StoreManager courses={courses.filter((c) => c.is_certificate)} />}
+          {active === "store" && FEATURES.store && profile.role === "instructor" && <StudentStore profile={profile} />}
           {active === "paylog" && profile.role === "admin" && <PaymentLog />}
           {active === "coupons" && profile.role === "admin" && <CouponsManager />}
           {active === "donations" && profile.role === "admin" && <DonationsManager />}
