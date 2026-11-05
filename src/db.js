@@ -995,6 +995,28 @@ export async function deleteHwDraft(homework_id) {
     .eq("homework_id", homework_id).eq("student_id", user.id);
 }
 
+/* ---------------- QUIZ / TEST DRAFTS (server-side, cross-device) ---------------- */
+export async function saveTestDraft(test_id, answers) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { error } = await supabase.from("pl_test_drafts").upsert(
+    { test_id, student_id: user.id, answers: answers || {}, updated_at: new Date().toISOString() },
+    { onConflict: "test_id,student_id" }
+  );
+  if (error) throw error;
+}
+export async function loadTestDraft(test_id) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { data } = await supabase.from("pl_test_drafts")
+    .select("answers, updated_at")
+    .eq("test_id", test_id).eq("student_id", user.id).maybeSingle();
+  return data || null;
+}
+export async function deleteTestDraft(test_id) {
+  const { data: { user } } = await supabase.auth.getUser();
+  await supabase.from("pl_test_drafts").delete()
+    .eq("test_id", test_id).eq("student_id", user.id);
+}
+
 /* ---------------- STORE ---------------- */
 export async function listStoreProducts() {
   const { data, error } = await supabase.from("pl_store_products").select("*").order("sort_order").order("created_at", { ascending: false });
