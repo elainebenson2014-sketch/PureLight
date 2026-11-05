@@ -2553,6 +2553,46 @@ function StudentTests({ available, books, courses, refresh }) {
   const [taking, setTaking] = useState(null);
   const [answers, setAnswers] = useState({});
   const [busy, setBusy] = useState(false);
+  const [savedNote, setSavedNote] = useState(false);
+
+  const testDraftKey = (id) => `pl_test_draft_${id}`;
+  function loadLocalTestDraft(id) {
+    try { const raw = window.localStorage.getItem(testDraftKey(id)); if (raw) return JSON.parse(raw); } catch (e) { /* ignore */ }
+    return null;
+  }
+  function clearLocalTestDraft(id) {
+    try { window.localStorage.removeItem(testDraftKey(id)); } catch (e) { /* ignore */ }
+  }
+
+  async function begin(t) {
+    const local = loadLocalTestDraft(t.id);
+    setTaking(t);
+    setAnswers(local?.answers || {});
+    // then pull the SERVER draft (cross-device) and use it if it exists
+    try {
+      const server = await db.loadTestDraft(t.id);
+      if (server && Object.keys(server.answers || {}).length) setAnswers(server.answers);
+    } catch (e) { /* offline / no draft — local copy still shows */ }
+  }
+
+  // Auto-save quiz answers as the student works (local instantly, server debounced)
+  useEffect(() => {
+    if (!taking) return;
+    try { window.localStorage.setItem(testDraftKey(taking.id), JSON.stringify({ answers, savedAt: Date.now() })); } catch (e) { /* ignore */ }
+    if (!Object.keys(answers).length) return;
+    const t = setTimeout(() => {
+      db.saveTestDraft(taking.id, answers)
+        .then(() => { setSavedNote(true); setTimeout(() => setSavedNote(false), 1500); })
+        .catch(() => { /* offline — local copy still holds it */ });
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [answers, taking]);
+
+  function saveAndExit() {
+    try { window.localStorage.setItem(testDraftKey(taking.id), JSON.stringify({ answers, savedAt: Date.now() })); } catch (e) { /* ignore */ }
+    if (Object.keys(answers).length) db.saveTestDraft(taking.id, answers).catch(() => { /* offline */ });
+    setTaking(null); setAnswers({});
+  }
 
   async function submit() {
     setBusy(true);
@@ -2589,6 +2629,8 @@ function StudentTests({ available, books, courses, refresh }) {
       }
       // ── END CE PASS-GATE ──────────────────────────────────────
 
+      clearLocalTestDraft(taking.id);
+      try { await db.deleteTestDraft(taking.id); } catch (e) { /* ignore */ }
       await refresh(); setTaking(null); setAnswers({});
     } catch (e) { window.alert(e.message); }
     setBusy(false);
@@ -2600,7 +2642,13 @@ function StudentTests({ available, books, courses, refresh }) {
     const isCE = course && isCEType(course.ce_type);
     return (
       <>
-        <PageHead title={taking.title} sub={taking.description} action={<Btn kind="ghost" icon={X} onClick={() => { setTaking(null); setAnswers({}); }}>Exit</Btn>} />
+        <PageHead title={taking.title} sub={taking.description} action={<div className="flex items-center gap-2">{savedNote && <span className="pl-body" style={{ fontSize: 12.5, color: C.green, fontWeight: 600 }}><Check size={13} style={{ verticalAlign: "middle", marginRight: 3 }} />Draft saved</span>}<Btn kind="ghost" icon={X} onClick={saveAndExit}>Save & exit</Btn></div>} />
+        <Card style={{ marginBottom: 12, background: "#fffaf0", border: `1px solid ${C.gold}` }}>
+          <div className="pl-body" style={{ fontSize: 13, color: C.ink }}>
+            <Sparkles size={13} style={{ color: C.gold, verticalAlign: "middle", marginRight: 4 }} />
+            Your answers save automatically to your account as you type. If the page closes or you get logged out, sign back in and click <b>Begin</b> on this quiz again to pick up where you left off.
+          </div>
+        </Card>
         {isCE && (
           <Card style={{ marginBottom: 12, padding: "12px 16px", background: C.paper, border: `1px solid ${C.goldSoft}` }}>
             <div className="flex items-center gap-2">
@@ -2630,7 +2678,10 @@ function StudentTests({ available, books, courses, refresh }) {
         ))}
         <div className="flex items-center justify-between" style={{ marginTop: 16 }}>
           <span className="pl-body" style={{ color: C.muted, fontSize: 14 }}>{answered} / {taking.questions.length} answered</span>
-          <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : isCE ? "Submit post-test" : "Submit test"}</Btn>
+          <div className="flex items-center gap-2">
+            <Btn kind="ghost" icon={Clock} onClick={saveAndExit}>Save & finish later</Btn>
+            <Btn icon={Send} kind="gold" onClick={submit} disabled={busy}>{busy ? "Submitting…" : isCE ? "Submit post-test" : "Submit test"}</Btn>
+          </div>
         </div>
       </>
     );
@@ -2656,7 +2707,7 @@ function StudentTests({ available, books, courses, refresh }) {
                         </div>
                         <div className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{books.find((b) => b.id === t.book_id)?.title || "General"} · {t.questions.length} questions · {sumPoints(t.questions)} pts{isCE ? ` · Pass ${course.passing_score || 75}% for ${course.ce_hours || "—"} CE hrs` : ""}</div>
                       </div>
-                      <Btn icon={PencilLine} onClick={() => setTaking(t)}>Begin</Btn>
+                      <Btn icon={PencilLine} onClick={() => begin(t)}>{loadLocalTestDraft(t.id)?.answers && Object.keys(loadLocalTestDraft(t.id).answers).length ? "Continue" : "Begin"}</Btn>
                     </div>
                   </Card>
                 );
