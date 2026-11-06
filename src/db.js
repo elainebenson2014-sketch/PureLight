@@ -882,8 +882,11 @@ export async function listResources() {
 
 export async function saveResource(res) {
   const { data: { user } } = await supabase.auth.getUser();
+  const staffOnly = res.audience === "staff";
   let file_path = res.file_path || null;
-  if (res._file) file_path = await uploadFile("homework-submissions", res._file);
+  // Instructor-only files go in their own folder, which the database
+  // only lets staff (admin, instructor, assistant) open.
+  if (res._file) file_path = await uploadFile(staffOnly ? "staff-resources" : "homework-submissions", res._file);
   const rec = {
     title: res.title, description: res.description || null,
     category: res.category || "instructions",
@@ -891,6 +894,8 @@ export async function saveResource(res) {
     program: res.program || "all",
     sort_order: Number(res.sort_order) || 0, active: res.active !== false,
   };
+  if (staffOnly || res.audience === "all") rec.audience = res.audience;
+  if (staffOnly) rec.course_id = res.course_id || null;
   if (res.id) {
     const { error } = await supabase.from("pl_resources").update(rec).eq("id", res.id);
     if (error) throw error;
