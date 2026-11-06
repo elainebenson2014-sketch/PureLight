@@ -1027,12 +1027,17 @@ function InstructorPortal({ profile, onLogout }) {
   const myCourseSet = profile.role === "instructor"
     ? new Set(assignments.filter((a) => a.instructor_id === profile.id).map((a) => a.course_id))
     : null;
-  const gradeSubs = myCourseSet ? subs.filter((s) => myCourseSet.has((tests.find((t) => t.id === s.test_id) || {}).course_id)) : subs;
-  const scopedHomework = myCourseSet ? homework.filter((h) => myCourseSet.has(h.course_id)) : homework;
-  const scopedHwSubs = myCourseSet ? hwSubs.filter((s) => myCourseSet.has((homework.find((h) => h.id === s.homework_id) || {}).course_id)) : hwSubs;
+  // Items with no course (e.g. a program-wide midterm) belong to no one's course list,
+  // so every instructor can see them; everything else follows course assignments.
+  const inMyCourses = (courseId) => !courseId || myCourseSet.has(courseId);
+  const gradeSubs = myCourseSet ? subs.filter((s) => inMyCourses((tests.find((t) => t.id === s.test_id) || {}).course_id)) : subs;
+  const scopedHomework = myCourseSet ? homework.filter((h) => inMyCourses(h.course_id)) : homework;
+  const scopedHwSubs = myCourseSet ? hwSubs.filter((s) => inMyCourses((homework.find((h) => h.id === s.homework_id) || {}).course_id)) : hwSubs;
+  // The Grading badge counts only what this person can actually open.
+  const myPending = gradeSubs.filter((s) => s.status !== "graded").length + scopedHwSubs.filter((s) => s.status !== "graded").length;
 
   return (
-    <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ grading: pending + pendingHw }}>
+    <Shell user={profile} onLogout={onLogout} nav={nav} active={active} setActive={setActive} badge={{ grading: myPending }}>
       {loading ? <Spinner /> : (
         <>
           {active === "dash" && <><NextClassBanner schedule={schedule} profile={profile} /><InstructorDash {...{ students, books, tests, subs, profiles, setActive }} /></>}
