@@ -43,36 +43,20 @@ function ledgerRowView(e) {
 }
 
 
-// Who issues certificate-program documents. Two separate tracks:
-//  - NCTS PureLight (no VITE_SCHOOL_NAME set): "In partnership with The Healed Place"
-//  - The Healed Place LMS and other white-label schools: set VITE_CERT_ISSUER_LINE
-//    in that school's Vercel project, e.g. "A ministry of Yona Enterprises LLC".
-const isCertProgram = (p) => p === "certificate" || /cert/i.test(String(p || ""));
-function certIssuerLine() {
-  const env = (typeof import.meta !== "undefined" && import.meta.env) || {};
-  if (env.VITE_CERT_ISSUER_LINE != null) return env.VITE_CERT_ISSUER_LINE;
-  return env.VITE_SCHOOL_NAME ? "" : "In partnership with The Healed Place";
-}
-function schoolDisplayName() {
-  const env = (typeof import.meta !== "undefined" && import.meta.env) || {};
-  return env.VITE_SCHOOL_NAME ? String(BRAND.name).toUpperCase() : "NCTS PURE LIGHT SCHOOL OF MINISTRY";
-}
-const escHtml = (s) => String(s ?? "").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
-
-// Program-aware document masthead. Every document names the school that issues it.
-// CERTIFICATE program documents add the issuer line and the Fully Known tagline.
+// Program-aware document masthead. For the CERTIFICATE program, both names
+// appear with The Healed Place leading and the Fully Known tagline. For DEGREE
+// programs, only NCTS Pure Light School of Ministry appears (no Healed Place, no tagline).
 function docMastheadHtml(program) {
-  const name = escHtml(schoolDisplayName());
-  if (isCertProgram(program)) {
-    const issuer = certIssuerLine();
+  const isCert = program === "certificate" || /cert/i.test(String(program || ""));
+  if (isCert) {
     return `<div class="mast">
-      <div class="brand">${name}</div>
-      ${issuer ? `<div class="school">${escHtml(issuer)}</div>` : ""}
+      <div class="school">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
+      <div class="brand">THE HEALED PLACE</div>
       <div class="tag">Fully Known — Identity, Healing, and Deliverance</div>
     </div>`;
   }
   return `<div class="mast">
-    <div class="brand">${name}</div>
+    <div class="brand">NCTS PURE LIGHT SCHOOL OF MINISTRY</div>
   </div>`;
 }
 
@@ -1026,7 +1010,6 @@ function InstructorPortal({ profile, onLogout }) {
     { key: "forms",       label: "Forms",        icon: FileCheck,       show: true },
     { key: "surveys",     label: "Surveys",      icon: BarChart2,       show: true },
     { key: "resources",   label: "Resources",    icon: BookOpen,        show: true },
-    { key: "hub",         label: "Instructor Hub", icon: NotebookPen,   show: true },
     { key: "announce",    label: "Announcements",icon: Sparkles,        show: true },
     { key: "messages",    label: "Messages",     icon: Mail,            show: FEATURES.messages },
     { key: "store",       label: "Store",        icon: ShoppingBag,     show: FEATURES.store && (profile.role === "admin" || profile.role === "assistant" || profile.role === "instructor") },
@@ -1080,7 +1063,6 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "forms" && <FormsManager forms={forms} formSubs={formSubs} profiles={profiles} refresh={refresh} />}
           {active === "surveys" && <SurveyBuilder surveys={surveys} surveyResps={surveyResps} profiles={profiles} refresh={refresh} />}
           {active === "resources" && <ResourcesManager resources={resources} refresh={refresh} />}
-          {active === "hub" && <InstructorHub resources={resources} courses={courses} refresh={refresh} />}
           {active === "announce" && <AnnouncementsManager announcements={announcements} refresh={refresh} />}
           {active === "messages" && <MessagesView messages={messages} students={students} profile={profile} canSend refresh={refresh} />}
           {active === "store" && FEATURES.store && (profile.role === "admin" || profile.role === "assistant") && <StoreManager courses={courses.filter((c) => c.is_certificate)} />}
@@ -2134,6 +2116,10 @@ function StudentPortal({ profile, onLogout }) {
   const prog = profile.program;
   const certCourseIds = new Set((courses || []).filter((c) => c.is_certificate).map((c) => c.id));
   const myCertCourseIds = new Set((certEnrollments || []).filter((e) => e.student_id === profile.id).map((e) => e.course_id));
+  // Enrolled = can see the class and pay for it. Coursework and readings open only
+  // once the admin grants access (access_granted). Schools without that column
+  // behave as before: enrolled = full access.
+  const myAccessCertIds = new Set((certEnrollments || []).filter((e) => e.student_id === profile.id && e.access_granted !== false).map((e) => e.course_id));
   const isDegreeStudent = ["associate", "bachelor", "master", "master2", "doctorate", "phd"].includes(profile.program);
   const notCert = (it) => !certCourseIds.has(it.course_id);
   const visBooks = visibleFor(books, prog).filter(notCert);
@@ -2141,8 +2127,12 @@ function StudentPortal({ profile, onLogout }) {
   // (not the separate Cert Classes page), but only for students actually
   // enrolled in that specific class — not by the generic program-tag match,
   // which would otherwise leak a class's coursework to unrelated students.
-  const certTests = (tests || []).filter((t) => myCertCourseIds.has(t.course_id));
-  const certHw = (homework || []).filter((h) => myCertCourseIds.has(h.course_id));
+  const certTests = (tests || []).filter((t) => myAccessCertIds.has(t.course_id));
+  const certHw = (homework || []).filter((h) => myAccessCertIds.has(h.course_id));
+  // Readings tagged to a certificate class show only to students enrolled in that
+  // class whose access the admin has opened; untagged certificate readings
+  // (welcome, prayers) stay visible to all certificate students.
+  const certLibBooks = [...visBooks.filter((b) => b.program === "certificate" || b.program === "all"), ...(books || []).filter((b) => myAccessCertIds.has(b.course_id))];
   const visTests = [...visibleFor(tests, prog).filter(notCert), ...certTests];
   const visHw = [...visibleFor(homework, prog).filter(notCert), ...certHw];
   const degTests = (tests || []).filter(notCert);
@@ -2196,7 +2186,7 @@ function StudentPortal({ profile, onLogout }) {
           {active === "dash" && <StudentDash {...{ profile, books: visBooks, available, mySubs, myHwSubs, homework, tests, attendance, announcements, setActive }} />}
           {active === "courses" && <StudentCourses courses={courses} profile={profile} />}
           {active === "schedule" && <StudentSchedule sessions={sessions} homework={visHw} tests={visTests} courses={courses} profile={profile} />}
-          {active === "library" && myCertCourseIds.size > 0 && <StudentLibrary books={visBooks.filter((b) => b.program === "certificate" || b.program === "all")} courses={courses} title="Certificate Library" />}
+          {active === "library" && myCertCourseIds.size > 0 && <StudentLibrary books={certLibBooks} courses={courses} title="Certificate Library" />}
           {active === "dlibrary" && isDegreeStudent && <StudentLibrary books={visBooks.filter((b) => b.program !== "certificate")} courses={courses} title="Degree Library" />}
           {active === "syllabus" && <StudentSyllabus syllabi={syllabi} profile={profile} />}
           {active === "tests" && <StudentTests available={available} books={books} courses={courses} refresh={refresh} />}
@@ -4124,9 +4114,6 @@ function openCertificate(cert, studentName) {
   const sigImg = ENV.VITE_SIGNATURE_URL || "";
   const sigName = ENV.VITE_SIGNATURE_NAME || ENV.VITE_SCHOOL_HEAD || "";
   const sigTitle = ENV.VITE_SIGNATURE_TITLE || "";
-  // White-label schools always show their configured issuer line; NCTS shows its
-  // partnership line only on certificate-program certificates.
-  const issuer = (ENV.VITE_SCHOOL_NAME || isCertProgram(cert.program)) ? certIssuerLine() : "";
   const sigTop = sigImg
     ? `<img src="${sigImg}" alt="Signature" style="height:50px;max-width:210px;object-fit:contain" />`
     : (sigName ? `<div class="sigscript">${safe(sigName)}</div>` : "");
@@ -4148,7 +4135,6 @@ function openCertificate(cert, studentName) {
     .emblem { height:76px; width:76px; object-fit:contain; border-radius:50%; background:#fff; padding:4px; margin-bottom:6px; }
     .kicker { letter-spacing:.4em; text-transform:uppercase; font-size:11.5px; color:${C.gold}; font-weight:700; }
     .school { font-family:'Fraunces',serif; font-size:29px; font-weight:600; margin:6px 0 0; color:${C.ink}; }
-    .issuer { font-size:13.5px; font-style:italic; color:#6a6f7c; margin-top:4px; }
     .orn { display:flex; align-items:center; gap:12px; margin:14px 0 16px; }
     .orn:before,.orn:after { content:''; height:1px; width:78px; background:${C.gold}; opacity:.55; }
     .orn .dot { width:8px; height:8px; background:${C.gold}; transform:rotate(45deg); }
@@ -4175,7 +4161,6 @@ function openCertificate(cert, studentName) {
         ${emblem ? `<img class="emblem" src="${emblem}" alt="" />` : ""}
         <div class="kicker">Certificate of Completion</div>
         <div class="school">${safe(BRAND.name)}</div>
-        ${issuer ? `<div class="issuer">${safe(issuer)}</div>` : ""}
         <div class="orn"><span class="dot"></span></div>
         <div class="pres">This certificate is proudly presented to</div>
         <div class="name">${safe(studentName)}</div>
@@ -4413,6 +4398,9 @@ function CertClassesManager({ courses, students, profiles, tests, homework, subs
     if (!studentId) return;
     try { await db.enrollCertClass(courseId, studentId); await refresh(); } catch (e) { window.alert(e.message); }
   }
+  async function setAccess(id, on) {
+    try { await db.setCertAccess(id, on); await refresh(); } catch (e) { window.alert(e.message); }
+  }
   async function unenroll(id) {
     if (!window.confirm("Remove this student from the class?")) return;
     try { await db.unenrollCertClass(id); await refresh(); } catch (e) { window.alert(e.message); }
@@ -4484,9 +4472,12 @@ function CertClassesManager({ courses, students, profiles, tests, homework, subs
                       <div key={r.id} className="flex items-center justify-between gap-3" style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div className="pl-body" style={{ fontWeight: 600, fontSize: 14.5 }}>{nameOf(r.student_id)}</div>
-                          <div className="pl-body" style={{ fontSize: 12.5, color: ready ? C.green : C.muted, marginTop: 2 }}>{total ? `${done}/${total} coursework graded` : "No coursework added yet"}{ready ? " · ready for certificate" : ""}{Number(c.fee) > 0 ? (paid ? " · paid" : " · unpaid") : ""}</div>
+                          <div className="pl-body" style={{ fontSize: 12.5, color: ready ? C.green : C.muted, marginTop: 2 }}>{total ? `${done}/${total} coursework graded` : "No coursework added yet"}{ready ? " · ready for certificate" : ""}{Number(c.fee) > 0 ? (paid ? " · paid" : " · unpaid") : ""}{"access_granted" in r ? (r.access_granted ? " · access open" : " · access locked") : ""}</div>
                         </div>
                         <div className="flex items-center gap-2">
+                          {"access_granted" in r && (r.access_granted
+                            ? <Btn small kind="ghost" onClick={() => { if (window.confirm(`Lock ${nameOf(r.student_id)}'s access to ${c.title}? Their work is kept; they just can't open the class until you grant access again.`)) setAccess(r.id, false); }}>Lock access</Btn>
+                            : <Btn small icon={Check} onClick={() => setAccess(r.id, true)}>Grant access</Btn>)}
                           {cert
                             ? <Btn small icon={ExternalLink} onClick={() => openCertificate(cert, nameOf(r.student_id))}>View cert</Btn>
                             : <Btn small icon={Award} onClick={() => award(c, r.student_id)}>Issue cert</Btn>}
@@ -4592,6 +4583,7 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
           const cRemaining = Math.max(0, Math.round((fee - cPaid) * 100) / 100);
           const isPaid = fee > 0 && cRemaining <= 0.005;
           const weeks = Number(c.duration_weeks) || 0;
+          const awaitingAccess = myEnroll.some((e) => e.course_id === c.id && e.access_granted === false);
           return (
             <Card key={c.id}>
               <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
@@ -4604,6 +4596,11 @@ function StudentCertClasses({ courses, enrollments, profile, certificates, ledge
                   : <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}>{c.duration_weeks ? `${c.duration_weeks} weeks` : ""}{c.start_date ? ` · starts ${fdate(c.start_date)}` : ""}</span>}
               </div>
               {c.description && <p className="pl-body" style={{ fontSize: 13.5, color: C.text, margin: "8px 0 0", lineHeight: 1.55 }}>{c.description}</p>}
+              {awaitingAccess && (
+                <div className="pl-body" style={{ marginTop: 10, padding: "10px 12px", background: "#fffaf0", border: `1px solid ${C.gold}`, borderRadius: 8, fontSize: 13.5, color: C.ink }}>
+                  🔒 <b>Not open yet.</b> You can pay for this class now. Its homework, quizzes and readings open when your instructor starts the class.
+                </div>
+              )}
               {fee > 0 && (
                 <div className="flex items-center justify-between" style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.line}`, gap: 10, flexWrap: "wrap" }}>
                   <span className="pl-body" style={{ fontSize: 14, color: C.ink }}>Tuition: <b>{money(fee)}</b>{cPaid > 0 && !isPaid ? <span className="pl-body" style={{ fontSize: 12.5, color: C.muted }}> · {money(cRemaining)} left</span> : null}</span>
@@ -5218,7 +5215,7 @@ function BillingManager({ students, ledger, courses, tuition, certEnrollments, r
             const now = new Date();
             const when = now.toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
             const scopeLabel = scope === "certificate" ? "Certificate Students" : "Degree Students";
-            const orgName = schoolDisplayName();
+            const orgName = scope === "certificate" ? "THE HEALED PLACE" : "NCTS PURE LIGHT SCHOOL OF MINISTRY";
             const rowsHtml = (list, heading) => {
               if (!list.length) return "";
               const body = list.slice().sort((a, b) => (a.full_name || "").localeCompare(b.full_name || "")).map((s) => {
@@ -6685,135 +6682,7 @@ const RESOURCE_CATEGORIES = [
   { key: "other",        label: "Other" },
 ];
 
-/* ═══════════════════════════════════════════════════════════════
-   STAFF — INSTRUCTOR HUB (admins, instructors, assistants only)
-   Lesson plans, slides, guides and recordings for every course, so a
-   substitute can pick up any class. The database keeps these rows and
-   their files away from students (audience = 'staff').
-   ═══════════════════════════════════════════════════════════════ */
-const HUB_CATEGORIES = [
-  { key: "lesson",     label: "Lesson plans & notes" },
-  { key: "slides",     label: "PowerPoints & slides" },
-  { key: "assessment", label: "Quizzes, keys & handouts" },
-  { key: "recording",  label: "Recordings & videos" },
-  { key: "guide",      label: "LMS & teaching guides" },
-  { key: "other",      label: "Other" },
-];
-const hubCatLabel = (k) => (HUB_CATEGORIES.find((c) => c.key === k) || HUB_CATEGORIES[HUB_CATEGORIES.length - 1]).label;
-
-function InstructorHub({ resources, courses, refresh }) {
-  const [draft, setDraft] = useState(null);
-  const [file, setFile] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [query, setQuery] = useState("");
-  const staff = resources.filter((r) => r.audience === "staff");
-  const courseName = (id) => courses.find((c) => c.id === id)?.title || "";
-
-  function startNew(courseId) {
-    setDraft({ title: "", description: "", category: "lesson", file_path: null, link_url: "", program: "all", sort_order: 0, active: true, audience: "staff", course_id: courseId || "" });
-    setFile(null);
-  }
-  function startEdit(r) { setDraft({ ...r, course_id: r.course_id || "" }); setFile(null); }
-
-  async function save() {
-    if (!draft.title.trim()) { window.alert("Give the material a title."); return; }
-    if (!file && !draft.file_path && !draft.link_url) { window.alert("Attach a file or add a link."); return; }
-    setBusy(true);
-    try { await db.saveResource({ ...draft, audience: "staff", _file: file }); await refresh(); setDraft(null); setFile(null); }
-    catch (e) { window.alert(/column|audience|course_id/i.test(e.message) ? "The Instructor Hub isn't set up in this school's database yet. Ask your administrator." : e.message); }
-    setBusy(false);
-  }
-  async function remove(id) {
-    if (!window.confirm("Delete this material for every instructor?")) return;
-    try { await db.deleteResource(id); await refresh(); } catch (e) { window.alert(e.message); }
-  }
-
-  if (draft) {
-    return (
-      <>
-        <PageHead title={draft.id ? "Edit Material" : "Add Teaching Material"} action={<Btn kind="ghost" icon={ArrowLeft} onClick={() => setDraft(null)}>Back</Btn>} />
-        <Card style={{ maxWidth: 680 }}>
-          <Field label="Title"><input style={inputStyle} value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="e.g. Week 3 lesson — Identity in Christ" /></Field>
-          <Field label="Course">
-            <select style={inputStyle} value={draft.course_id} onChange={(e) => setDraft({ ...draft, course_id: e.target.value })}>
-              <option value="">General (all courses)</option>
-              {courses.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
-            </select>
-          </Field>
-          <Field label="Type">
-            <select style={inputStyle} value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
-              {HUB_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-            </select>
-          </Field>
-          <Field label="Notes for a substitute (optional)"><textarea style={{ ...inputStyle, minHeight: 70 }} value={draft.description || ""} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="Which week, how long it runs, what to cover first…" /></Field>
-          <Field label="Upload a file (PDF, Word, PowerPoint, Excel, picture)">
-            <input type="file" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.png,.jpg,.jpeg" onChange={(e) => setFile(e.target.files?.[0])} />
-            {draft.file_path && !file && <FileLink path={draft.file_path} label="Current file" />}
-          </Field>
-          <Field label="…or a link (Zoom recording, Google Drive, YouTube)">
-            <input style={inputStyle} value={draft.link_url || ""} onChange={(e) => setDraft({ ...draft, link_url: e.target.value })} placeholder="https://…" />
-          </Field>
-          <div className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>Only administrators, instructors and assistants can see or open Instructor Hub materials. Students never see them.</div>
-          <div className="flex gap-2" style={{ marginTop: 14 }}>
-            <Btn icon={Check} kind="gold" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save material"}</Btn>
-            <Btn kind="ghost" onClick={() => setDraft(null)}>Cancel</Btn>
-          </div>
-        </Card>
-      </>
-    );
-  }
-
-  const q = query.trim().toLowerCase();
-  const shown = q ? staff.filter((r) => [r.title, r.description, courseName(r.course_id), hubCatLabel(r.category)].join(" ").toLowerCase().includes(q)) : staff;
-  const groups = [
-    { id: "", title: "General — all courses" },
-    ...courses.filter((c) => shown.some((r) => r.course_id === c.id)).map((c) => ({ id: c.id, title: c.title })),
-  ].map((g) => ({ ...g, items: shown.filter((r) => (r.course_id || "") === g.id) })).filter((g) => g.items.length);
-
-  return (
-    <>
-      <PageHead title="Instructor Hub" sub="Lessons, slides and guides for every course, so any instructor can step in. Staff only." action={<Btn icon={Plus} onClick={() => startNew("")}>Add material</Btn>} />
-      {staff.length > 0 && (
-        <input style={{ ...inputStyle, maxWidth: 360, marginBottom: 16 }} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by title, course or type…" />
-      )}
-      {staff.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>Nothing here yet. Click Add material to upload a lesson, PowerPoint or guide for a course.</span></Card>}
-      {staff.length > 0 && groups.length === 0 && <Card><span className="pl-body" style={{ color: C.muted }}>No materials match “{query}”.</span></Card>}
-      {groups.map((g) => (
-        <div key={g.id || "general"} style={{ marginBottom: 22 }}>
-          <div className="flex items-center justify-between" style={{ marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
-            <h3 className="pl-display" style={{ fontSize: 17, color: C.ink }}>{g.title}</h3>
-            <Btn small kind="ghost" icon={Plus} onClick={() => startNew(g.id)}>Add to this course</Btn>
-          </div>
-          <div className="flex flex-col gap-3">
-            {HUB_CATEGORIES.flatMap((cat) => g.items.filter((r) => (HUB_CATEGORIES.some((c) => c.key === r.category) ? r.category : "other") === cat.key)).map((r) => (
-              <Card key={r.id}>
-                <div className="flex items-center justify-between" style={{ flexWrap: "wrap", gap: 10 }}>
-                  <div style={{ flex: 1, minWidth: 220 }}>
-                    <div className="flex items-center gap-2" style={{ flexWrap: "wrap" }}>
-                      <span className="pl-body" style={{ fontWeight: 600, fontSize: 15.5 }}>{r.title}</span>
-                      <span className="pl-body" style={{ fontSize: 11, color: C.gold, background: C.paper2, borderRadius: 6, padding: "2px 8px" }}>{hubCatLabel(r.category)}</span>
-                    </div>
-                    {r.description && <p className="pl-body" style={{ fontSize: 13, color: C.muted, marginTop: 2, lineHeight: 1.5 }}>{r.description}</p>}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {r.file_path && <FileLink path={r.file_path} label="Open" />}
-                    {r.link_url && <Btn small kind="ghost" icon={ExternalLink} onClick={() => window.open(r.link_url, "_blank")}>Open link</Btn>}
-                    <Btn small kind="ghost" icon={PencilLine} onClick={() => startEdit(r)}>Edit</Btn>
-                    <button onClick={() => remove(r.id)} title="Delete" style={{ background: "none", border: "none", cursor: "pointer", color: C.rose }}><Trash2 size={17} /></button>
-                  </div>
-                </div>
-              </Card>
-            ))}
-          </div>
-        </div>
-      ))}
-    </>
-  );
-}
-
-function ResourcesManager({ resources: allResources, refresh }) {
-  // Instructor Hub materials are managed on their own page.
-  const resources = allResources.filter((r) => r.audience !== "staff");
+function ResourcesManager({ resources, refresh }) {
   const [draft, setDraft] = useState(null);
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -6916,7 +6785,7 @@ function ResourcesManager({ resources: allResources, refresh }) {
    STUDENT — RESOURCES PAGE (read / download only)
    ═══════════════════════════════════════════════════════════════ */
 function StudentResources({ resources, profile }) {
-  const visible = resources.filter((r) => r.active && r.audience !== "staff" && (r.program === "all" || r.program === profile.program));
+  const visible = resources.filter((r) => r.active && (r.program === "all" || r.program === profile.program));
   const byCat = RESOURCE_CATEGORIES.map((c) => ({ ...c, items: visible.filter((r) => r.category === c.key) })).filter((c) => c.items.length);
 
   return (
