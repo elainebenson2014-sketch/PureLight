@@ -1051,7 +1051,7 @@ function InstructorPortal({ profile, onLogout }) {
           {active === "classes" && <ScheduleManager sessions={sessions} courses={courses} students={students} certEnrollments={certEnrollments} profile={profile} refresh={refresh} />}
           {active === "attendance" && profile.role === "admin" && <AttendanceManager students={students} attendance={attendance} subs={subs} hwSubs={hwSubs} certEnrollments={certEnrollments} refresh={refresh} />}
           {active === "grading" && <Grading subs={gradeSubs} tests={tests} profiles={profiles} refresh={refresh} hwSubs={scopedHwSubs} homework={scopedHomework} assignments={assignments} onGradeHw={(id) => { setHwOpenId(id); setActive("homework"); }} />}
-          {active === "reports" && profile.role === "admin" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
+          {active === "reports" && profile.role === "admin" && <GradeReport students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} attendance={attendance} />}
           {active === "gradebook" && <Gradebook students={students} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} courses={courses.filter((c) => !c.is_certificate)} />}
           {active === "transcripts" && FEATURES.transcripts && profile.role === "admin" && <TranscriptManager students={students} courses={courses} subs={subs} tests={tests} hwSubs={hwSubs} homework={homework} certEnrollments={certEnrollments} />}
           {active === "students" && (profile.role === "admin" || profile.role === "assistant") && <StudentsManager profiles={profiles} meId={profile.id} courses={courses} assignments={assignments} canSetRole={profile.role === "admin"} refresh={refresh} />}
@@ -5735,7 +5735,151 @@ function Gradebook({ students, subs, tests, hwSubs, homework, courses }) {
   );
 }
 
-function GradeReport({ students, subs, tests, hwSubs, homework, courses }) {
+const DEGREE_PROGRAMS = ["associate", "bachelor", "master", "master2", "doctorate", "phd"];
+const degProgLabel = (k) => (PROGRAMS.find((p) => p.key === k) || {}).label || k || "—";
+
+function degreeProgressRows({ students, subs, tests, hwSubs, homework, courses, attendance, progFilter }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const courseTitle = (id) => ((courses || []).find((c) => c.id === id) || {}).title;
+  const list = (students || []).filter((s) => (s.status || "active") === "active" && DEGREE_PROGRAMS.includes(s.program || "") && (progFilter === "all" || s.program === progFilter));
+  return list.map((s) => {
+    const prog = s.program;
+    const progHw = (homework || []).filter((h) => (h.program || "all") === prog && (h.status || "published") === "published");
+    const groups = {};
+    progHw.forEach((h) => { const k = h.course_id || h.title; (groups[k] = groups[k] || { name: courseTitle(h.course_id) || h.title, items: [] }).items.push(h); });
+    const mySubs = (hwSubs || []).filter((x) => x.student_id === s.id);
+    const mine = new Set(mySubs.map((x) => x.homework_id));
+    const due = [], missing = [];
+    Object.values(groups).forEach((g) => {
+      const dates = g.items.map((h) => h.due_date).filter((d) => d && String(d).slice(0, 10) <= today).sort();
+      if (!dates.length) return;
+      due.push(g);
+      if (!g.items.some((h) => mine.has(h.id))) missing.push({ name: g.name, due: dates[0] });
+    });
+    missing.sort((a, b) => String(a.due).localeCompare(String(b.due)));
+    const graded = mySubs.filter((x) => x.status === "graded" && x.max_points);
+    const avg = graded.length ? graded.reduce((a, x) => a + (100 * (Number(x.score) || 0)) / x.max_points, 0) / graded.length : null;
+    const pending = mySubs.filter((x) => x.status !== "graded").map((x) => ((homework || []).find((h) => h.id === x.homework_id) || {}).title || "Homework");
+    const mtTest = (tests || []).find((t) => (t.program || "") === prog && /mid/i.test(t.title || ""));
+    const mt = mtTest ? (subs || []).find((x) => x.test_id === mtTest.id && x.student_id === s.id) : null;
+    const mtScore = mt && mt.status === "graded" && mt.score != null ? Math.round(mt.max_score ? (100 * mt.score) / mt.max_score : mt.score) : null;
+    const att = (attendance || []).filter((a) => a.student_id === s.id);
+    const present = att.filter((a) => a.status === "present" || a.status === "excused").length;
+    const absent = att.filter((a) => a.status === "absent").length;
+    const status = !mt ? "No midterm" : missing.length ? "Behind" : "On track";
+    return { s, prog, mtScore, mtTaken: !!mt, mtPending: !!mt && mtScore === null, turnedIn: mySubs.length, due: due.length, done: due.length - missing.length, missing, avg, pending, present, absent, status };
+  }).sort((a, b) => DEGREE_PROGRAMS.indexOf(a.prog) - DEGREE_PROGRAMS.indexOf(b.prog) || (a.s.full_name || "").localeCompare(b.s.full_name || ""));
+}
+
+function printDegreeProgress(rows) {
+  const safe = (x) => String(x == null ? "" : x).replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  const when = new Date().toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
+  const onTrack = rows.filter((r) => r.status === "On track").length;
+  const mts = rows.filter((r) => r.mtScore !== null);
+  const mtAvg = mts.length ? (mts.reduce((a, r) => a + r.mtScore, 0) / mts.length).toFixed(1) : "—";
+  const color = (st) => st === "On track" ? "#2e7d32" : "#B23A3A";
+  const body = rows.map((r) => `<tr><td>${safe(r.s.full_name)}</td><td>${safe(degProgLabel(r.prog))}</td><td class="c">${r.mtScore !== null ? r.mtScore : r.mtPending ? "Not graded" : "Not taken"}</td><td class="c">${r.turnedIn}</td><td class="c">${r.due ? r.done + " of " + r.due : "None due"}</td><td class="c">${r.avg !== null ? r.avg.toFixed(1) : "—"}</td><td class="c">${r.present} / ${r.absent}</td><td class="c" style="font-weight:700;color:${color(r.status)}">${r.status}</td></tr>`).join("");
+  const attention = rows.filter((r) => r.status !== "On track").map((r) => `<li><b>${safe(r.s.full_name)}</b> (${safe(degProgLabel(r.prog))})${r.mtTaken ? "" : " &mdash; midterm not taken"}${r.missing.length ? " &mdash; missing: " + r.missing.map((m) => safe(m.name) + " (due " + safe(String(m.due).slice(0, 10)) + ")").join(", ") : ""}</li>`).join("");
+  const pend = rows.filter((r) => r.pending.length).map((r) => `<li><b>${safe(r.s.full_name)}</b>: ${r.pending.map(safe).join(", ")}</li>`).join("");
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Degree Progress Report</title>
+    <style>body{font-family:Georgia,'Times New Roman',serif;color:#1a1a1a;max-width:980px;margin:24px auto;padding:0 20px}
+    .head{text-align:center;border-bottom:3px solid #1B3A6B;padding-bottom:12px;margin-bottom:8px}.head .n{color:#C5922E;font-family:Arial,sans-serif;font-size:12px;letter-spacing:2px;font-weight:bold}
+    h1{color:#1B3A6B;font-size:22px;margin:6px 0 2px}h2{color:#1B3A6B;font-size:16px;margin:22px 0 6px}.sub2{color:#666;font-size:13px;margin-bottom:16px;text-align:center}
+    table{width:100%;border-collapse:collapse;font-size:13px}th{font-family:Arial,sans-serif;text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:#666;border-bottom:2px solid #1B3A6B;padding:7px}
+    td{padding:6px 7px;border-bottom:1px solid #eee}td.c,th.c{text-align:center}li{margin:4px 0;font-size:13.5px}.foot{margin-top:22px;text-align:center;color:#888;font-size:11px;font-family:Arial,sans-serif}
+    @media print{.noprint{display:none}}</style></head><body>
+    <div class="head"><div class="n">NCTS PURE LIGHT SCHOOL OF MINISTRY</div><h1>Degree Progress Report</h1></div>
+    <div class="sub2">${when}</div>
+    <button class="noprint" onclick="window.print()" style="display:block;margin:0 auto 18px;padding:8px 18px;background:#1B3A6B;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Print / Save as PDF</button>
+    <div class="sub2" style="text-align:left">${onTrack} of ${rows.length} students on track &bull; midterm average ${mtAvg} (${mts.length} taken)</div>
+    <table><thead><tr><th>Student</th><th>Program</th><th class="c">Midterm</th><th class="c">Homework turned in</th><th class="c">Past-due courses done</th><th class="c">Homework avg</th><th class="c">Present / Absent</th><th class="c">Status</th></tr></thead>
+    <tbody>${body || '<tr><td colspan="8">No active degree students.</td></tr>'}</tbody></table>
+    <h2>Needs attention</h2><ul>${attention || "<li>Everyone is on track.</li>"}</ul>
+    <h2>Awaiting grading</h2><ul>${pend || "<li>Nothing waiting.</li>"}</ul>
+    <p style="color:#666;font-size:12px">Past-due courses have homework due on or before today. A course counts as done when the student turned in any of its homework. Midterm and homework scores are out of 100.</p>
+    <div class="foot">www.nctspurelight.com &bull; admin@nctspurelight.com &bull; 888-966-3384</div></body></html>`;
+  let w = null;
+  try { w = window.open("", "_blank"); } catch (e) { w = null; }
+  if (w && w.document) { w.document.write(html); w.document.close(); }
+  else {
+    try { const url = URL.createObjectURL(new Blob([html], { type: "text/html" })); const a = document.createElement("a"); a.href = url; a.target = "_blank"; a.rel = "noopener"; document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(() => URL.revokeObjectURL(url), 10000); }
+    catch (e) { window.alert("Please allow pop-ups to view the report."); }
+  }
+}
+
+function DegreeProgressReport({ students, subs, tests, hwSubs, homework, courses, attendance }) {
+  const [progFilter, setProgFilter] = useState("all");
+  const rows = degreeProgressRows({ students, subs, tests, hwSubs, homework, courses, attendance, progFilter });
+  const onTrack = rows.filter((r) => r.status === "On track").length;
+  const mts = rows.filter((r) => r.mtScore !== null);
+  const mtAvg = mts.length ? (mts.reduce((a, r) => a + r.mtScore, 0) / mts.length).toFixed(1) : "—";
+  const attention = rows.filter((r) => r.status !== "On track");
+  const pend = rows.filter((r) => r.pending.length);
+  const th = { padding: "6px 8px", textAlign: "center" };
+  const td = { padding: "9px 8px", textAlign: "center" };
+  return (
+    <>
+      <Card style={{ marginBottom: 16 }}>
+        <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+          <div>
+            <div className="pl-body" style={{ fontSize: 11.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Program</div>
+            <select style={{ ...inputStyle, width: "auto" }} value={progFilter} onChange={(e) => setProgFilter(e.target.value)}>
+              <option value="all">All degree programs</option>
+              {DEGREE_PROGRAMS.map((k) => <option key={k} value={k}>{degProgLabel(k)}</option>)}
+            </select>
+          </div>
+          <div style={{ alignSelf: "flex-end" }} className="pl-body">
+            <span style={{ fontSize: 13, color: C.muted }}>{onTrack} of {rows.length} on track · midterm average {mtAvg} ({mts.length} taken)</span>
+          </div>
+          <div style={{ marginLeft: "auto", alignSelf: "flex-end" }}><Btn small kind="gold" icon={FileText} onClick={() => printDegreeProgress(rows)}>Print report</Btn></div>
+        </div>
+      </Card>
+      {rows.length === 0 ? <Card><span className="pl-body" style={{ color: C.muted }}>No active degree students.</span></Card> :
+        <Card style={{ marginBottom: 16 }}>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }} className="pl-body">
+              <thead><tr style={{ textAlign: "left", color: C.muted, fontSize: 12, textTransform: "uppercase", letterSpacing: ".05em" }}>
+                <th style={{ padding: "6px 8px" }}>Student</th><th style={{ padding: "6px 8px" }}>Program</th>
+                <th style={th}>Midterm</th><th style={th}>Homework turned in</th><th style={th}>Past-due courses done</th><th style={th}>Homework avg</th><th style={th}>Present / Absent</th><th style={th}>Status</th>
+              </tr></thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.s.id} style={{ borderTop: `1px solid ${C.line}` }}>
+                    <td style={{ padding: "9px 8px", fontWeight: 600, color: C.ink }}>{r.s.full_name}</td>
+                    <td style={{ padding: "9px 8px" }}>{degProgLabel(r.prog)}</td>
+                    <td style={td}>{r.mtScore !== null ? r.mtScore : <span style={{ color: C.rose }}>{r.mtPending ? "Not graded" : "Not taken"}</span>}</td>
+                    <td style={td}>{r.turnedIn}</td>
+                    <td style={{ ...td, color: r.missing.length ? C.rose : C.text, fontWeight: r.missing.length ? 700 : 400 }}>{r.due ? `${r.done} of ${r.due}` : "None due"}</td>
+                    <td style={td}>{r.avg !== null ? r.avg.toFixed(1) : "—"}</td>
+                    <td style={td}>{r.present} / {r.absent}</td>
+                    <td style={{ ...td, fontWeight: 700, color: r.status === "On track" ? C.green : C.rose }}>{r.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>}
+      <Card style={{ marginBottom: 16 }}>
+        <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: "0 0 8px" }}>Needs attention</h3>
+        {attention.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>Everyone is on track.</span> :
+          attention.map((r) => (
+            <div key={r.s.id} className="pl-body" style={{ fontSize: 14, marginBottom: 6 }}>
+              <b>{r.s.full_name}</b> ({degProgLabel(r.prog)}){!r.mtTaken && " — midterm not taken"}{r.missing.length > 0 && ` — missing: ${r.missing.map((m) => `${m.name} (due ${fdate(String(m.due).slice(0, 10))})`).join(", ")}`}
+            </div>
+          ))}
+      </Card>
+      <Card>
+        <h3 className="pl-display" style={{ fontSize: 18, fontWeight: 600, color: C.ink, margin: "0 0 8px" }}>Awaiting grading</h3>
+        {pend.length === 0 ? <span className="pl-body" style={{ color: C.muted }}>Nothing waiting.</span> :
+          pend.map((r) => <div key={r.s.id} className="pl-body" style={{ fontSize: 14, marginBottom: 6 }}><b>{r.s.full_name}</b>: {r.pending.join(", ")}</div>)}
+      </Card>
+      <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 12 }}>Active degree students only. Past-due courses have homework due on or before today; a course counts as done when the student turned in any of its homework. Mark test accounts inactive to keep them out of this report.</p>
+    </>
+  );
+}
+
+function GradeReport({ students, subs, tests, hwSubs, homework, courses, attendance }) {
+  const [view, setView] = useState("grades");
   const [progFilter, setProgFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("active");
   const shown = (students || []).filter((s) =>
@@ -5744,7 +5888,12 @@ function GradeReport({ students, subs, tests, hwSubs, homework, courses }) {
   );
   return (
     <>
-      <PageHead title="Reports" sub="Each student's grades, average, and GPA. Print a transcript for anyone." />
+      <PageHead title="Reports" sub={view === "grades" ? "Each student's grades, average, and GPA. Print a transcript for anyone." : "Degree students' midterm, homework, past-due work, and attendance."} />
+      <div className="flex gap-2" style={{ marginBottom: 14 }}>
+        <Btn small kind={view === "grades" ? "gold" : "ghost"} onClick={() => setView("grades")}>Grades & GPA</Btn>
+        <Btn small kind={view === "progress" ? "gold" : "ghost"} onClick={() => setView("progress")}>Degree progress</Btn>
+      </div>
+      {view === "progress" ? <DegreeProgressReport {...{ students, subs, tests, hwSubs, homework, courses, attendance }} /> : <>
       <Card style={{ marginBottom: 16 }}>
         <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
           <div>
@@ -5800,6 +5949,7 @@ function GradeReport({ students, subs, tests, hwSubs, homework, courses }) {
           </div>
         </Card>}
       <p className="pl-body" style={{ fontSize: 12.5, color: C.muted, marginTop: 12 }}>GPA uses a standard 4.0 scale, averaged across all graded tests and homework.</p>
+      </>}
     </>
   );
 }
